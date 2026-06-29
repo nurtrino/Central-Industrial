@@ -201,6 +201,8 @@
 
   <div id="filelist"></div>
 
+  <div id="helperStatus"></div>
+
   <div class="row">
     <button class="go" id="goBtn" disabled>Run</button>
     <button class="ctl" id="pauseBtn" style="display:none">⏸ Pause</button>
@@ -311,6 +313,32 @@ fetch("/api/config").then(r=>r.json()).then(c=>{
   cfg = c; diarizeOn = !!c.diarization;     // default ON when available
   renderBadges();
 }).catch(()=>{});
+
+// ---- local-helper status (so the download is visible BEFORE you hit Run) ----
+let helperTimer = null;
+async function checkHelper(){
+  const el = $("#helperStatus"); if(!el) return;
+  const up = await workerUp();
+  if(up){
+    el.style.cssText = "margin:10px 0;padding:9px 14px;border-radius:8px;font-size:14px;"+
+      "border:1px solid var(--accent);color:var(--accent)";
+    el.innerHTML = "✓ Local transcription helper connected — audio is processed on this machine.";
+    if(helperTimer){ clearInterval(helperTimer); helperTimer = null; }   // stop polling once up
+  } else {
+    el.style.cssText = "margin:10px 0;padding:9px 14px;border-radius:8px;font-size:14px;"+
+      "border:1px solid var(--warn);color:var(--warn)";
+    el.innerHTML = "Local transcription helper not detected on this PC. "+
+      `<a href="/download/ReadMonkeyDoWorker.exe" style="color:var(--accent);font-weight:bold">⬇ Download the helper</a>`+
+      " — small download (Windows · NVIDIA GPU); the first run sets itself up (one-time "+
+      "~4&nbsp;GB: GPU libraries + Whisper model), then run it and "+
+      `<a href="#" id="helperRecheck" style="color:var(--accent)">re-check</a>. `+
+      "Audio is transcribed locally and never leaves your computer.";
+    const rc = $("#helperRecheck");
+    if(rc) rc.onclick = (e)=>{ e.preventDefault(); checkHelper(); };
+  }
+}
+checkHelper();
+helperTimer = setInterval(checkHelper, 10000);
 
 // ---- mode selection ----
 document.querySelectorAll(".mode").forEach(m=>{
