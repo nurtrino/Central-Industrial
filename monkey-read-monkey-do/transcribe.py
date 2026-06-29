@@ -97,10 +97,22 @@ def to_wav(src_path: str, log=print) -> str:
 # --------------------------------------------------------------------------- #
 # Whisper transcription
 # --------------------------------------------------------------------------- #
+def _require_cuda_ct2(log=print):
+    """GPU check that does NOT import torch — keeps the faster-whisper path torch-free
+    so the Lite worker build needs no torch. CTranslate2 ships its own CUDA runtime."""
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() < 1:
+            raise RuntimeError("No CUDA GPU visible to CTranslate2 — Monkey Read Monkey Do "
+                               "needs an NVIDIA GPU; refusing to run on CPU.")
+    except ImportError:
+        pass   # ctranslate2 absent → WhisperModel(device='cuda') raises a clear error
+
+
 def _load_faster_whisper(model_size: str, log=print):
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
-        require_gpu(log)
+        _require_cuda_ct2(log)
         from faster_whisper import WhisperModel
         log(f"  loading faster-whisper '{model_size}' into GPU VRAM (float16)...")
         # device="cuda" + float16 keeps weights and compute in VRAM (CTranslate2).

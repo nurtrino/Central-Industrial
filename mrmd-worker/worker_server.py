@@ -59,25 +59,36 @@ ALLOWED_ORIGIN = os.environ.get("MRMD_ALLOWED_ORIGIN", "*").strip() or "*"
 HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 MODEL_OVERRIDE = os.environ.get("NOTEMAX_WHISPER_MODEL", "").strip()
 MAX_UPLOAD_MB = int(os.environ.get("MRMD_MAX_UPLOAD_MB", "4096"))
+# LITE = Whisper-only (faster-whisper / CTranslate2), NO torch, NO pyannote diarization.
+# This is what the small "Lite" exe build sets; the "Full" exe leaves it off.
+LITE = os.environ.get("MRMD_LITE", "").strip().lower() in ("1", "true", "yes", "on")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+
+def _vram_gb():
+    """Total VRAM in GB via nvidia-smi — torch-free, so the Lite build needs no torch."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, check=True).stdout.strip().splitlines()[0]
+        return int(out) / 1024.0
+    except Exception:
+        return None
 
 
 def pick_model_for_vram():
     """Auto-select a Whisper model that fits the GPU. An explicit env override wins.
 
     Implements the "use a smaller model if the GPU doesn't meet spec" requirement:
-    large-v3 wants plenty of VRAM (it shares the GPU with pyannote), so on smaller
-    cards we step down. Returns (model_size, vram_gb_or_None)."""
+    large-v3 wants plenty of VRAM, so on smaller cards we step down. Returns
+    (model_size, vram_gb_or_None)."""
     if MODEL_OVERRIDE:
         return MODEL_OVERRIDE, None
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return "large-v3", None     # require_gpu() will raise a clear error later
-        gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-    except Exception:
+    gb = _vram_gb()
+    if gb is None:
         return "large-v3", None
     if gb >= 12:
         model = "large-v3"
@@ -119,16 +130,17 @@ def add_cors(resp):
 @app.route("/health")
 def health():
     model, gb = pick_model_for_vram()
-    gpu, name = False, None
-    try:
-        import torch
-        gpu = torch.cuda.is_available()
-        if gpu:
-            name = torch.cuda.get_device_name(0)
+    name = None
+    try:                                  # torch-free GPU name via nvidia-smi
+        import subprocess
+        name = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, check=True).stdout.strip().splitlines()[0]
     except Exception:
         pass
-    return jsonify({"ok": True, "tool": "mrmd-worker", "gpu": gpu, "gpu_name": name,
-                    "vram_gb": gb, "model": model, "diarization": bool(HF_TOKEN),
+    return jsonify({"ok": True, "tool": "mrmd-worker", "lite": LITE,
+                    "gpu": name is not None, "gpu_name": name, "vram_gb": gb,
+                    "model": model, "diarization": bool(HF_TOKEN) and not LITE,
                     "token_required": bool(WORKER_TOKEN)})
 
 
@@ -142,7 +154,8 @@ def transcribe_route():
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify({"error": "no audio file uploaded (form field 'file')"}), 400
-    diarize = request.form.get("diarize", "1") != "0"
+    # Lite build never diarizes (no pyannote/torch bundled).
+    diarize = (not LITE) and (request.form.get("diarize", "1") != "0")
     try:
         num_speakers = int(request.form["num_speakers"]) if request.form.get("num_speakers") else None
     except (ValueError, KeyError):

@@ -76,15 +76,12 @@ def _icon_image():
 
 
 def _status_line(_item=None):
-    try:
-        import torch
-        if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
-            model, _ = W.pick_model_for_vram()
-            return f"GPU: {name} · model {model}"
-        return "No CUDA GPU detected — transcription will fail"
-    except Exception:
-        return f"Worker on 127.0.0.1:{PORT}"
+    # torch-free (the Lite build has no torch): GPU/model come from nvidia-smi.
+    model, gb = W.pick_model_for_vram()
+    mode = "Lite" if W.LITE else "Full"
+    if gb is None and not W.MODEL_OVERRIDE:
+        return f"{mode} · no GPU detected"
+    return f"{mode} · model {model}" + (f" · {gb:.0f} GB VRAM" if gb else "")
 
 
 def run_server():
