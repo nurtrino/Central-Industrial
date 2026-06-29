@@ -45,7 +45,10 @@ AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 # e.g. ".centralindustrial.com". Empty = host-only cookie (local dev).
 COOKIE_DOMAIN = os.environ.get("COOKIE_DOMAIN", "")
 GATE_ON = bool(ACCESS_CODE and AUTH_SECRET)
-AUTH_TTL = 30 * 24 * 3600     # access cookie lifetime (30 days)
+# The hub re-prompts for the code on EVERY load (see index.html). This cookie only has
+# to live long enough to carry that fresh login over to a tool's subdomain, so keep it
+# short — it is NOT a "stay logged in" cookie.
+AUTH_TTL = 8 * 3600           # shared SSO cookie lifetime (8 hours)
 
 
 # ── signed tokens (auth cookie + SSO), shared HMAC scheme with the MRMD service ──
@@ -132,9 +135,9 @@ def status_payload():
         }
 
     if not tools:
-        return {"tools": []}
+        return {"tools": [], "gated": GATE_ON}
     with ThreadPoolExecutor(max_workers=min(8, len(tools))) as ex:
-        return {"tools": list(ex.map(probe, tools))}
+        return {"tools": list(ex.map(probe, tools)), "gated": GATE_ON}
 
 
 class Handler(SimpleHTTPRequestHandler):

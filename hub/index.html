@@ -160,18 +160,27 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
 
   // ---- access gate + menu ----------------------------------------------
   function enter(){
+    // Gate decision on each page load. We require the access code EVERY time the hub
+    // loads: a 401 means no/expired cookie, and a 200 with gated:true means the gate is
+    // on (even if a still-valid cookie exists) — both paths show the prompt. Only a
+    // gate-off server (local dev) goes straight to the menu.
     fetch('/api/status',{cache:'no-store'}).then(function(r){
       if(r.status === 401){ showAccessPrompt(); return null; }
       return r.json();
     }).then(function(d){
       if(!d) return;
-      out.appendChild(document.createTextNode('\n'));
-      line('WELCOME TO CENTRAL INDUSTRIAL. WE ARE THE FUTURE.');
-      out.appendChild(document.createTextNode('\n'));
-      renderMenu(d.tools||[]);
-      setTimeout(poll, 700);
-      pollTimer = setInterval(poll, 1500);
+      if(d.gated){ showAccessPrompt(); return; }
+      showMenu(d);
     }).catch(function(){ line('?DEVICE NOT PRESENT  ERROR', 'st-offline'); });
+  }
+
+  function showMenu(d){
+    out.appendChild(document.createTextNode('\n'));
+    line('WELCOME TO CENTRAL INDUSTRIAL. WE ARE THE FUTURE.');
+    out.appendChild(document.createTextNode('\n'));
+    renderMenu((d && d.tools) || []);
+    setTimeout(poll, 700);
+    pollTimer = setInterval(poll, 1500);
   }
 
   function showAccessPrompt(){
@@ -201,7 +210,14 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
             body: JSON.stringify({code: code})})
         .then(function(r){ return r.json().then(function(d){ return {ok: r.ok && d && d.ok}; }); })
         .then(function(res){
-          if(res.ok){ wrap.remove(); msg.remove(); enter(); }
+          if(res.ok){
+            wrap.remove(); msg.remove();
+            // Just authenticated in THIS load — render the menu directly (don't run the
+            // gate check again, which would re-prompt because gated is still true).
+            fetch('/api/status',{cache:'no-store'}).then(function(r){ return r.json(); })
+              .then(function(d){ showMenu(d || {tools:[]}); })
+              .catch(function(){ line('?DEVICE NOT PRESENT  ERROR', 'st-offline'); });
+          }
           else { msg.className = 'st-offline'; msg.textContent = '?ACCESS DENIED  ERROR';
                  inp.value = ''; sizeInput(); inp.focus(); }
         }).catch(function(){ msg.className = 'st-offline';
