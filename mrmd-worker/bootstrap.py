@@ -298,6 +298,7 @@ def worker_env(model):
     env["PORT"] = PORT
     env["MRMD_ALLOWED_ORIGIN"] = HOSTED_URL
     env["NOTEMAX_WHISPER_MODEL"] = model    # load exactly the model we provisioned
+    env["MRMD_LOG"] = os.path.join(APP_DIR, "worker.log")   # debug log lives next to setup
     return env
 
 
@@ -337,6 +338,7 @@ def main():
     log(f" Ready. Whisper model: {model}.  Open {HOSTED_URL} and transcribe —")
     log(" audio stays on this machine. Keep this window open while you work.")
     log(" Change the model:  ReadMonkeyDoWorker.exe --model <name>   (--help for options)")
+    log(f" Live progress shows in THIS window; full log: {os.path.join(APP_DIR, 'worker.log')}")
     log("-" * 60)
 
     # Open the site once, then run the worker in the foreground (closing this window

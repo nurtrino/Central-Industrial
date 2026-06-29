@@ -451,7 +451,9 @@ def run_job(job_id, mode, media_files, text_files, image_files, job_dir, diarize
 def index():
     # The access gate (before_request) already redirected unauthenticated visitors
     # to the home page, so by here the request is authenticated (or the gate is off).
-    return send_from_directory(BASE, "index.html")
+    resp = send_from_directory(BASE, "index.html")
+    resp.headers["Cache-Control"] = "no-cache, must-revalidate"   # always serve the latest UI
+    return resp
 
 
 @app.route("/healthz")

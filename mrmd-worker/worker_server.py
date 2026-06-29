@@ -31,6 +31,7 @@ import queue
 import sys
 import tempfile
 import threading
+import time
 import traceback
 
 from flask import Flask, request, jsonify, Response
@@ -65,6 +66,22 @@ MAX_UPLOAD_MB = int(os.environ.get("MRMD_MAX_UPLOAD_MB", "4096"))
 # LITE = Whisper-only (faster-whisper / CTranslate2), NO torch, NO pyannote diarization.
 # This is what the small "Lite" exe build sets; the "Full" exe leaves it off.
 LITE = os.environ.get("MRMD_LITE", "").strip().lower() in ("1", "true", "yes", "on")
+
+# Debug log: everything the worker does is printed to its console window AND appended to
+# a log file (MRMD_LOG, default worker.log beside this file — the launcher points it at
+# the ReadMonkeyDo folder). Lets us see live progress / diagnose a stuck or failing run.
+LOG_PATH = os.environ.get("MRMD_LOG", "").strip() or os.path.join(_HERE, "worker.log")
+
+
+def server_log(msg):
+    line = time.strftime("%H:%M:%S ") + str(msg)
+    print(line, flush=True)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
+
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
@@ -169,12 +186,15 @@ def transcribe_route():
 
     def log(m):
         logs.append(str(m))
+        server_log(m)
 
     fname = f.filename
     ext = os.path.splitext(fname)[1] or ".bin"
     fd, tmp = tempfile.mkstemp(suffix=ext)
     os.close(fd)
     f.save(tmp)                              # audio bytes land on THIS machine only
+    server_log(f"--- /transcribe '{fname}' ({os.path.getsize(tmp)//1024} KB) "
+               f"model={model} diarize={diarize} ---")
 
     # Transcribe on a background thread and STREAM progress to the page as newline-
     # delimited JSON: {"type":"progress","stage":...,"pct":N|null} as it works, then a
@@ -183,8 +203,9 @@ def transcribe_route():
     events: "queue.Queue" = queue.Queue()
 
     def on_stage(stage, frac):
-        events.put({"type": "progress", "stage": stage,
-                    "pct": None if frac is None else max(0, min(100, round(frac * 100)))})
+        pct = None if frac is None else max(0, min(100, round(frac * 100)))
+        events.put({"type": "progress", "stage": stage, "pct": pct})
+        server_log(f"  [{stage}] " + ("working…" if pct is None else f"{pct}%"))
 
     def run():
         try:
@@ -194,9 +215,12 @@ def transcribe_route():
                 tmp, HF_TOKEN, model_size=model,
                 diarize_audio=bool(HF_TOKEN) and diarize, num_speakers=num_speakers,
                 log=log, on_stage=on_stage)
+            server_log(f"=== DONE '{fname}' — {len(transcript)} chars ===")
             events.put({"type": "result", "transcript": transcript, "model": model,
                         "vram_gb": gb, "filename": fname, "log": logs})
         except Exception as e:                # noqa: BLE001
+            server_log(f"!!! ERROR on '{fname}': {type(e).__name__}: {e}")
+            server_log(traceback.format_exc())
             events.put({"type": "error", "error": f"{type(e).__name__}: {e}",
                         "traceback": traceback.format_exc(), "log": logs})
         finally:
@@ -225,4 +249,6 @@ if __name__ == "__main__":
     print(f"  diarization:    {'ON' if HF_TOKEN else 'OFF (no HF_TOKEN)'}")
     print(f"  token required: {'yes' if WORKER_TOKEN else 'NO — set MRMD_WORKER_TOKEN before exposing!'}")
     print(f"  allowed origin: {ALLOWED_ORIGIN}")
+    print(f"  log file:       {LOG_PATH}")
+    server_log(f"==== worker start (model={m}, port={PORT}) ====")
     app.run(host="0.0.0.0", port=PORT, threaded=True)
