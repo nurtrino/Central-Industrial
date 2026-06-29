@@ -6,8 +6,12 @@ call .venv\Scripts\activate.bat
 
 pyinstaller --noconfirm --onefile --windowed --name ReadMonkeyDoWorker-Lite ^
   --runtime-hook _lite_hook.py ^
+  --paths "..\monkey-read-monkey-do" ^
+  --hidden-import transcribe ^
+  --hidden-import worker_server ^
   --collect-all faster_whisper ^
   --collect-all ctranslate2 ^
+  --collect-all nvidia ^
   --exclude-module torch ^
   --exclude-module pyannote ^
   --exclude-module whisper ^

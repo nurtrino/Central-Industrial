@@ -24,5 +24,11 @@ Thumbs.db
 # ── Local editor/preview tooling ─────────────────────────────────────────────
 .claude/
 
+# ── PyInstaller build artifacts (the exe is hosted separately, never committed) ─
+mrmd-worker/build/
+mrmd-worker/dist/
+mrmd-worker/*.spec
+
+
 # ── Not deployed: legacy Windows/WSL2 Home Assistant launcher (kept locally) ──
 Home Assistant/

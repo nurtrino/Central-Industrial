@@ -6,6 +6,9 @@ REM collects can need tweaking per environment.
 call .venv\Scripts\activate.bat
 
 pyinstaller --noconfirm --onefile --windowed --name ReadMonkeyDoWorker-Full ^
+  --paths "..\monkey-read-monkey-do" ^
+  --hidden-import transcribe ^
+  --hidden-import worker_server ^
   --collect-all faster_whisper ^
   --collect-all ctranslate2 ^
   --collect-all torch ^

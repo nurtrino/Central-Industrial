@@ -109,10 +109,32 @@ def _require_cuda_ct2(log=print):
         pass   # ctranslate2 absent → WhisperModel(device='cuda') raises a clear error
 
 
+def _add_cuda_dll_dirs(log=print):
+    """Windows: faster-whisper/CTranslate2 load cuBLAS + cuDNN DLLs at runtime, but the
+    nvidia-*-cu12 pip wheels ship them under site-packages/nvidia/<lib>/bin (and under
+    _MEIPASS/nvidia/... in the packaged exe) — neither is on the default DLL search
+    path. Add them so cublas64_12.dll / cudnn*.dll resolve."""
+    if os.name != "nt":
+        return
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("nvidia")
+        bases = list(spec.submodule_search_locations) if spec and spec.submodule_search_locations else []
+        for base in bases:
+            for sub in ("cublas", "cudnn", "cuda_runtime"):
+                d = os.path.join(base, sub, "bin")
+                if os.path.isdir(d):
+                    os.add_dll_directory(d)
+                    os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+    except Exception as e:                       # noqa: BLE001
+        log(f"  (cuda dll path setup skipped: {e})")
+
+
 def _load_faster_whisper(model_size: str, log=print):
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
         _require_cuda_ct2(log)
+        _add_cuda_dll_dirs(log)
         from faster_whisper import WhisperModel
         log(f"  loading faster-whisper '{model_size}' into GPU VRAM (float16)...")
         # device="cuda" + float16 keeps weights and compute in VRAM (CTranslate2).
@@ -182,6 +204,10 @@ def transcribe(wav_path: str, model_size: str = "large-v3", language=None, log=p
         log("  transcribing with faster-whisper...")
         return _transcribe_faster(wav_path, model_size, language, log, on_progress, control)
     except Exception as e:
+        try:
+            import whisper  # noqa: F401  (openai-whisper — not bundled in the Lite build)
+        except ImportError:
+            raise e         # no fallback available → surface the real faster-whisper error
         log(f"  faster-whisper failed ({type(e).__name__}: {e}); "
             f"falling back to openai-whisper.")
         return _transcribe_openai(wav_path, model_size, language, log, on_progress)
