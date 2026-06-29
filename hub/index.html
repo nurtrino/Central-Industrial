@@ -147,15 +147,22 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
     });
   }
 
+  var ssoToken = null;   // refreshed by showMenu + every poll, so a click carries a fresh one
+
   function poll(){
     fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();})
-      .then(function(d){ paint(d.tools||[]); }).catch(function(){});
+      .then(function(d){ if(d && d.sso) ssoToken = d.sso; paint(d.tools||[]); }).catch(function(){});
+  }
+
+  function toolHref(url){
+    if(!url || !ssoToken) return url;
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + 't=' + encodeURIComponent(ssoToken);
   }
 
   function openTool(t){
-    // The auth cookie is scoped to the apex domain, so it travels to every tool's
-    // subdomain automatically — just navigate.
-    if(t.url){ window.location.href = t.url; }
+    // Tools admit ONLY visitors arriving from the hub: carry a short-lived SSO token that
+    // the tool swaps for its own session cookie. A direct visit (no token) bounces back here.
+    if(t.url){ window.location.href = toolHref(t.url); }
   }
 
   // ---- access gate + menu ----------------------------------------------
@@ -175,6 +182,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   }
 
   function showMenu(d){
+    if(d && d.sso) ssoToken = d.sso;
     out.appendChild(document.createTextNode('\n'));
     line('WELCOME TO CENTRAL INDUSTRIAL. WE ARE THE FUTURE.');
     out.appendChild(document.createTextNode('\n'));
@@ -212,6 +220,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
         .then(function(res){
           if(res.ok){
             wrap.remove(); msg.remove();
+            playAudioOnce();   // the Enter keypress that submitted the code is the gesture
             // Just authenticated in THIS load — render the menu directly (don't run the
             // gate check again, which would re-prompt because gated is still true).
             fetch('/api/status',{cache:'no-store'}).then(function(r){ return r.json(); })
@@ -253,7 +262,6 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   // ---- boot sequence ---------------------------------------------------
   function boot(){
     if(booted) return; booted = true;
-    playAudioOnce();
     var bc = document.getElementById('bootcur'); if(bc) bc.remove();
     if(hint) hint.remove();
     out.appendChild(document.createTextNode('\n'));

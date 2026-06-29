@@ -49,6 +49,10 @@ GATE_ON = bool(ACCESS_CODE and AUTH_SECRET)
 # to live long enough to carry that fresh login over to a tool's subdomain, so keep it
 # short — it is NOT a "stay logged in" cookie.
 AUTH_TTL = 8 * 3600           # shared SSO cookie lifetime (8 hours)
+# One-time-ish handoff token put on each tool link so a tool can prove the visitor came
+# THROUGH the hub (not straight to the tool's URL). Kept very short; the landing page
+# refreshes it continuously, so a click always carries a fresh one.
+SSO_TTL = 120                 # hub -> tool handoff token (2 min)
 
 
 # ── signed tokens (auth cookie + SSO), shared HMAC scheme with the MRMD service ──
@@ -134,10 +138,12 @@ def status_payload():
             "up": False if is_local else url_up(t.get("url")),
         }
 
+    # Fresh handoff token for the tool links (only meaningful when the gate is on).
+    sso = make_token("sso", SSO_TTL) if GATE_ON else ""
     if not tools:
-        return {"tools": [], "gated": GATE_ON}
+        return {"tools": [], "gated": GATE_ON, "sso": sso}
     with ThreadPoolExecutor(max_workers=min(8, len(tools))) as ex:
-        return {"tools": list(ex.map(probe, tools)), "gated": GATE_ON}
+        return {"tools": list(ex.map(probe, tools)), "gated": GATE_ON, "sso": sso}
 
 
 class Handler(SimpleHTTPRequestHandler):

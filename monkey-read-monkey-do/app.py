@@ -23,6 +23,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, redirect, send_file, send_from_directory, session
+from urllib.parse import urlencode
 
 import transcribe as T
 import notes as N
@@ -79,20 +80,36 @@ GATE_ON = HOSTED and bool(AUTH_SECRET)
 _GATE_EXEMPT = ("/healthz",)            # always-open (plus the /fonts/ prefix)
 
 
-def authed() -> bool:
-    """Verify the shared ci_auth cookie (HMAC with AUTH_SECRET, scheme shared with the hub)."""
-    if not GATE_ON:
-        return True
-    tok = request.cookies.get("ci_auth", "")
+SESS_TTL = 2 * 3600     # tool session granted after a hub handshake (2 hours)
+
+
+def _verify(purpose: str, tok: str) -> bool:
+    """Verify an HMAC token '<exp>.<sig>' for the given purpose (scheme shared with the hub)."""
     try:
-        exp_s, sig = tok.split(".", 1)
+        exp_s, sig = (tok or "").split(".", 1)
         exp = int(exp_s)
     except (ValueError, AttributeError):
         return False
     if exp < int(time.time()):
         return False
-    good = hmac.new(AUTH_SECRET.encode(), f"auth:{exp}".encode(), hashlib.sha256).hexdigest()
+    good = hmac.new(AUTH_SECRET.encode(), f"{purpose}:{exp}".encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, good)
+
+
+def _make_sess() -> str:
+    exp = int(time.time()) + SESS_TTL
+    sig = hmac.new(AUTH_SECRET.encode(), f"sess:{exp}".encode(), hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def authed() -> bool:
+    """Authorized ONLY via a host-only session cookie that was established by a hub SSO
+    handshake. The shared apex ci_auth cookie is deliberately NOT trusted here: it rides
+    along on direct visits too, so honoring it would let people bypass the hub. Entry must
+    come through the hub, which hands us a short-lived ?t= token to exchange for ci_sess."""
+    if not GATE_ON:
+        return True
+    return _verify("sess", request.cookies.get("ci_sess", ""))
 
 
 @app.before_request
@@ -102,6 +119,17 @@ def _access_gate():
     p = request.path
     if p in _GATE_EXEMPT or p.startswith("/fonts/"):
         return
+    # Fresh arrival from the hub: swap the one-time SSO token for a host session cookie,
+    # then redirect to the same URL minus the token so it doesn't linger in the address bar.
+    sso = request.args.get("t", "")
+    if sso and _verify("sso", sso):
+        rest = request.args.to_dict(flat=True)
+        rest.pop("t", None)
+        clean = p + ("?" + urlencode(rest) if rest else "")
+        resp = redirect(clean, code=302)
+        resp.set_cookie("ci_sess", _make_sess(), max_age=None,   # session cookie (host-only)
+                        httponly=True, secure=True, samesite="Lax")
+        return resp
     if authed():
         return
     if p.startswith("/api/"):
