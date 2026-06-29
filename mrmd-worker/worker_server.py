@@ -93,10 +93,12 @@ def pick_model_for_vram():
 
 
 def _authed(req) -> bool:
-    """Constant-time check of the shared worker token. No token configured = refuse
-    (we will not run an open, unauthenticated transcription endpoint)."""
+    """Constant-time check of the shared worker token. When NO token is configured
+    (the local tray-helper model), allow it — the worker binds to 127.0.0.1 only and
+    CORS is locked to the hosted origin, so the page is the only thing that can read it.
+    A token is only needed for the remote/tunnel deployment."""
     if not WORKER_TOKEN:
-        return False
+        return True
     sent = (req.headers.get("X-Worker-Token")
             or req.headers.get("Authorization", "").replace("Bearer ", "", 1)).strip()
     return bool(sent) and hmac.compare_digest(sent, WORKER_TOKEN)
@@ -107,6 +109,9 @@ def add_cors(resp):
     resp.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
     resp.headers["Access-Control-Allow-Headers"] = "Authorization, X-Worker-Token, Content-Type"
     resp.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    # Chrome Private Network Access: a public HTTPS page calling 127.0.0.1 sends a
+    # preflight that requires this header on the response, or the request is blocked.
+    resp.headers["Access-Control-Allow-Private-Network"] = "true"
     resp.headers["Vary"] = "Origin"
     return resp
 

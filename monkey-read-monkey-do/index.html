@@ -383,25 +383,38 @@ async function startServerJob(fd, pr){
   poll=setInterval(checkStatus,1200); checkStatus();
 }
 
-// Hosted mode: the browser sends audio straight to YOUR local GPU worker (never to
-// the cloud), gets the transcript back, then hands it to the notes pipeline here.
+// Hosted mode: the browser sends audio straight to the LOCAL transcription helper on
+// this machine (the tray app on 127.0.0.1) — never to the cloud — gets the transcript
+// back, then hands it to the notes pipeline here. cfg.worker_url overrides the local
+// default for the optional remote/tunnel deployment.
+const WORKER_LOCAL = "http://127.0.0.1:5007";
+function workerBase(){ return (((cfg && cfg.worker_url) || WORKER_LOCAL)).replace(/\/+$/,""); }
+
+async function workerUp(){
+  try{ const r=await fetch(workerBase()+"/health",{method:"GET"}); return r.ok; }
+  catch(e){ return false; }
+}
+
 async function transcribeOnWorker(file){
   const fd=new FormData();
   fd.append("file", file);
   fd.append("diarize", diarizeOn ? "1" : "0");
-  const base=(cfg.worker_url||"").replace(/\/+$/,"");
-  const r=await fetch(base+"/transcribe",{method:"POST",
-    headers:{"X-Worker-Token": cfg.worker_token||""}, body:fd});
+  const headers={};
+  if(cfg && cfg.worker_token) headers["X-Worker-Token"]=cfg.worker_token;
+  const r=await fetch(workerBase()+"/transcribe",{method:"POST", headers, body:fd});
   let j; try{ j=await r.json(); }catch(e){ throw new Error("Worker returned a non-JSON response ("+r.status+")"); }
   if(!r.ok || j.error) throw new Error(j.error || ("Worker error "+r.status));
   return j.transcript||"";
 }
 
 async function runHostedAudio(pr){
-  if(!cfg.worker_url || !cfg.worker_token){
-    pr.innerHTML=`<span class="err">No transcription worker is configured. Set `+
-      `MRMD_WORKER_URL and MRMD_WORKER_TOKEN on this service, and run the GPU worker `+
-      `(see mrmd-worker/README).</span>`; goBtn.disabled=false; return;
+  if(!(await workerUp())){
+    pr.innerHTML=`<span style="color:var(--warn)">The Read Monkey Do transcription helper `+
+      `isn't running on this machine. <a href="/download/ReadMonkeyDoWorker.exe" `+
+      `style="color:var(--accent)">Download it</a> (small Windows tray app · needs an `+
+      `NVIDIA GPU), run it, then click Run again. Your audio is transcribed locally and `+
+      `never leaves your computer.</span>`;
+    goBtn.disabled=false; return;
   }
   const media=files.filter(f=>["audio","video"].includes(kind(f.name)));
   const imgs=files.filter(f=>kind(f.name)==="image");

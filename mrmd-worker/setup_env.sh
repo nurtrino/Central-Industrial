@@ -19,10 +19,11 @@ echo "[3/5] Installing CUDA 12.8 PyTorch (Blackwell sm_120)..."
 uv pip install --python "$VPY" \
   torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-echo "[4/5] Installing transcription + diarization + server stack..."
+echo "[4/5] Installing transcription + diarization + server + tray/build stack..."
 uv pip install --python "$VPY" \
   faster-whisper openai-whisper "pyannote.audio>=3.1" "numpy<2.3" \
-  soundfile flask python-dotenv
+  soundfile flask python-dotenv \
+  pystray pillow pyinstaller
 
 echo "[5/5] Verifying GPU is visible to torch..."
 "$VPY" -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU')"

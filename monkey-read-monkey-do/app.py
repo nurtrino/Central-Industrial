@@ -438,6 +438,13 @@ def fonts(fn):
     return send_from_directory(os.path.join(BASE, "fonts"), os.path.basename(fn))
 
 
+@app.route("/download/<path:fn>")
+def download_helper(fn):
+    # Serve the local transcription helper (ReadMonkeyDoWorker.exe) to logged-in users.
+    return send_from_directory(os.path.join(BASE, "downloads"), os.path.basename(fn),
+                               as_attachment=True)
+
+
 @app.route("/mascot")
 def mascot():
     # Serve whatever the user saved as mascot.* in the Monkey Read Monkey Do folder.

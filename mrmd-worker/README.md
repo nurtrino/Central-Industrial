@@ -1,62 +1,56 @@
-# Monkey Read Monkey Do — GPU Worker
+# Monkey Read Monkey Do — Local Transcription Helper
 
 The **local** half of Monkey Read Monkey Do. The interface is hosted on the web
-(Render); this worker runs on your **home GPU machine** and does all the Whisper +
-diarization work. **Audio never leaves this machine** — the browser uploads it
-straight here (over a private HTTPS tunnel), the worker transcribes locally, and
-returns only the **text transcript**.
+(`notes.centralindustrial.ai`); this helper runs on the **user's own machine** and does
+the Whisper transcription on **that machine's GPU**. The hosted page talks to it on
+`http://127.0.0.1:5007`, so **the audio never leaves the computer** — it's written to a
+temp file, transcribed, and deleted; only the text transcript goes back.
 
-```
-Browser ──audio──▶ this worker (Whisper on your GPU)        [audio stays local]
-   │                    │ transcript (text)
-   └─▶ hosted UI ◀──────┘
-        └─ writes notes via Claude, serves the result
-```
+## How a user gets it (the tray app)
+1. On the hosted page, click an audio mode and **Run**. If the helper isn't running,
+   the page shows a **"Download it"** link → `ReadMonkeyDoWorker.exe`.
+2. They run the exe. It lives in the **system tray**, starts on login, and serves the
+   local transcription endpoint. Right-click the tray icon for status / open the app /
+   start-on-login toggle / quit.
+3. Back on the page, **Run** again → audio is transcribed locally, notes are written by
+   the hosted app.
 
-## What it does
-- `POST /transcribe` — multipart `file` (audio/video) → `{ transcript, model, ... }`.
-  Token-protected; CORS-locked to the hosted UI's origin. Audio is written to a temp
-  file and **deleted immediately** after transcription.
-- `GET /health` — `{ gpu, gpu_name, vram_gb, model, diarization, token_required }`.
-- **Auto model sizing** — picks a Whisper model that fits your VRAM (≥12 GB
-  `large-v3`, ≥8 GB `medium`, ≥5 GB `small`, ≥3 GB `base`, else `tiny`). Override with
-  `NOTEMAX_WHISPER_MODEL`. Reuses [transcribe.py](../monkey-read-monkey-do/transcribe.py).
+`tray_app.py` is the entry point; it runs `worker_server.py` (the Flask transcription
+server) on `127.0.0.1` and adds the tray UI + start-on-login.
 
-> Needs a CUDA GPU — it refuses CPU. This machine's GPU determines the model: e.g. an
-> 8 GB card auto-selects `medium`; the RTX 5090 gets `large-v3`.
+- **Endpoints:** `POST /transcribe` (multipart `file` → `{transcript, model}`),
+  `GET /health`. CORS is locked to `https://notes.centralindustrial.ai`, with the
+  Chrome Private-Network-Access header so an HTTPS page may call `127.0.0.1`. No token
+  needed in the local model (127.0.0.1-only + CORS).
+- **Auto model sizing** to the GPU's VRAM (≥12 GB `large-v3` … down to `tiny`); reuses
+  [transcribe.py](../monkey-read-monkey-do/transcribe.py). Needs an NVIDIA GPU.
+- **Diarization** (speaker labels) is optional — set `HF_TOKEN` (pyannote). It's the
+  heavy part; the default is fast Whisper-only.
 
-## Setup (home GPU machine)
+## Build the exe (on Windows)
 ```bash
 cd mrmd-worker
-bash setup_env.sh                       # builds .venv with cu128 torch + whisper + pyannote
-cp .env.example .env                    # then fill in MRMD_WORKER_TOKEN, HF_TOKEN, MRMD_ALLOWED_ORIGIN
-./.venv/Scripts/python.exe worker_server.py     # Windows  (Linux: ./.venv/bin/python …)
+bash setup_env.sh            # venv: faster-whisper + (optional) pyannote + pystray + pyinstaller
+./build_exe.bat             # -> dist/ReadMonkeyDoWorker.exe
 ```
-Also needs **ffmpeg/ffprobe** on PATH (same as the original tool).
+Then host it: copy `dist/ReadMonkeyDoWorker.exe` to
+`../monkey-read-monkey-do/downloads/` (served at `/download/ReadMonkeyDoWorker.exe`),
+**or** upload it to a GitHub Release and point the page's link there (better for a
+large binary).
 
-## Expose it (so the hosted UI can reach it)
-The hosted page is HTTPS, so the worker needs an HTTPS URL. Easiest options:
+> **Size:** the tray app is tiny, but the GPU engine isn't. faster-whisper (CTranslate2)
+> is the light path; bundling torch + pyannote (full diarization) makes the exe large.
+> For a genuinely small download, build the faster-whisper-only engine and fetch the
+> model on first run.
 
-- **Tailscale Funnel** (free, no domain):
-  ```bash
-  tailscale funnel 5007
-  ```
-  → gives `https://<machine>.<tailnet>.ts.net`.
-- **Cloudflare Tunnel** (free, with a domain):
-  ```bash
-  cloudflared tunnel --url http://localhost:5007
-  ```
+## Run from source (dev / testing)
+```bash
+./.venv/Scripts/python.exe tray_app.py     # tray helper on 127.0.0.1:5007
+```
 
-Then on the hosted UI (Render `monkey-read-monkey-do` service) set:
-- `MRMD_WORKER_URL` = that HTTPS URL
-- `MRMD_WORKER_TOKEN` = the same token you put in this worker's `.env`
-
-…and set this worker's `MRMD_ALLOWED_ORIGIN` to the UI's origin (e.g.
-`https://monkey-read-monkey-do.onrender.com`).
-
-## Security
-- The token is **required** — with none set, every job is refused (no open
-  transcription endpoint).
-- Keep `MRMD_ALLOWED_ORIGIN` pinned to your UI's origin (not `*`) once deployed.
-- The tunnel exposes only this worker; it serves nothing but `/health` and
-  `/transcribe`.
+## Advanced: remote/tunnel worker (one shared GPU box, not per-user)
+The original model — one machine serves everyone over an HTTPS tunnel. Run
+`worker_server.py` directly with a token, expose it via Tailscale Funnel / Cloudflare
+Tunnel, and set `MRMD_WORKER_URL` + `MRMD_WORKER_TOKEN` on the hosted service (the page
+prefers `cfg.worker_url` when set, else falls back to the local `127.0.0.1` helper).
+Set `MRMD_ALLOWED_ORIGIN=https://notes.centralindustrial.ai` on the worker.
