@@ -430,6 +430,13 @@ def logout():
     return jsonify({"ok": True})
 
 
+@app.route("/fonts/<path:fn>")
+def fonts(fn):
+    # Static fonts for the C64 access-code page (served pre-auth — the gate only
+    # guards /api/*). Safe filename only.
+    return send_from_directory(os.path.join(BASE, "fonts"), os.path.basename(fn))
+
+
 @app.route("/mascot")
 def mascot():
     # Serve whatever the user saved as mascot.* in the Monkey Read Monkey Do folder.
