@@ -59,7 +59,7 @@
   .hint{color:var(--light); opacity:.55;}
   input#accode{background:transparent;border:none;outline:none;color:var(--light);
     font:inherit;text-transform:uppercase;text-shadow:inherit;caret-color:transparent;
-    width:20ch;padding:0;}
+    width:0;padding:0;}
   /* blinking C64 block cursor */
   .cursor{
     display:inline-block; width:1ch; height:1.12em; background:var(--light);
@@ -165,6 +165,9 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
       return r.json();
     }).then(function(d){
       if(!d) return;
+      out.appendChild(document.createTextNode('\n'));
+      line('WELCOME TO CENTRAL INDUSTRIAL. WE ARE THE FUTURE.');
+      out.appendChild(document.createTextNode('\n'));
       renderMenu(d.tools||[]);
       setTimeout(poll, 700);
       pollTimer = setInterval(poll, 1500);
@@ -179,11 +182,18 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
     wrap.appendChild(document.createTextNode('> '));
     var inp = document.createElement('input');
     inp.id = 'accode'; inp.type = 'password'; inp.autocomplete = 'off'; inp.spellcheck = false;
+    // Grow the field to fit what's typed so the block cursor rides right after "> ".
+    function sizeInput(){ inp.style.width = inp.value.length + 'ch'; }
+    sizeInput();
+    inp.addEventListener('input', sizeInput);
     wrap.appendChild(inp); wrap.appendChild(makeCursor());
     out.appendChild(wrap); out.appendChild(document.createTextNode('\n'));
     var msg = document.createElement('span'); out.appendChild(msg);
     inp.focus();
+    setTimeout(function(){ inp.focus(); }, 0);   // make focus stick after insertion
+    // Any click/keystroke on the screen drops the caret back on the prompt.
     document.addEventListener('click', function(){ inp.focus(); });
+    document.addEventListener('keydown', function(){ if(document.activeElement !== inp) inp.focus(); });
     inp.addEventListener('keydown', function(ev){
       if(ev.key !== 'Enter') return; ev.preventDefault();
       var code = inp.value;
@@ -193,7 +203,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
         .then(function(res){
           if(res.ok){ wrap.remove(); msg.remove(); enter(); }
           else { msg.className = 'st-offline'; msg.textContent = '?ACCESS DENIED  ERROR';
-                 inp.value = ''; inp.focus(); }
+                 inp.value = ''; sizeInput(); inp.focus(); }
         }).catch(function(){ msg.className = 'st-offline';
                  msg.textContent = '?DEVICE NOT PRESENT  ERROR'; });
     });
@@ -236,8 +246,6 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
       ['SEARCHING FOR SPECIAL PROJECTS', 180],
       ['LOADING', 520],
       ['READY.', 160],
-      ['', 120],
-      ['WELCOME TO CENTRAL INDUSTRIAL. WE ARE THE FUTURE.', 220],
       ['', 120]
     ];
     var i = 0;
