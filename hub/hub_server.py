@@ -70,10 +70,16 @@ def check_token(purpose, tok):
     return hmac.compare_digest(sig, _sign(purpose, exp))
 
 
-def _cookie(value, max_age):
+def _cookie(value):
+    # SESSION cookie: NO Max-Age / Expires, so the browser drops it when it closes —
+    # the access code is re-entered each browser session (no persistent "remember me").
     dom = f" Domain={COOKIE_DOMAIN};" if COOKIE_DOMAIN else ""
-    return (f"ci_auth={value}; Path=/;{dom} Max-Age={max_age}; "
-            f"HttpOnly; SameSite=Lax; Secure")
+    return f"ci_auth={value}; Path=/;{dom} HttpOnly; SameSite=Lax; Secure"
+
+
+def _cookie_clear():
+    dom = f" Domain={COOKIE_DOMAIN};" if COOKIE_DOMAIN else ""
+    return f"ci_auth=; Path=/;{dom} Max-Age=0; HttpOnly; SameSite=Lax; Secure"
 
 
 # ── tool registry ────────────────────────────────────────────────────────────
@@ -174,10 +180,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": True})
             if ACCESS_CODE and hmac.compare_digest(code, ACCESS_CODE):
                 return self._json({"ok": True}, 200,
-                                  [("Set-Cookie", _cookie(make_token("auth", AUTH_TTL), AUTH_TTL))])
+                                  [("Set-Cookie", _cookie(make_token("auth", AUTH_TTL)))])
             return self._json({"ok": False, "error": "incorrect access code"}, 401)
         if p == "/api/logout":
-            return self._json({"ok": True}, 200, [("Set-Cookie", _cookie("", 0))])
+            return self._json({"ok": True}, 200, [("Set-Cookie", _cookie_clear())])
         return self._json({"error": "not found"}, 404)
 
     def do_GET(self):
