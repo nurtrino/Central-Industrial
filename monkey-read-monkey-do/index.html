@@ -410,13 +410,12 @@ async function transcribeOnWorker(file){
 async function runHostedAudio(pr){
   if(!(await workerUp())){
     pr.innerHTML=`<span style="color:var(--warn)">The Read Monkey Do transcription helper `+
-      `isn't running on this machine. Download it (Windows tray app · needs an NVIDIA GPU), `+
+      `isn't running on this machine. Download it (Windows · needs an NVIDIA GPU), `+
       `run it, then click Run again — audio is transcribed locally and never leaves your `+
       `computer.<br><br>`+
-      `<a href="/download/ReadMonkeyDoWorker-Full.exe" style="color:var(--accent)">⬇ Full</a> `+
-      `— with speaker labels (larger download) &nbsp;·&nbsp; `+
-      `<a href="/download/ReadMonkeyDoWorker-Lite.exe" style="color:var(--accent)">⬇ Lite</a> `+
-      `— faster, no speaker labels (small download)</span>`;
+      `<a href="/download/ReadMonkeyDoWorker.exe" style="color:var(--accent)">⬇ Download the helper</a> `+
+      `— small download; the first run sets itself up (one-time ~4&nbsp;GB: GPU libraries + `+
+      `Whisper model) and needs that much free disk.</span>`;
     goBtn.disabled=false; return;
   }
   const media=files.filter(f=>["audio","video"].includes(kind(f.name)));

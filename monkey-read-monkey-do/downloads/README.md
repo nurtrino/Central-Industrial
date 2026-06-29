@@ -1,12 +1,12 @@
 # downloads/
 
 The hosted Read Monkey Do page serves the local transcription helper from here at
-`/download/ReadMonkeyDoWorker-Full.exe` and `/download/ReadMonkeyDoWorker-Lite.exe`.
+`/download/ReadMonkeyDoWorker.exe` (see the `/download/<fn>` route in `app.py`).
 
-Build both from `../../mrmd-worker/` (`build_exe.bat` = Full with diarization;
-`build_exe_lite.bat` = Lite, Whisper-only) and drop the two exes here so the page's
-"Full" / "Lite" download links work.
+`ReadMonkeyDoWorker.exe` is the small (~8 MB) self-provisioning launcher built from
+`../../mrmd-worker/` via `build_setup.bat`. It bundles no ML — on first run it fetches
+`uv`, builds a venv with the pinned faster-whisper + CUDA stack, grabs ffmpeg, and
+downloads the Whisper model, then serves the worker on `127.0.0.1:5007`.
 
-> Note: a multi-hundred-MB exe is large to commit to git. For production, prefer
-> hosting the exe on a GitHub Release and pointing the page's download link there
-> instead of committing the binary. This folder + route is the simplest wiring.
+Rebuild and drop the new exe here whenever `bootstrap.py` (or the pinned versions)
+change. At ~8 MB it's small enough to commit; Render serves it straight from this folder.

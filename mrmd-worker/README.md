@@ -6,17 +6,28 @@ the Whisper transcription on **that machine's GPU**. The hosted page talks to it
 `http://127.0.0.1:5007`, so **the audio never leaves the computer** — it's written to a
 temp file, transcribed, and deleted; only the text transcript goes back.
 
-## How a user gets it (the tray app)
+## How a user gets it (one self-setup exe)
 1. On the hosted page, click an audio mode and **Run**. If the helper isn't running,
-   the page shows a **"Download it"** link → `ReadMonkeyDoWorker.exe`.
-2. They run the exe. It lives in the **system tray**, starts on login, and serves the
-   local transcription endpoint. Right-click the tray icon for status / open the app /
-   start-on-login toggle / quit.
-3. Back on the page, **Run** again → audio is transcribed locally, notes are written by
-   the hosted app.
+   the page shows a **"Download the helper"** link → `ReadMonkeyDoWorker.exe` (~8 MB).
+2. They run the exe. A console window shows a **one-time setup** (steps 1–5 below), then
+   the worker starts and the page opens. Keep that window open while transcribing.
+3. Back on the page, **Run** again → audio is transcribed locally on the GPU.
 
-`tray_app.py` is the entry point; it runs `worker_server.py` (the Flask transcription
-server) on `127.0.0.1` and adds the tray UI + start-on-login.
+## What the exe does (`bootstrap.py`)
+The download is tiny because it bundles **no** ML. On first run it provisions everything
+into `%LOCALAPPDATA%\ReadMonkeyDo\`, then caches it for every later run:
+
+1. fetch `uv` (single binary)
+2. `uv venv` (downloads CPython 3.12 if needed)
+3. `uv pip install` the **pinned** faster-whisper + CTranslate2 + cuBLAS/cuDNN stack
+   (the exact versions proven on the RTX 5070 / Blackwell — see `REQUIREMENTS` in
+   `bootstrap.py`)
+4. fetch a static **ffmpeg/ffprobe**
+5. download the **Whisper model** sized to this GPU's VRAM
+
+Then it runs `worker_server.py` on `127.0.0.1:5007` in **Lite** mode (faster-whisper
+only — no torch, no speaker labels). First run downloads **~4–5 GB** (CUDA libs + model)
+and needs that much free disk; it's a one-time cost.
 
 - **Endpoints:** `POST /transcribe` (multipart `file` → `{transcript, model}`),
   `GET /health`. CORS is locked to `https://notes.centralindustrial.ai`, with the
@@ -24,29 +35,15 @@ server) on `127.0.0.1` and adds the tray UI + start-on-login.
   needed in the local model (127.0.0.1-only + CORS).
 - **Auto model sizing** to the GPU's VRAM (≥12 GB `large-v3` … down to `tiny`); reuses
   [transcribe.py](../monkey-read-monkey-do/transcribe.py). Needs an NVIDIA GPU.
-- **Diarization** (speaker labels) is optional — set `HF_TOKEN` (pyannote). It's the
-  heavy part; the default is fast Whisper-only.
 
 ## Build the exe (on Windows)
 ```bash
 cd mrmd-worker
-bash setup_env.sh            # venv: faster-whisper + (optional) pyannote + pystray + pyinstaller
-./build_exe.bat             # -> dist/ReadMonkeyDoWorker.exe
+bash setup_env.sh            # dev venv with PyInstaller (only needed to BUILD)
+./build_setup.bat            # -> dist/ReadMonkeyDoWorker.exe  (~8 MB)
 ```
-Then host it: copy `dist/ReadMonkeyDoWorker.exe` to
-`../monkey-read-monkey-do/downloads/` (served at `/download/ReadMonkeyDoWorker.exe`),
-**or** upload it to a GitHub Release and point the page's link there (better for a
-large binary).
-
-> **Size:** the tray app is tiny, but the GPU engine isn't. faster-whisper (CTranslate2)
-> is the light path; bundling torch + pyannote (full diarization) makes the exe large.
-> For a genuinely small download, build the faster-whisper-only engine and fetch the
-> model on first run.
-
-## Run from source (dev / testing)
-```bash
-./.venv/Scripts/python.exe tray_app.py     # tray helper on 127.0.0.1:5007
-```
+Then copy `dist/ReadMonkeyDoWorker.exe` to `../monkey-read-monkey-do/downloads/`
+(served at `/download/ReadMonkeyDoWorker.exe`) and commit it.
 
 ## Advanced: remote/tunnel worker (one shared GPU box, not per-user)
 The original model — one machine serves everyone over an HTTPS tunnel. Run
