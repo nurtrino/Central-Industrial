@@ -25,12 +25,15 @@ ENV (see .env.example):
   MRMD_MAX_UPLOAD_MB    max upload size, default 4096
 """
 import hmac
+import json
 import os
+import queue
 import sys
 import tempfile
+import threading
 import traceback
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 
 # Reuse the existing local transcription pipeline from the sibling tool. Only its
 # light top-level imports (os/subprocess/tempfile) load here; torch/whisper/pyannote
@@ -167,26 +170,52 @@ def transcribe_route():
     def log(m):
         logs.append(str(m))
 
-    ext = os.path.splitext(f.filename)[1] or ".bin"
+    fname = f.filename
+    ext = os.path.splitext(fname)[1] or ".bin"
     fd, tmp = tempfile.mkstemp(suffix=ext)
     os.close(fd)
-    try:
-        f.save(tmp)                          # audio bytes land on THIS machine only
-        log(f"transcribing '{f.filename}' with Whisper {model} "
-            f"(diarize={bool(HF_TOKEN) and diarize})")
-        transcript = T.transcribe_and_diarize(
-            tmp, HF_TOKEN, model_size=model,
-            diarize_audio=bool(HF_TOKEN) and diarize, num_speakers=num_speakers, log=log)
-        return jsonify({"transcript": transcript, "model": model, "vram_gb": gb,
-                        "filename": f.filename, "log": logs})
-    except Exception as e:                    # noqa: BLE001
-        return jsonify({"error": f"{type(e).__name__}: {e}",
-                        "traceback": traceback.format_exc(), "log": logs}), 500
-    finally:
+    f.save(tmp)                              # audio bytes land on THIS machine only
+
+    # Transcribe on a background thread and STREAM progress to the page as newline-
+    # delimited JSON: {"type":"progress","stage":...,"pct":N|null} as it works, then a
+    # final {"type":"result",...} or {"type":"error",...}. The page draws a live bar
+    # from these. (on_stage fires from inside the blocking call, hence the thread+queue.)
+    events: "queue.Queue" = queue.Queue()
+
+    def on_stage(stage, frac):
+        events.put({"type": "progress", "stage": stage,
+                    "pct": None if frac is None else max(0, min(100, round(frac * 100)))})
+
+    def run():
         try:
-            os.remove(tmp)
-        except OSError:
-            pass
+            log(f"transcribing '{fname}' with Whisper {model} "
+                f"(diarize={bool(HF_TOKEN) and diarize})")
+            transcript = T.transcribe_and_diarize(
+                tmp, HF_TOKEN, model_size=model,
+                diarize_audio=bool(HF_TOKEN) and diarize, num_speakers=num_speakers,
+                log=log, on_stage=on_stage)
+            events.put({"type": "result", "transcript": transcript, "model": model,
+                        "vram_gb": gb, "filename": fname, "log": logs})
+        except Exception as e:                # noqa: BLE001
+            events.put({"type": "error", "error": f"{type(e).__name__}: {e}",
+                        "traceback": traceback.format_exc(), "log": logs})
+        finally:
+            try:
+                os.remove(tmp)                # delete the audio the instant we're done
+            except OSError:
+                pass
+            events.put(None)                  # sentinel: stream complete
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield json.dumps(item) + "\n"
+
+    return Response(stream(), mimetype="application/x-ndjson")
 
 
 if __name__ == "__main__":

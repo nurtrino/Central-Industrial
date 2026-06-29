@@ -45,6 +45,8 @@ UV_EXE = os.path.join(APP_DIR, "uv.exe")
 FFMPEG_DIR = os.path.join(APP_DIR, "ffmpeg")
 HF_CACHE = os.path.join(APP_DIR, "hf-cache")
 SRC_DIR = os.path.join(APP_DIR, "app")          # worker_server.py + transcribe.py live here
+MODEL_FILE = os.path.join(APP_DIR, "model.txt")  # remembers the chosen Whisper model
+VALID_MODELS = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
 
 # Download sources.
 UV_URL = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
@@ -221,8 +223,61 @@ def _pick_model():
     return "tiny"
 
 
-def ensure_model(env):
-    model = _pick_model()
+def _print_help():
+    log("Read Monkey Do worker — local GPU transcription helper")
+    log("")
+    log("Usage:  ReadMonkeyDoWorker.exe [--model <name>]")
+    log("")
+    log("  --model auto      pick automatically from this GPU's VRAM (default)")
+    log("  --model <name>    force a Whisper model; one of:")
+    log("                    " + ", ".join(VALID_MODELS))
+    log("  --help            show this and exit")
+    log("")
+    log("Bigger = more accurate but more VRAM/time: large-v3 is best, tiny/base fastest.")
+    log("Your choice is remembered for next time. Example:")
+    log("  ReadMonkeyDoWorker.exe --model large-v3")
+
+
+def resolve_model_selection():
+    """Decide which Whisper model to use: CLI --model > saved model.txt > 'auto'.
+    An explicit choice is persisted so later double-clicks reuse it. Returns
+    (selection, concrete_model) where selection is 'auto' or a model name."""
+    argv = sys.argv[1:]
+    sel = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--help", "-h", "/?"):
+            _print_help()
+            raise SystemExit(0)
+        if a == "--model":
+            sel = (argv[i + 1] if i + 1 < len(argv) else "").strip().lower()
+            i += 2
+            continue
+        if a.startswith("--model="):
+            sel = a.split("=", 1)[1].strip().lower()
+            i += 1
+            continue
+        i += 1
+    if sel is not None:                          # explicit choice on the command line
+        if sel != "auto" and sel not in VALID_MODELS:
+            log(f"!! Unknown model '{sel}'. Valid: auto, " + ", ".join(VALID_MODELS))
+            raise SystemExit(2)
+        with open(MODEL_FILE, "w", encoding="utf-8") as f:
+            f.write(sel)
+    else:                                        # no flag → reuse the remembered choice
+        sel = "auto"
+        try:
+            with open(MODEL_FILE, "r", encoding="utf-8") as f:
+                saved = f.read().strip().lower()
+            if saved == "auto" or saved in VALID_MODELS:
+                sel = saved
+        except OSError:
+            pass
+    return sel, (_pick_model() if sel == "auto" else sel)
+
+
+def ensure_model(env, model):
     marker = os.path.join(APP_DIR, f".model-{model}-ok")
     if os.path.isfile(marker):
         return model
@@ -234,7 +289,7 @@ def ensure_model(env):
     return model
 
 
-def worker_env():
+def worker_env(model):
     env = dict(os.environ)
     env["PATH"] = FFMPEG_DIR + os.pathsep + env.get("PATH", "")
     env["HF_HOME"] = HF_CACHE
@@ -242,25 +297,29 @@ def worker_env():
     env["MRMD_LITE"] = "1"
     env["PORT"] = PORT
     env["MRMD_ALLOWED_ORIGIN"] = HOSTED_URL
+    env["NOTEMAX_WHISPER_MODEL"] = model    # load exactly the model we provisioned
     return env
 
 
 def main():
     os.makedirs(APP_DIR, exist_ok=True)
+    sel, model = resolve_model_selection()       # CLI --model / saved choice / auto
     log("=" * 60)
     log(" Monkey Read Monkey Do — local transcription worker")
     log("=" * 60)
     log(f" Setup folder: {APP_DIR}")
+    log(f" Whisper model: {model}" + ("  (auto-picked for this GPU)" if sel == "auto"
+                                      else "  (forced via --model)"))
     log("")
 
-    env = worker_env()
+    env = worker_env(model)
     try:
         ensure_uv()
         ensure_venv()
         ensure_deps()
         ensure_ffmpeg()
         runner = install_app_files()
-        model = ensure_model(env)
+        ensure_model(env, model)
     except subprocess.CalledProcessError as e:
         log("")
         log(f"!! Setup step failed (exit {e.returncode}). Most likely causes:")
@@ -277,6 +336,7 @@ def main():
     log("")
     log(f" Ready. Whisper model: {model}.  Open {HOSTED_URL} and transcribe —")
     log(" audio stays on this machine. Keep this window open while you work.")
+    log(" Change the model:  ReadMonkeyDoWorker.exe --model <name>   (--help for options)")
     log("-" * 60)
 
     # Open the site once, then run the worker in the foreground (closing this window

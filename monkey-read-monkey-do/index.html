@@ -423,16 +423,42 @@ async function workerUp(){
   catch(e){ return false; }
 }
 
-async function transcribeOnWorker(file){
+async function transcribeOnWorker(file, onProgress){
   const fd=new FormData();
   fd.append("file", file);
   fd.append("diarize", diarizeOn ? "1" : "0");
   const headers={};
   if(cfg && cfg.worker_token) headers["X-Worker-Token"]=cfg.worker_token;
   const r=await fetch(workerBase()+"/transcribe",{method:"POST", headers, body:fd});
-  let j; try{ j=await r.json(); }catch(e){ throw new Error("Worker returned a non-JSON response ("+r.status+")"); }
-  if(!r.ok || j.error) throw new Error(j.error || ("Worker error "+r.status));
-  return j.transcript||"";
+  if(!r.body){                                   // older worker (no streaming) — read JSON
+    let j; try{ j=await r.json(); }catch(e){ throw new Error("Worker returned a non-JSON response ("+r.status+")"); }
+    if(!r.ok || j.error) throw new Error(j.error || ("Worker error "+r.status));
+    return j.transcript||"";
+  }
+  // Newline-delimited JSON stream: progress events as it works, then result/error.
+  const reader=r.body.getReader(), dec=new TextDecoder();
+  let buf="", transcript="";
+  for(;;){
+    const {done,value}=await reader.read();
+    if(value) buf+=dec.decode(value,{stream:true});
+    let nl;
+    while((nl=buf.indexOf("\n"))>=0){
+      const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+      if(!line) continue;
+      let m; try{ m=JSON.parse(line); }catch(e){ continue; }
+      if(m.type==="progress"){ if(onProgress) onProgress(m); }
+      else if(m.type==="result"){ transcript=m.transcript||""; }
+      else if(m.type==="error"){ throw new Error(m.error||("Worker error "+r.status)); }
+    }
+    if(done) break;
+  }
+  // Tolerate an older, non-streaming worker: a single JSON object with no trailing newline.
+  if(!transcript){
+    const tail=buf.trim(); let m=null;
+    try{ m=JSON.parse(tail); }catch(e){}
+    if(m){ if(m.error) throw new Error(m.error); transcript=m.transcript||""; }
+  }
+  return transcript;
 }
 
 async function runHostedAudio(pr){
@@ -450,9 +476,26 @@ async function runHostedAudio(pr){
   const imgs=files.filter(f=>kind(f.name)==="image");
   const parts=[];
   for(let i=0;i<media.length;i++){
-    pr.innerHTML=`<span class="spin"></span>Transcribing ${esc(media[i].name)} on your machine… `+
-      `(${i+1}/${media.length}) — audio stays on your worker`;
-    const tx=await transcribeOnWorker(media[i]);
+    const label = media.length>1 ? `${esc(media[i].name)} (${i+1}/${media.length})` : esc(media[i].name);
+    pr.innerHTML =
+      `<div style="margin-bottom:8px">Transcribing <strong>${label}</strong> on your machine — audio never leaves your computer.</div>`+
+      `<div style="height:14px;border:1px solid var(--accent);border-radius:7px;overflow:hidden;background:rgba(0,0,0,.25)">`+
+        `<div id="pfill" style="height:100%;width:8%;background:var(--accent);transition:width .3s ease-out"></div>`+
+      `</div>`+
+      `<div id="ppct" style="margin-top:6px;font-size:13px;color:var(--muted)">starting…</div>`;
+    const fill=$("#pfill"), pctEl=$("#ppct");
+    const tx=await transcribeOnWorker(media[i], (m)=>{
+      if(m.stage==="diarize"){
+        fill.style.width="100%";
+        pctEl.textContent = m.pct==null ? "Identifying speakers…" : "Identifying speakers — done";
+      } else if(m.pct==null){
+        fill.style.width="8%";
+        pctEl.textContent = "Loading the Whisper model…";
+      } else {
+        fill.style.width = m.pct+"%";
+        pctEl.textContent = "Transcribing — "+m.pct+"%";
+      }
+    });
     parts.push(media.length>1 ? `=== ${media[i].name} ===\n\n${tx}` : tx);
   }
   const transcript=parts.join("\n\n").trim();
