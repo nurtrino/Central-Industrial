@@ -364,27 +364,84 @@ function refresh(){
 }
 
 // ---- run ----
-goBtn.onclick=async()=>{
-  goBtn.disabled=true;
+function resetRunUI(){
   $("#results").style.display="none";
   $("#stoppedBanner").style.display="none"; $("#changelog").style.display="none";
   $("#stages").classList.remove("show"); $("#stages").innerHTML="";
-  const pr=$("#progress"); pr.style.display="block";
-  pr.innerHTML=`<span class="spin"></span>Uploading…`;
-  const fd=new FormData(); fd.append("mode",mode);
+  const pr=$("#progress"); pr.style.display="block"; return pr;
+}
+
+// Start a server-side job on THIS service (transcription-from-text/notes pipeline).
+async function startServerJob(fd, pr){
+  const r=await fetch("/api/process",{method:"POST",body:fd});
+  const j=await r.json();
+  if(j.error){ pr.innerHTML=`<span class="err">Error: ${esc(j.error)}</span>`; goBtn.disabled=false; return; }
+  jobId=j.job_id; jobPaused=false;
+  $("#pauseBtn").textContent="⏸ Pause"; $("#pauseBtn").disabled=false;
+  $("#stopBtn").textContent="⏹ Stop"; $("#stopBtn").disabled=false;
+  showCtl(true);
+  poll=setInterval(checkStatus,1200); checkStatus();
+}
+
+// Hosted mode: the browser sends audio straight to YOUR local GPU worker (never to
+// the cloud), gets the transcript back, then hands it to the notes pipeline here.
+async function transcribeOnWorker(file){
+  const fd=new FormData();
+  fd.append("file", file);
   fd.append("diarize", diarizeOn ? "1" : "0");
-  files.forEach(f=>fd.append("files",f));
+  const base=(cfg.worker_url||"").replace(/\/+$/,"");
+  const r=await fetch(base+"/transcribe",{method:"POST",
+    headers:{"X-Worker-Token": cfg.worker_token||""}, body:fd});
+  let j; try{ j=await r.json(); }catch(e){ throw new Error("Worker returned a non-JSON response ("+r.status+")"); }
+  if(!r.ok || j.error) throw new Error(j.error || ("Worker error "+r.status));
+  return j.transcript||"";
+}
+
+async function runHostedAudio(pr){
+  if(!cfg.worker_url || !cfg.worker_token){
+    pr.innerHTML=`<span class="err">No transcription worker is configured. Set `+
+      `MRMD_WORKER_URL and MRMD_WORKER_TOKEN on this service, and run the GPU worker `+
+      `(see mrmd-worker/README).</span>`; goBtn.disabled=false; return;
+  }
+  const media=files.filter(f=>["audio","video"].includes(kind(f.name)));
+  const imgs=files.filter(f=>kind(f.name)==="image");
+  const parts=[];
+  for(let i=0;i<media.length;i++){
+    pr.innerHTML=`<span class="spin"></span>Transcribing ${esc(media[i].name)} on your machine… `+
+      `(${i+1}/${media.length}) — audio stays on your worker`;
+    const tx=await transcribeOnWorker(media[i]);
+    parts.push(media.length>1 ? `=== ${media[i].name} ===\n\n${tx}` : tx);
+  }
+  const transcript=parts.join("\n\n").trim();
+  if(!transcript){ pr.innerHTML=`<span class="err">The worker returned an empty transcript.</span>`; goBtn.disabled=false; return; }
+  if(mode==="1"){                       // transcript only — render client-side
+    pr.innerHTML="Transcription complete (on your machine).";
+    show({transcript:transcript, notes_md:null, images:{}}, false);
+    goBtn.disabled=false; return;
+  }
+  // mode 2: feed the transcript to the notes pipeline as a text job (mode 3)
+  pr.innerHTML=`<span class="spin"></span>Writing notes…`;
+  const fd=new FormData(); fd.append("mode","3");
+  fd.append("files", new Blob([transcript],{type:"text/plain"}), "transcript.txt");
+  imgs.forEach(f=>fd.append("files",f));
+  await startServerJob(fd, pr);
+}
+
+goBtn.onclick=async()=>{
+  goBtn.disabled=true;
+  const pr=resetRunUI();
+  pr.innerHTML=`<span class="spin"></span>Starting…`;
   try{
-    const r=await fetch("/api/process",{method:"POST",body:fd});
-    const j=await r.json();
-    if(j.error){pr.innerHTML=`<span class="err">Error: ${j.error}</span>`;goBtn.disabled=false;return;}
-    jobId=j.job_id;
-    jobPaused=false;
-    $("#pauseBtn").textContent="⏸ Pause"; $("#pauseBtn").disabled=false;
-    $("#stopBtn").textContent="⏹ Stop"; $("#stopBtn").disabled=false;
-    showCtl(true);
-    poll=setInterval(checkStatus,1200); checkStatus();
-  }catch(e){pr.innerHTML=`<span class="err">${e}</span>`;goBtn.disabled=false;}
+    if(cfg && cfg.hosted && (mode==="1"||mode==="2")){
+      await runHostedAudio(pr);         // audio → your worker → transcript → notes
+    } else {
+      const fd=new FormData(); fd.append("mode",mode);
+      fd.append("diarize", diarizeOn ? "1" : "0");
+      files.forEach(f=>fd.append("files",f));
+      pr.innerHTML=`<span class="spin"></span>Uploading…`;
+      await startServerJob(fd, pr);
+    }
+  }catch(e){ pr.innerHTML=`<span class="err">${esc(String((e&&e.message)||e))}</span>`; goBtn.disabled=false; }
 };
 
 function renderStages(stages){
