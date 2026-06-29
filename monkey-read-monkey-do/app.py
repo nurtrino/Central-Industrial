@@ -9,6 +9,7 @@ Modes:
   3  summary from transcript   (text file -> notes + .docx)
 """
 
+import hmac
 import os
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory, session
 
 import transcribe as T
 import notes as N
@@ -49,11 +50,47 @@ HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 WHISPER_MODEL = os.environ.get("NOTEMAX_WHISPER_MODEL", "large-v3")
 
+# --- hosting / access gate -------------------------------------------------
+# HOSTED=1 turns this folder into the WEB interface (Render): it does NOT transcribe
+# (no GPU) — the browser sends audio to the local GPU worker and posts the resulting
+# transcript here for notes. A C64-style access-code gate protects the page, and the
+# worker URL/token are only handed to authenticated sessions (so they aren't exposed
+# to anyone who finds the URL). Unset = original all-local behavior, unchanged.
+HOSTED = os.environ.get("MRMD_HOSTED", "").strip().lower() in ("1", "true", "yes", "on")
+UI_PASSWORD = os.environ.get("MRMD_UI_PASSWORD", "")
+WORKER_URL = os.environ.get("MRMD_WORKER_URL", "").strip().rstrip("/")
+WORKER_TOKEN = os.environ.get("MRMD_WORKER_TOKEN", "")
+HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip()
+PORT = int(os.environ.get("PORT", "5005"))
+HOST = os.environ.get("HOST") or ("0.0.0.0" if HOSTED else "127.0.0.1")
+
 TEXT_EXTS = {".txt", ".md", ".vtt", ".srt"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 app = Flask(__name__, static_folder=None)
+# Signed-cookie sessions for the access gate. On Render set SECRET_KEY (a fixed value
+# so sessions survive restarts); locally a random per-process key is fine.
+app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(32)
 JOBS = {}   # job_id -> dict(status, progress[], result, error, control, ...)
+
+# Gate is active only when hosted AND a password is configured.
+GATE_ON = HOSTED and bool(UI_PASSWORD)
+
+
+def authed() -> bool:
+    """Access allowed if the gate is off, or this session has entered the code."""
+    return (not GATE_ON) or (session.get("authed") is True)
+
+
+@app.before_request
+def _access_gate():
+    """In hosted mode, block the API behind the C64 access-code gate. /api/login is
+    open; the page itself ('/') serves the login terminal when unauthenticated."""
+    if not GATE_ON or request.method == "OPTIONS":
+        return
+    p = request.path
+    if p.startswith("/api/") and p != "/api/login" and not authed():
+        return jsonify({"error": "unauthorized — enter the access code"}), 401
 
 
 class StopRequested(Exception):
@@ -368,7 +405,29 @@ def run_job(job_id, mode, media_files, text_files, image_files, job_dir, diarize
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
+    if not authed():
+        return send_from_directory(BASE, "login.html")
     return send_from_directory(BASE, "index.html")
+
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    """Validate the C64 access code; on success, mark the session authenticated."""
+    if not GATE_ON:
+        return jsonify({"ok": True})
+    pw = (request.get_json(silent=True) or {}).get("password") \
+        or request.form.get("password") or ""
+    if UI_PASSWORD and hmac.compare_digest(str(pw), UI_PASSWORD):
+        session["authed"] = True
+        session.permanent = True
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "incorrect access code"}), 401
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
 
 
 @app.route("/mascot")
@@ -388,6 +447,8 @@ def restart():
     Uses subprocess (list args) rather than os.execv because execv mangles paths
     containing spaces on Windows (e.g. the 'Monkey Read Monkey Do' folder).
     """
+    if HOSTED:
+        return jsonify({"error": "restart is disabled on the hosted server"}), 403
     import subprocess
     script = os.path.abspath(__file__)
     logpath = os.path.join(BASE, "server.log")
@@ -409,11 +470,18 @@ def restart():
 
 @app.route("/api/config")
 def config():
+    # This route is behind the access gate in hosted mode, so worker_url/worker_token
+    # are only ever returned to an authenticated session.
     return jsonify({
         "diarization": bool(HF_TOKEN),
         "notes": bool(ANTHROPIC_API_KEY),
         "whisper_model": WHISPER_MODEL,
         "offline": OFFLINE,
+        "hosted": HOSTED,
+        "hub_url": HUB_URL,
+        "worker_url": WORKER_URL if HOSTED else "",
+        "worker_token": WORKER_TOKEN if HOSTED else "",
+        "worker_configured": bool(WORKER_URL and WORKER_TOKEN),
     })
 
 
@@ -450,6 +518,13 @@ def process():
             f.save(dest)
             image_files.append(dest)
         # silently ignore unknown types
+
+    # Hosted server never transcribes — audio is processed on the local worker and
+    # only the transcript is posted here (as mode 3). Reject any media defensively.
+    if HOSTED and media_files:
+        return jsonify({"error": "This hosted server does not transcribe audio. "
+                        "Audio is transcribed on your local worker; send only the "
+                        "transcript here."}), 400
 
     # Validate per mode.
     if mode in ("1", "2") and not media_files:
@@ -582,6 +657,10 @@ def finish(job_id):
     if not files:
         return jsonify({"saved": None, "files": []})
 
+    if HOSTED:
+        # No user Desktop in the cloud — the UI offers a direct download instead.
+        return jsonify({"saved": None, "hosted": True, "files": files})
+
     outroot = os.path.join(desktop_dir(), "Monkey Read Monkey Do Output")
     os.makedirs(outroot, exist_ok=True)
     dest = _unique_dir(os.path.join(outroot, job.get("save_name") or os.path.basename(src)))
@@ -616,8 +695,12 @@ def image(job_id, idx):
 
 
 if __name__ == "__main__":
-    print("Monkey Read Monkey Do running at http://127.0.0.1:5005")
+    print(f"Monkey Read Monkey Do running at http://{HOST}:{PORT}")
+    print(f"  mode:        {'HOSTED (web UI, no local transcription)' if HOSTED else 'LOCAL (full pipeline)'}")
+    if HOSTED:
+        print(f"  access gate: {'ON' if GATE_ON else 'OFF (no MRMD_UI_PASSWORD set!)'}")
+        print(f"  worker:      {WORKER_URL or '(MRMD_WORKER_URL not set)'}")
     print(f"  diarization: {'ON' if HF_TOKEN else 'OFF (no HF_TOKEN)'}")
     print(f"  notes LLM:   {'ON' if ANTHROPIC_API_KEY else 'OFF (no ANTHROPIC_API_KEY)'}")
     print(f"  offline mode: {'ON (audio stage fully offline)' if OFFLINE else 'off'}")
-    app.run(host="127.0.0.1", port=5005, threaded=True)
+    app.run(host=HOST, port=PORT, threaded=True)

@@ -40,6 +40,36 @@ services:
           name: central-industrial-hub
           property: host
 
+  # ── Monkey Read Monkey Do — hosted web UI (Python; transcription on local worker) ─
+  - type: web
+    name: monkey-read-monkey-do
+    runtime: python
+    rootDir: monkey-read-monkey-do
+    plan: starter
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 300 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /api/config
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: MRMD_HOSTED
+        value: "1"
+      - key: SECRET_KEY
+        generateValue: true        # signs the access-gate session cookie
+      - key: MRMD_UI_PASSWORD
+        sync: false                # the C64 access code (secret)
+      - key: ANTHROPIC_API_KEY
+        sync: false                # Claude API for the notes step
+      - key: MRMD_WORKER_URL
+        sync: false                # your local worker's HTTPS tunnel URL
+      - key: MRMD_WORKER_TOKEN
+        sync: false                # MUST match the worker's MRMD_WORKER_TOKEN
+      - key: HUB_URL
+        fromService:
+          type: web
+          name: central-industrial-hub
+          property: host
+
   # ── Central Industrial hub — C64 landing page (stdlib Python, no deps) ───────
   - type: web
     name: central-industrial-hub
@@ -52,12 +82,14 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.6"
-      # Auto-inject Deep Research's deployed hostname (the hub prepends https://).
+      # Auto-inject each tool's deployed hostname (the hub prepends https://).
       - key: HUB_URL_DEEP_RESEARCH
         fromService:
           type: web
           name: deep-research
           property: host
-      # Monkey Read Monkey Do is local-only → set this to your local/Tailscale URL.
       - key: HUB_URL_MONKEYREADMONKEYDO
-        sync: false
+        fromService:
+          type: web
+          name: monkey-read-monkey-do
+          property: host

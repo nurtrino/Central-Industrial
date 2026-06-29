@@ -1,0 +1,13 @@
+# Monkey Read Monkey Do — HOSTED web UI dependencies (Render).
+# No GPU / torch / whisper / pyannote here: transcription runs on the local GPU
+# worker (see ../mrmd-worker). This service only gates access, calls the worker for
+# the transcript, writes notes via Claude, and renders the .docx.
+#
+# For the full ALL-LOCAL pipeline on a GPU box instead, use setup_env.sh (it installs
+# the heavy CUDA stack); this file is just the lightweight hosted profile.
+flask>=3.0.0
+anthropic>=0.25.0
+python-docx>=1.1.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+gunicorn>=21.2.0
