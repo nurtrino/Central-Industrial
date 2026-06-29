@@ -410,6 +410,13 @@ def index():
     return send_from_directory(BASE, "index.html")
 
 
+@app.route("/healthz")
+def healthz():
+    # Always-open liveness probe (NOT under /api/, so the access gate never blocks it).
+    # Used as the Render health check — /api/config returns 401 once the gate is on.
+    return jsonify({"ok": True, "hosted": HOSTED})
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
     """Validate the C64 access code; on success, mark the session authenticated."""
