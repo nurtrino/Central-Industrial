@@ -70,9 +70,21 @@ def _headers(resp):
 
 
 # ── UI (served from disk on every request) ───────────────────────────────────
+# The "← Special Projects" back-link points at the hub. Locally that's the hub on
+# :5050; on Render set HUB_URL to the hub service's public URL (the bare index has
+# the __HUB_URL__ placeholder substituted at serve time).
+_HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip()
+# Render's `fromService property: host` injects a bare hostname — add a scheme so
+# the back-link is absolute (a scheme-less href would be treated as a relative path).
+if _HUB_URL and not re.match(r"^https?://", _HUB_URL, re.I):
+    _HUB_URL = "https://" + _HUB_URL
+
+
 @app.route("/")
 def index():
-    return send_from_directory(_ROOT, "index.html")
+    with open(os.path.join(_ROOT, "index.html"), encoding="utf-8") as fh:
+        html = fh.read().replace("__HUB_URL__", _HUB_URL)
+    return app.response_class(html, mimetype="text/html")
 
 
 @app.route("/vendor/<path:fn>")

@@ -33,6 +33,12 @@ services:
         sync: false
       - key: FIRECRAWL_API_KEY
         sync: false
+      # "← Special Projects" back-link → the hub's public URL.
+      - key: HUB_URL
+        fromService:
+          type: web
+          name: central-industrial-hub
+          property: host
 
   # ── Central Industrial hub — C64 landing page (stdlib Python, no deps) ───────
   - type: web
