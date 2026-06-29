@@ -57,6 +57,9 @@
   .st-local{color:var(--cyan);}
   .st-wait{color:var(--light);}
   .hint{color:var(--light); opacity:.55;}
+  input#accode{background:transparent;border:none;outline:none;color:var(--light);
+    font:inherit;text-transform:uppercase;text-shadow:inherit;caret-color:transparent;
+    width:20ch;padding:0;}
   /* blinking C64 block cursor */
   .cursor{
     display:inline-block; width:1ch; height:1.12em; background:var(--light);
@@ -108,6 +111,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
     return ' ' + new Array(n + 1).join('.') + ' ';
   }
   var statusEls = {};   // id -> status <a>
+  var latestById = {};  // id -> latest tool object (carries the fresh SSO token)
 
   function renderMenu(tools){
     statusEls = {};
@@ -135,6 +139,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
 
   function paint(tools){
     tools.forEach(function(t){
+      latestById[t.id] = t;
       var s = statusEls[t.id]; if(!s) return;
       if(t.local){ s.className='status st-local';  s.textContent='[ LOCAL   ]'; }
       else if(t.up){ s.className='status st-online'; s.textContent='[ ONLINE  ]'; }
@@ -148,10 +153,50 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   }
 
   function openTool(t){
-    // On Render each tool is its own always-on service — just navigate to it.
-    // (Local-only tools link to their configured URL; reachable when you're on
-    // that machine / network.)
+    // The auth cookie is scoped to the apex domain, so it travels to every tool's
+    // subdomain automatically — just navigate.
     if(t.url){ window.location.href = t.url; }
+  }
+
+  // ---- access gate + menu ----------------------------------------------
+  function enter(){
+    fetch('/api/status',{cache:'no-store'}).then(function(r){
+      if(r.status === 401){ showAccessPrompt(); return null; }
+      return r.json();
+    }).then(function(d){
+      if(!d) return;
+      renderMenu(d.tools||[]);
+      setTimeout(poll, 700);
+      pollTimer = setInterval(poll, 1500);
+    }).catch(function(){ line('?DEVICE NOT PRESENT  ERROR', 'st-offline'); });
+  }
+
+  function showAccessPrompt(){
+    out.appendChild(document.createTextNode('\n'));
+    line('PROTECTED PROGRAM - ENTER ACCESS CODE:');
+    out.appendChild(document.createTextNode('\n'));
+    var wrap = document.createElement('span');
+    wrap.appendChild(document.createTextNode('> '));
+    var inp = document.createElement('input');
+    inp.id = 'accode'; inp.type = 'password'; inp.autocomplete = 'off'; inp.spellcheck = false;
+    wrap.appendChild(inp); wrap.appendChild(makeCursor());
+    out.appendChild(wrap); out.appendChild(document.createTextNode('\n'));
+    var msg = document.createElement('span'); out.appendChild(msg);
+    inp.focus();
+    document.addEventListener('click', function(){ inp.focus(); });
+    inp.addEventListener('keydown', function(ev){
+      if(ev.key !== 'Enter') return; ev.preventDefault();
+      var code = inp.value;
+      fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({code: code})})
+        .then(function(r){ return r.json().then(function(d){ return {ok: r.ok && d && d.ok}; }); })
+        .then(function(res){
+          if(res.ok){ wrap.remove(); msg.remove(); enter(); }
+          else { msg.className = 'st-offline'; msg.textContent = '?ACCESS DENIED  ERROR';
+                 inp.value = ''; inp.focus(); }
+        }).catch(function(){ msg.className = 'st-offline';
+                 msg.textContent = '?DEVICE NOT PRESENT  ERROR'; });
+    });
   }
 
   // ---- audio: play the short sample ONCE per tab-session ---------------
@@ -202,12 +247,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
         var d = seq[i][1]; i++;
         setTimeout(step, d);
       } else {
-        // fetch tools and draw the live menu
-        fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();})
-          .then(function(d){ renderMenu(d.tools||[]); })
-          .catch(function(){ line('?DEVICE NOT PRESENT  ERROR', 'st-offline'); });
-        setTimeout(poll, 700);            // quick re-check in case a tool just bound its port
-        pollTimer = setInterval(poll, 1500);
+        enter();   // check auth → show the access-code prompt or draw the live menu
       }
     })();
   }

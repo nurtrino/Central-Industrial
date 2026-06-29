@@ -14,6 +14,8 @@ Start: python dr_server.py   (or Deep Research.vbs / the hub's "launch" on deman
 """
 
 import base64
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -21,9 +23,10 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import traceback
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
@@ -54,6 +57,13 @@ def _load_dotenv():
 
 _load_dotenv()
 
+# Access gate: trust the shared, apex-scoped auth cookie the hub mints at login.
+# No valid cookie → page requests redirect to the home page; API requests get 401.
+AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
+HOME_URL = (os.environ.get("HOME_URL", "").strip()
+            or os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip())
+GATE_ON = bool(AUTH_SECRET)
+
 app = Flask(__name__)
 
 
@@ -69,13 +79,43 @@ def _headers(resp):
     return resp
 
 
+def _authed():
+    """Verify the shared ci_auth cookie (HMAC with AUTH_SECRET, scheme shared with the hub)."""
+    tok = request.cookies.get("ci_auth", "")
+    try:
+        exp_s, sig = tok.split(".", 1)
+        exp = int(exp_s)
+    except (ValueError, AttributeError):
+        return False
+    if exp < int(time.time()):
+        return False
+    good = hmac.new(AUTH_SECRET.encode(), f"auth:{exp}".encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, good)
+
+
+@app.before_request
+def _access_gate():
+    # Login happens at the hub (apex domain). With no valid shared cookie, send page
+    # requests to the home page and reject API calls. /api/health stays open (Render).
+    if not GATE_ON or request.method == "OPTIONS":
+        return
+    p = request.path
+    if p == "/api/health":
+        return
+    if _authed():
+        return
+    if p.startswith("/api/"):
+        return jsonify({"error": "unauthorized"}), 401
+    return redirect(HOME_URL, code=302)
+
+
 # ── UI (served from disk on every request) ───────────────────────────────────
 # The "← Special Projects" back-link points at the hub. Locally that's the hub on
 # :5050; on Render set HUB_URL to the hub service's public URL (the bare index has
 # the __HUB_URL__ placeholder substituted at serve time).
-_HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip()
-# Render's `fromService property: host` injects a bare hostname — add a scheme so
-# the back-link is absolute (a scheme-less href would be treated as a relative path).
+# Back-link target: prefer HUB_URL, else the shared HOME_URL (the apex home page).
+_HUB_URL = os.environ.get("HUB_URL", "").strip() or HOME_URL
+# Add a scheme if missing (a scheme-less href would be treated as a relative path).
 if _HUB_URL and not re.match(r"^https?://", _HUB_URL, re.I):
     _HUB_URL = "https://" + _HUB_URL
 

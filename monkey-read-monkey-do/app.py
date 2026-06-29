@@ -9,6 +9,7 @@ Modes:
   3  summary from transcript   (text file -> notes + .docx)
 """
 
+import hashlib
 import hmac
 import os
 import shutil
@@ -21,7 +22,7 @@ import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_file, send_from_directory, session
+from flask import Flask, request, jsonify, redirect, send_file, send_from_directory, session
 
 import transcribe as T
 import notes as N
@@ -53,14 +54,16 @@ WHISPER_MODEL = os.environ.get("NOTEMAX_WHISPER_MODEL", "large-v3")
 # --- hosting / access gate -------------------------------------------------
 # HOSTED=1 turns this folder into the WEB interface (Render): it does NOT transcribe
 # (no GPU) — the browser sends audio to the local GPU worker and posts the resulting
-# transcript here for notes. A C64-style access-code gate protects the page, and the
-# worker URL/token are only handed to authenticated sessions (so they aren't exposed
-# to anyone who finds the URL). Unset = original all-local behavior, unchanged.
+# transcript here for notes. Login happens at the hub (the apex domain); this service
+# trusts the shared, apex-scoped auth cookie (HMAC with AUTH_SECRET). No valid cookie
+# → the visitor is redirected to the home page. Unset = original all-local behavior.
 HOSTED = os.environ.get("MRMD_HOSTED", "").strip().lower() in ("1", "true", "yes", "on")
-UI_PASSWORD = os.environ.get("MRMD_UI_PASSWORD", "")
+AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
+HOME_URL = (os.environ.get("HOME_URL", "").strip()
+            or os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip())
+HUB_URL = HOME_URL
 WORKER_URL = os.environ.get("MRMD_WORKER_URL", "").strip().rstrip("/")
 WORKER_TOKEN = os.environ.get("MRMD_WORKER_TOKEN", "")
-HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip()
 PORT = int(os.environ.get("PORT", "5005"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if HOSTED else "127.0.0.1")
 
@@ -68,29 +71,42 @@ TEXT_EXTS = {".txt", ".md", ".vtt", ".srt"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 app = Flask(__name__, static_folder=None)
-# Signed-cookie sessions for the access gate. On Render set SECRET_KEY (a fixed value
-# so sessions survive restarts); locally a random per-process key is fine.
-app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(32)
 JOBS = {}   # job_id -> dict(status, progress[], result, error, control, ...)
 
-# Gate is active only when hosted AND a password is configured.
-GATE_ON = HOSTED and bool(UI_PASSWORD)
+# Access gate: trust the shared, apex-scoped auth cookie the hub mints at login.
+# No valid cookie → page requests redirect to the home page; API requests get 401.
+GATE_ON = HOSTED and bool(AUTH_SECRET)
+_GATE_EXEMPT = ("/healthz",)            # always-open (plus the /fonts/ prefix)
 
 
 def authed() -> bool:
-    """Access allowed if the gate is off, or this session has entered the code."""
-    return (not GATE_ON) or (session.get("authed") is True)
+    """Verify the shared ci_auth cookie (HMAC with AUTH_SECRET, scheme shared with the hub)."""
+    if not GATE_ON:
+        return True
+    tok = request.cookies.get("ci_auth", "")
+    try:
+        exp_s, sig = tok.split(".", 1)
+        exp = int(exp_s)
+    except (ValueError, AttributeError):
+        return False
+    if exp < int(time.time()):
+        return False
+    good = hmac.new(AUTH_SECRET.encode(), f"auth:{exp}".encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, good)
 
 
 @app.before_request
 def _access_gate():
-    """In hosted mode, block the API behind the C64 access-code gate. /api/login is
-    open; the page itself ('/') serves the login terminal when unauthenticated."""
     if not GATE_ON or request.method == "OPTIONS":
         return
     p = request.path
-    if p.startswith("/api/") and p != "/api/login" and not authed():
-        return jsonify({"error": "unauthorized — enter the access code"}), 401
+    if p in _GATE_EXEMPT or p.startswith("/fonts/"):
+        return
+    if authed():
+        return
+    if p.startswith("/api/"):
+        return jsonify({"error": "unauthorized"}), 401
+    return redirect(HOME_URL, code=302)
 
 
 class StopRequested(Exception):
@@ -405,42 +421,20 @@ def run_job(job_id, mode, media_files, text_files, image_files, job_dir, diarize
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
-    if not authed():
-        return send_from_directory(BASE, "login.html")
+    # The access gate (before_request) already redirected unauthenticated visitors
+    # to the home page, so by here the request is authenticated (or the gate is off).
     return send_from_directory(BASE, "index.html")
 
 
 @app.route("/healthz")
 def healthz():
-    # Always-open liveness probe (NOT under /api/, so the access gate never blocks it).
-    # Used as the Render health check — /api/config returns 401 once the gate is on.
+    # Always-open liveness probe (exempt from the gate) — the Render health check.
     return jsonify({"ok": True, "hosted": HOSTED})
-
-
-@app.route("/api/login", methods=["POST"])
-def login():
-    """Validate the C64 access code; on success, mark the session authenticated."""
-    if not GATE_ON:
-        return jsonify({"ok": True})
-    pw = (request.get_json(silent=True) or {}).get("password") \
-        or request.form.get("password") or ""
-    if UI_PASSWORD and hmac.compare_digest(str(pw), UI_PASSWORD):
-        session["authed"] = True
-        session.permanent = True
-        return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "incorrect access code"}), 401
-
-
-@app.route("/api/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return jsonify({"ok": True})
 
 
 @app.route("/fonts/<path:fn>")
 def fonts(fn):
-    # Static fonts for the C64 access-code page (served pre-auth — the gate only
-    # guards /api/*). Safe filename only.
+    # Static fonts (exempt from the gate). Safe filename only.
     return send_from_directory(os.path.join(BASE, "fonts"), os.path.basename(fn))
 
 
@@ -712,7 +706,8 @@ if __name__ == "__main__":
     print(f"Monkey Read Monkey Do running at http://{HOST}:{PORT}")
     print(f"  mode:        {'HOSTED (web UI, no local transcription)' if HOSTED else 'LOCAL (full pipeline)'}")
     if HOSTED:
-        print(f"  access gate: {'ON' if GATE_ON else 'OFF (no MRMD_UI_PASSWORD set!)'}")
+        print(f"  access gate: {'ON (shared cookie)' if GATE_ON else 'OFF (no AUTH_SECRET set!)'}")
+        print(f"  home (login):{HOME_URL}")
         print(f"  worker:      {WORKER_URL or '(MRMD_WORKER_URL not set)'}")
     print(f"  diarization: {'ON' if HF_TOKEN else 'OFF (no HF_TOKEN)'}")
     print(f"  notes LLM:   {'ON' if ANTHROPIC_API_KEY else 'OFF (no ANTHROPIC_API_KEY)'}")
