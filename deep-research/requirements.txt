@@ -1,0 +1,46 @@
+# Deep Research (standalone) — Python deps. CPU + network + Chrome + Claude API only.
+# No torch / whisper / audio / market-data stack (those belonged to other tools in the
+# old monolith). Install into the local venv:  .venv\Scripts\pip install -r requirements.txt
+
+# Local web server (serves the UI + the DRT API on 127.0.0.1:5006)
+flask>=3.0.0
+
+# Claude API (planning, search agent, per-page extract, synthesis)
+anthropic>=0.25.0
+
+# Browser-driven research — drives REAL headed Chrome (channel="chrome").
+# After install, the engine uses your installed Google Chrome; no chromium download
+# is needed. If a driver install IS required, point it at a D:\ path to avoid the
+# sandbox-virtualized %LOCALAPPDATA% cache:  set PLAYWRIGHT_BROWSERS_PATH=D:\...
+playwright>=1.60.0
+
+# Encrypted credential vault (config/drt_credentials.enc via config/.drt_vault_key)
+cryptography>=42.0.0
+
+# Page fetch / cleaning / markdown conversion (browser-stage helpers + Odysseus)
+httpx>=0.27.0
+beautifulsoup4>=4.12.0
+markitdown>=0.1.0
+requests>=2.31.0
+ddgs>=6.0               # DuckDuckGo search for the Odysseus sub-tool (headless). Falls
+                        # back to httpx HTML scraping if absent; page-fetch uses system curl.
+
+# Neural search (Exa) — optional; only active when DRT_EXA=1 and EXA_API_KEY is set
+exa-py>=2.14.0,<3
+
+# Supporting-document ingestion (drag-in files → research context) and the Word export
+pdfplumber>=0.10.0      # PDF text
+python-docx>=1.1.0      # .docx in (read) + the downloadable report (write)
+python-pptx>=1.0.0      # .pptx text
+mammoth>=1.8.0          # .docx → raw text
+pandas>=2.0.0           # .xlsx / .csv tables
+openpyxl>=3.1.0         # .xlsx engine for pandas
+Pillow>=10.0.0          # image normalization for embedded report images
+
+# Self-restart helper (force-frees the port on in-app "Restart Server")
+psutil>=5.9.0
+
+# Production WSGI server for the Render/Docker deployment. MUST run single-worker
+# (the async job registry lives in-process); the Dockerfile uses many threads.
+# Not used for local Windows runs (gunicorn is POSIX-only) — there, use python dr_server.py.
+gunicorn>=21.2.0

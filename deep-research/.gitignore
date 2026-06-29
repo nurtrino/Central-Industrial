@@ -1,0 +1,12 @@
+# Secrets & machine-specific state — never commit
+.env
+config/.drt_vault_key
+config/drt_credentials.enc
+.drt_chrome_profile/
+.venv/
+
+# Logs & caches
+_srv.log
+_restart.log
+__pycache__/
+*.pyc

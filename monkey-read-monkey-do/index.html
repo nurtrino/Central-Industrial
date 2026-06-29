@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monkey Read Monkey Do</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  /* Special Projects — PHOSPHOR TERMINAL theme (shared with Deep Research).
+     Green-on-black CRT green-screen look. Keep this palette in sync across
+     the two tools so the suite reads as one. */
+  :root{
+    --bg:#04100A; --panel:#08180E; --panel2:#0C2012; --line:#173A22;
+    --txt:#3BE859; --muted:#1f9a3d; --accent:#74FB80; --accent2:#1E7A36;
+    --ok:#3BE859; --warn:#e0b341; --err:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:14.5px/1.55 ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace}
+  header{padding:22px 28px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:14px}
+  header h1{margin:0;font-size:22px;letter-spacing:.3px}
+  header .tag{color:var(--muted);font-size:13px}
+  .badges{margin-left:auto;display:flex;gap:8px;font-size:12px}
+  .badge{padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .badge.on{color:var(--ok);border-color:#1f4d3a}
+  .badge.off{color:var(--warn);border-color:#4d4322}
+  main{max-width:1100px;margin:0 auto;padding:26px}
+  .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+  .mode{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:14px 16px;cursor:pointer;transition:.12s}
+  .mode:hover{border-color:#3a414f}
+  .mode.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .mode .n{font-size:12px;color:var(--accent);font-weight:600}
+  .mode .t{font-weight:600;margin:3px 0}
+  .mode .d{font-size:12.5px;color:var(--muted)}
+  #drop{border:2px dashed #1C5A2C;border-radius:14px;background:var(--panel);
+        padding:46px;text-align:center;transition:.12s;cursor:pointer}
+  #drop.hot{border-color:var(--accent);background:#0C2818}
+  #drop .big{font-size:17px}
+  #drop .sub{color:var(--muted);font-size:13px;margin-top:6px}
+  #filelist{margin:14px 0;display:flex;flex-direction:column;gap:6px}
+  .file{display:flex;align-items:center;gap:10px;background:var(--panel2);
+        border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13.5px}
+  .file .x{margin-left:auto;color:var(--muted);cursor:pointer;border:none;
+           background:none;font-size:16px}
+  .file .k{font-size:11px;color:var(--muted);padding:1px 7px;border:1px solid var(--line);
+           border-radius:99px}
+  .row{display:flex;gap:12px;align-items:center;margin-top:8px}
+  button.go{background:var(--accent2);color:#fff;border:none;border-radius:10px;
+            padding:12px 26px;font-size:15px;font-weight:600;cursor:pointer}
+  button.go:hover{background:var(--accent)}
+  button.go:disabled{opacity:.5;cursor:not-allowed}
+  .hint{color:var(--muted);font-size:12.5px}
+  button.ctl{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+        border-radius:10px;padding:12px 18px;font-size:14px;font-weight:600;cursor:pointer}
+  button.ctl:hover{border-color:var(--accent)}
+  button.ctl.stop:hover{border-color:var(--err);color:var(--err)}
+  button.ctl:disabled{opacity:.5;cursor:default}
+  .banner{margin:14px 0;padding:11px 14px;border-radius:10px;font-size:13.5px;
+        background:#2a2415;border:1px solid #4d4322;color:var(--warn)}
+  #changelog{margin:12px 0;background:var(--panel2);border:1px solid var(--line);
+        border-radius:10px;padding:10px 14px;font-size:13px}
+  #changelog summary{cursor:pointer;color:var(--muted);font-weight:600}
+  #changelog #changelogBody{margin-top:8px;white-space:pre-wrap;color:#7FD98F;
+        font:12.5px/1.6 ui-monospace,Consolas,monospace}
+  #stages{margin-top:22px;display:none;flex-direction:column;gap:12px}
+  #stages.show{display:flex}
+  .stage .stage-head{display:flex;justify-content:space-between;align-items:baseline;
+        font-size:13px;margin-bottom:5px}
+  .stage .stage-head .lbl{color:var(--txt)}
+  .stage.pending .stage-head .lbl,.stage.skipped .stage-head .lbl{color:var(--muted)}
+  .stage .stage-pct{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .stage.done .stage-pct{color:var(--ok)}
+  .stage.error .stage-pct{color:var(--err)}
+  .stage .bar{height:6px;border-radius:99px;background:#0A1C10;overflow:hidden;position:relative}
+  .stage .fill{height:100%;border-radius:99px;background:var(--accent);
+        width:0;transition:width .3s ease}
+  .stage.done .fill{background:var(--ok)}
+  .stage.error .fill{background:var(--err);width:100%!important}
+  .stage.stopped .stage-pct{color:var(--warn)}
+  .stage.stopped .fill{background:var(--warn)}
+  /* indeterminate: a sliding sweep */
+  .stage .fill.indet{width:35%;background:linear-gradient(90deg,
+        rgba(91,140,255,0) 0%,var(--accent) 50%,rgba(91,140,255,0) 100%);
+        animation:sweep 1.2s ease-in-out infinite}
+  @keyframes sweep{0%{transform:translateX(-120%)}100%{transform:translateX(340%)}}
+  #progress{margin-top:22px;background:#061209;border:1px solid var(--line);
+            border-radius:10px;padding:14px 16px;font:12.5px/1.6 ui-monospace,Consolas,monospace;
+            color:#7FD98F;max-height:240px;overflow:auto;display:none;white-space:pre-wrap}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid #173A22;
+        border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;
+        vertical-align:-1px;margin-right:6px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .results{margin-top:24px;display:none}
+  .tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:0}
+  .tab{padding:9px 16px;cursor:pointer;color:var(--muted);border:1px solid transparent;
+       border-bottom:none;border-radius:8px 8px 0 0;font-size:14px}
+  .tab.sel{color:var(--txt);background:var(--panel);border-color:var(--line)}
+  .pane{background:var(--panel);border:1px solid var(--line);border-radius:0 12px 12px 12px;
+        padding:26px 30px;min-height:200px}
+  #notesPane{font-size:15px}
+  #notesPane h1,#notesPane h2,#notesPane h3,#notesPane h4{font-size:16px;font-weight:700;
+        margin:18px 0 8px}
+  #notesPane table{border-collapse:collapse;margin:12px 0;width:100%}
+  #notesPane th,#notesPane td{border:1px solid var(--line);padding:6px 10px;text-align:left}
+  #notesPane th{background:var(--panel2)}
+  #notesPane code{background:#061209;padding:1px 5px;border-radius:4px}
+  #notesPane figure.exhibit{margin:16px 0;text-align:center}
+  #notesPane figure.exhibit img{max-width:100%;border:1px solid var(--line);
+        border-radius:8px;background:#fff}
+  #notesPane figcaption{color:var(--muted);font-size:12.5px;margin-top:6px}
+  #transcriptPane{white-space:pre-wrap;font:13.5px/1.7 ui-monospace,Consolas,monospace;
+        color:#7FD98F}
+  .toolbar{display:flex;gap:10px;margin-bottom:14px}
+  .toolbar button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+        border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13.5px}
+  .toolbar button:hover{border-color:var(--accent)}
+  .toolbar button.primary{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .toolbar button.primary:hover{background:var(--accent);border-color:var(--accent)}
+  .err{color:var(--err)}
+  #mascot{margin:30px auto 8px;text-align:center;max-width:440px}
+  #mascot.missing{display:none}
+  #mascot img{width:400px;max-width:85vw;border-radius:14px;
+        background:linear-gradient(#f4f4f4,#dcdcdc);padding:6px;
+        box-shadow:0 6px 24px rgba(0,0,0,.35);opacity:.96}
+  #restartBtn{position:fixed;left:14px;bottom:14px;z-index:50;
+        background:var(--panel2);color:var(--muted);border:1px solid var(--line);
+        border-radius:10px;padding:9px 14px;font-size:13px;cursor:pointer}
+  #restartBtn:hover{border-color:var(--accent);color:var(--txt)}
+  #restartBtn:disabled{opacity:.6;cursor:default}
+  #prefsBtn{margin-left:14px;background:var(--panel2);color:var(--muted);
+        border:1px solid var(--line);border-radius:10px;padding:7px 13px;
+        font-size:13px;cursor:pointer;white-space:nowrap}
+  #prefsBtn:hover{border-color:var(--accent);color:var(--txt)}
+  .modal{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);
+        display:flex;align-items:center;justify-content:center;padding:24px}
+  .modal-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+        width:min(900px,94vw);max-height:88vh;display:flex;flex-direction:column;
+        box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;
+        padding:16px 20px;border-bottom:1px solid var(--line);font-weight:600}
+  .modal-head button{background:none;border:none;color:var(--muted);font-size:22px;
+        cursor:pointer;line-height:1}
+  .modal-head button:hover{color:var(--txt)}
+  .prefs-tabs{display:flex;gap:6px;padding:14px 20px 0}
+  .prefs-tabs .ptab{padding:8px 14px;cursor:pointer;color:var(--muted);font-size:13.5px;
+        border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+  .prefs-tabs .ptab.sel{color:#fff;border-color:var(--accent);background:var(--accent2)}
+  .prefs-tabs .ptab.dirty::after{content:" •";color:var(--warn)}
+  .prefs-note{margin:10px 20px 0;color:var(--muted);font-size:12px}
+  #prefsText{margin:10px 20px;flex:1;min-height:340px;resize:vertical;
+        background:#061209;color:#9FE6AB;border:1px solid var(--line);border-radius:10px;
+        padding:14px;font:13px/1.6 ui-monospace,Consolas,monospace}
+  .modal-foot{display:flex;align-items:center;gap:12px;padding:14px 20px;
+        border-top:1px solid var(--line)}
+  .modal-foot #prefsStatus{margin-right:auto}
+
+  /* ── phosphor terminal polish: CRT scanlines + green glow ───────────── */
+  body{text-shadow:0 0 1px rgba(59,232,89,.25)}
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9999;
+        background:repeating-linear-gradient(rgba(0,0,0,.18) 0 1px,transparent 1px 3px);
+        mix-blend-mode:multiply;opacity:.5}
+  header h1{text-shadow:0 0 8px rgba(116,251,128,.4)}
+  /* calmer green for long prose (notes / transcript); brighter headings */
+  #notesPane{color:#9FE6AB}
+  #notesPane h1,#notesPane h2,#notesPane h3,#notesPane h4{color:#D8FFDF}
+  #transcriptPane{color:#9FE6AB}
+</style>
+</head>
+<body>
+<header>
+  <h1>Monkey Read Monkey Do</h1>
+  <span class="tag">local transcription &amp; meeting notes</span>
+  <div class="badges" id="badges"></div>
+  <button id="prefsBtn" title="Preferences">⚙ Preferences</button>
+</header>
+
+<main>
+  <div class="modes" id="modes">
+    <div class="mode" data-mode="1">
+      <div class="n">OPTION 1</div><div class="t">Transcribe only</div>
+      <div class="d">Local Whisper transcription. Adds speaker labels if <strong>Diarization</strong> (top-right) is on.</div>
+    </div>
+    <div class="mode sel" data-mode="2">
+      <div class="n">OPTION 2</div><div class="t">Transcribe &amp; summarize</div>
+      <div class="d">Transcribe (with speaker labels if <strong>Diarization</strong> is on), then write full notes + Word doc.</div>
+    </div>
+    <div class="mode" data-mode="3">
+      <div class="n">OPTION 3</div><div class="t">Summary from transcript</div>
+      <div class="d">Drop an existing transcript (.txt) → notes + Word doc. <span style="color:var(--muted)">(Diarization n/a.)</span></div>
+    </div>
+  </div>
+
+  <div id="drop">
+    <div class="big">⬇ Drop audio, video, or transcript files here</div>
+    <div class="sub">or click to browse · mp3 wav m4a mp4 mov mkv txt png jpg …
+        · audio is processed locally and never leaves this machine</div>
+    <input type="file" id="fileInput" multiple hidden>
+  </div>
+
+  <div id="filelist"></div>
+
+  <div class="row">
+    <button class="go" id="goBtn" disabled>Run</button>
+    <button class="ctl" id="pauseBtn" style="display:none">⏸ Pause</button>
+    <button class="ctl stop" id="stopBtn" style="display:none">⏹ Stop</button>
+    <span class="hint" id="hint">Select files to begin.</span>
+  </div>
+
+  <figure id="mascot">
+    <img src="/mascot" alt="Monkey Read Monkey Do — a monkey absorbed in a book"
+         onerror="this.closest('#mascot').classList.add('missing')">
+  </figure>
+
+  <div id="stages"></div>
+  <div id="progress"></div>
+
+  <div class="results" id="results">
+    <div class="toolbar">
+      <button id="newTaskBtn" class="primary">＋ New Task</button>
+      <button id="dlDocx">⬇ Download Word doc</button>
+      <button id="copyNotes">Copy notes</button>
+      <button id="copyTx">Copy transcript</button>
+    </div>
+    <div id="stoppedBanner" class="banner" style="display:none"></div>
+    <details id="changelog" style="display:none">
+      <summary>Editor changes (second-pass review)</summary>
+      <div id="changelogBody"></div>
+    </details>
+    <div class="tabs">
+      <div class="tab sel" data-tab="notes">Notes</div>
+      <div class="tab" data-tab="transcript">Transcript</div>
+    </div>
+    <div class="pane" id="notesPaneWrap"><div id="notesPane"></div></div>
+    <div class="pane" id="transcriptPaneWrap" style="display:none">
+      <div id="transcriptPane"></div></div>
+  </div>
+</main>
+
+<button id="restartBtn" title="Restart the Monkey Read Monkey Do server">⟳ Restart server</button>
+
+<div id="prefsModal" class="modal" style="display:none">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span>Preferences — edit summarization prompts</span>
+      <button id="prefsClose" title="Close">×</button>
+    </div>
+    <div class="prefs-tabs" id="prefsTabs"></div>
+    <p class="prefs-note">Edits are saved to the prompt file and used on your next task. A
+       <code>.bak</code> backup of the previous version is kept.</p>
+    <textarea id="prefsText" spellcheck="false"></textarea>
+    <div class="modal-foot">
+      <span id="prefsStatus" class="hint"></span>
+      <button id="prefsRevert" class="ctl">Revert</button>
+      <button id="prefsSave" class="ctl primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let mode = "2", files = [], jobId = null, poll = null, jobPaused = false;
+let result = {notes_md:null, transcript:null, docx:null};
+
+const $ = s => document.querySelector(s);
+const drop = $("#drop"), fileInput = $("#fileInput"), goBtn = $("#goBtn");
+
+function showCtl(on){
+  $("#pauseBtn").style.display=on?"":"none";
+  $("#stopBtn").style.display=on?"":"none";
+}
+async function sendControl(action){
+  if(!jobId) return;
+  try{await fetch("/api/control/"+jobId,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});}catch(e){}
+}
+$("#pauseBtn").onclick=async()=>{
+  const action=jobPaused?"resume":"pause";
+  await sendControl(action);
+  jobPaused=!jobPaused;
+  $("#pauseBtn").textContent=jobPaused?"▶ Resume":"⏸ Pause";
+};
+$("#stopBtn").onclick=async()=>{
+  $("#stopBtn").disabled=true;$("#pauseBtn").disabled=true;
+  $("#stopBtn").textContent="⏹ Stopping…";
+  await sendControl("stop");
+};
+
+// ---- config + diarization toggle (the diarization pill is a per-run on/off switch) ----
+let cfg = null;
+let diarizeOn = true;
+function renderBadges(){
+  const b = $("#badges"); if(!cfg){ b.innerHTML=""; return; }
+  let dia;
+  if(!cfg.diarization){
+    dia = `<span class="badge off" title="No HF_TOKEN configured — speaker diarization unavailable">diarization n/a</span>`;
+  } else if(mode === "3"){
+    dia = `<span class="badge" style="opacity:.45;cursor:default" title="Not applicable — Option 3 summarizes an existing transcript (no audio to diarize)">diarization n/a</span>`;
+  } else {
+    dia = `<span class="badge ${diarizeOn?'on':'off'}" id="diaToggle" style="cursor:pointer" `+
+          `title="Click to turn speaker diarization ${diarizeOn?'OFF':'ON'} for the next run">diarization ${diarizeOn?'on':'off'}</span>`;
+  }
+  b.innerHTML = dia +
+    `<span class="badge ${cfg.notes?'on':'off'}">notes ${cfg.notes?'on':'off'}</span>`+
+    `<span class="badge">whisper ${cfg.whisper_model}</span>`+
+    (cfg.offline?`<span class="badge on">offline</span>`:``);
+  const t = $("#diaToggle");
+  if(t) t.onclick = ()=>{ diarizeOn = !diarizeOn; renderBadges(); };
+}
+fetch("/api/config").then(r=>r.json()).then(c=>{
+  cfg = c; diarizeOn = !!c.diarization;     // default ON when available
+  renderBadges();
+}).catch(()=>{});
+
+// ---- mode selection ----
+document.querySelectorAll(".mode").forEach(m=>{
+  m.onclick=()=>{
+    document.querySelectorAll(".mode").forEach(x=>x.classList.remove("sel"));
+    m.classList.add("sel"); mode=m.dataset.mode; refresh(); renderBadges();
+  };
+});
+
+// ---- file handling ----
+drop.onclick=()=>fileInput.click();
+fileInput.onchange=e=>addFiles(e.target.files);
+["dragover","dragenter"].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault();drop.classList.add("hot");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault();drop.classList.remove("hot");}));
+drop.addEventListener("drop",e=>addFiles(e.dataTransfer.files));
+
+function addFiles(list){
+  for(const f of list) files.push(f);
+  renderFiles(); refresh();
+}
+function kind(name){
+  const e=name.split(".").pop().toLowerCase();
+  if(["mp3","wav","m4a","flac","ogg","oga","aac","wma","opus","aiff","aif","amr"].includes(e))return"audio";
+  if(["mp4","mov","mkv","avi","webm","m4v","wmv","flv","mpeg","mpg","3gp"].includes(e))return"video";
+  if(["txt","md","vtt","srt"].includes(e))return"text";
+  if(["png","jpg","jpeg","gif","webp"].includes(e))return"image";
+  return"other";
+}
+function renderFiles(){
+  const el=$("#filelist"); el.innerHTML="";
+  files.forEach((f,i)=>{
+    const d=document.createElement("div"); d.className="file";
+    d.innerHTML=`<span class="k">${kind(f.name)}</span><span>${f.name}</span>`+
+      `<span class="hint">${(f.size/1048576).toFixed(1)} MB</span>`+
+      `<button class="x" title="remove">×</button>`;
+    d.querySelector(".x").onclick=()=>{files.splice(i,1);renderFiles();refresh();};
+    el.appendChild(d);
+  });
+}
+function refresh(){
+  const hasMedia=files.some(f=>["audio","video"].includes(kind(f.name)));
+  const hasText=files.some(f=>kind(f.name)==="text");
+  let ok=files.length>0, msg="";
+  if((mode==="1"||mode==="2")&&!hasMedia){ok=false;msg="This option needs an audio or video file.";}
+  if(mode==="3"&&!hasText){ok=false;msg="This option needs a transcript (.txt) file.";}
+  goBtn.disabled=!ok;
+  $("#hint").textContent = ok ? `${files.length} file(s) ready.` :
+     (files.length?msg:"Select files to begin.");
+}
+
+// ---- run ----
+goBtn.onclick=async()=>{
+  goBtn.disabled=true;
+  $("#results").style.display="none";
+  $("#stoppedBanner").style.display="none"; $("#changelog").style.display="none";
+  $("#stages").classList.remove("show"); $("#stages").innerHTML="";
+  const pr=$("#progress"); pr.style.display="block";
+  pr.innerHTML=`<span class="spin"></span>Uploading…`;
+  const fd=new FormData(); fd.append("mode",mode);
+  fd.append("diarize", diarizeOn ? "1" : "0");
+  files.forEach(f=>fd.append("files",f));
+  try{
+    const r=await fetch("/api/process",{method:"POST",body:fd});
+    const j=await r.json();
+    if(j.error){pr.innerHTML=`<span class="err">Error: ${j.error}</span>`;goBtn.disabled=false;return;}
+    jobId=j.job_id;
+    jobPaused=false;
+    $("#pauseBtn").textContent="⏸ Pause"; $("#pauseBtn").disabled=false;
+    $("#stopBtn").textContent="⏹ Stop"; $("#stopBtn").disabled=false;
+    showCtl(true);
+    poll=setInterval(checkStatus,1200); checkStatus();
+  }catch(e){pr.innerHTML=`<span class="err">${e}</span>`;goBtn.disabled=false;}
+};
+
+function renderStages(stages){
+  const c=$("#stages");
+  if(!stages||!stages.length){c.classList.remove("show");c.innerHTML="";return;}
+  c.classList.add("show");
+  c.innerHTML=stages.map(s=>{
+    const det=(s.state==="active"&&s.pct!=null);
+    let fill="";
+    if(s.state==="done") fill=`<div class="fill" style="width:100%"></div>`;
+    else if(det) fill=`<div class="fill" style="width:${s.pct}%"></div>`;
+    else if(s.state==="active") fill=`<div class="fill indet"></div>`;
+    else if(s.state==="stopped") fill=`<div class="fill" style="width:${s.pct!=null?s.pct:5}%"></div>`;
+    else if(s.state==="error") fill=`<div class="fill"></div>`;
+    const right = s.state==="done"?"✓"
+      : s.state==="skipped"?"skipped"
+      : s.state==="error"?"failed"
+      : s.state==="stopped"?"stopped"
+      : s.state==="pending"?""
+      : (det?s.pct+"%":"…");
+    return `<div class="stage ${s.state}">`+
+      `<div class="stage-head"><span class="lbl">${esc(s.label)}</span>`+
+      `<span class="stage-pct">${right}</span></div>`+
+      `<div class="bar">${fill}</div></div>`;
+  }).join("");
+}
+
+async function checkStatus(){
+  const r=await fetch("/api/status/"+jobId); const j=await r.json();
+  renderStages(j.stages);
+  const pr=$("#progress");
+  const running=j.status==="running";
+  pr.innerHTML=(running?`<span class="spin"></span>`:"")+
+    j.progress.map(l=>l.startsWith("ERROR")?`<span class="err">${esc(l)}</span>`:esc(l)).join("\n");
+  pr.scrollTop=pr.scrollHeight;
+  if(j.status==="done"||j.status==="error"||j.status==="stopped"){
+    clearInterval(poll); showCtl(false); goBtn.disabled=false;
+    if(j.status==="done") show(j.result,false);
+    else if(j.status==="stopped") show(j.result,true);
+  }
+}
+function esc(s){return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+
+// ---- results ----
+function show(res,stopped){
+  result=res;
+  $("#results").style.display="block";
+  const banner=$("#stoppedBanner");
+  if(stopped){
+    banner.style.display="block";
+    banner.textContent="⏹ Stopped by user. Partial work saved to the work folder"
+      +(res.notes_md?" — transcript and (partial) notes.":" — transcript only.");
+  } else banner.style.display="none";
+  const cl=$("#changelog");
+  if(res.changelog){cl.style.display="block";$("#changelogBody").textContent=res.changelog;}
+  else cl.style.display="none";
+  $("#transcriptPane").textContent=res.transcript||"";
+  if(res.notes_md){
+    let html=marked.parse(res.notes_md);
+    // Replace [[EXHIBIT n]] placeholders with the actual embedded images.
+    const imgs=res.images||{};
+    html=html.replace(/\[\[\s*EXHIBIT\s+(\d+)\s*\]\]/gi,(m,n)=>
+      imgs[n]?`<figure class="exhibit"><img src="${imgs[n]}" alt="Exhibit ${n}">`+
+              `<figcaption>Exhibit ${n}</figcaption></figure>`:m);
+    $("#notesPane").innerHTML=html;
+    $("#dlDocx").style.display=""; $("#copyNotes").style.display="";
+    selectTab("notes");
+  }else{
+    $("#notesPane").innerHTML="<p class='hint'>No notes (transcribe-only mode).</p>";
+    $("#dlDocx").style.display="none"; $("#copyNotes").style.display="none";
+    selectTab("transcript");
+  }
+}
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
+function selectTab(name){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("sel",t.dataset.tab===name));
+  $("#notesPaneWrap").style.display=name==="notes"?"":"none";
+  $("#transcriptPaneWrap").style.display=name==="transcript"?"":"none";
+}
+// ---- restart server ----
+$("#restartBtn").onclick=async()=>{
+  if(!confirm("Restart the Monkey Read Monkey Do server? Any in-progress job will be lost."))return;
+  const b=$("#restartBtn"); b.disabled=true; b.textContent="⟳ Restarting…";
+  try{await fetch("/api/restart",{method:"POST"});}catch(e){}
+  let tries=0;
+  const iv=setInterval(async()=>{
+    tries++;
+    try{
+      const r=await fetch("/api/config",{cache:"no-store"});
+      if(r.ok){clearInterval(iv);b.textContent="✓ Back online";
+        setTimeout(()=>{b.disabled=false;b.textContent="⟳ Restart server";},1600);}
+    }catch(e){if(tries>40){clearInterval(iv);b.textContent="⚠ Restart failed";b.disabled=false;}}
+  },1000);
+};
+
+// ---- New Task: save current work to Desktop, then reset ----
+function resetApp(msg){
+  if(poll){clearInterval(poll);poll=null;}
+  jobId=null; jobPaused=false; result={notes_md:null,transcript:null,docx:null};
+  files=[]; renderFiles();
+  $("#results").style.display="none";
+  $("#progress").style.display="none"; $("#progress").innerHTML="";
+  $("#stages").classList.remove("show"); $("#stages").innerHTML="";
+  $("#stoppedBanner").style.display="none"; $("#changelog").style.display="none";
+  showCtl(false);
+  goBtn.disabled=true;
+  $("#hint").textContent = msg || "Select files to begin.";
+}
+$("#newTaskBtn").onclick=async()=>{
+  const btn=$("#newTaskBtn"); btn.disabled=true; btn.textContent="Saving…";
+  let msg="Ready for a new task.";
+  if(jobId){
+    try{
+      const r=await fetch("/api/finish/"+jobId,{method:"POST"});
+      const j=await r.json();
+      if(j.saved){
+        const folder=j.saved.split(/[\\/]/).slice(-2).join("\\");
+        msg=`✓ Saved ${j.files.length} file(s) to Desktop\\${folder} — ready for a new task.`;
+      }
+    }catch(e){}
+  }
+  btn.disabled=false; btn.textContent="＋ New Task";
+  resetApp(msg);
+  window.scrollTo({top:0,behavior:"smooth"});
+};
+
+$("#dlDocx").onclick=()=>{if(jobId)location.href="/api/download/"+jobId;};
+$("#copyNotes").onclick=()=>navigator.clipboard.writeText(result.notes_md||"");
+$("#copyTx").onclick=()=>navigator.clipboard.writeText(result.transcript||"");
+
+// ---- Preferences: edit the two prompt files ----
+let prefsFiles=[], prefsKey=null, prefsOrig={}, prefsEdited={};
+const pdirty=k=>prefsEdited[k]!==undefined&&prefsEdited[k]!==prefsOrig[k];
+
+$("#prefsBtn").onclick=async()=>{
+  $("#prefsModal").style.display="flex";
+  if(!prefsFiles.length){
+    prefsFiles=await (await fetch("/api/prefs")).json();
+    renderPrefTabs();
+  }
+  await loadPref(prefsKey||prefsFiles[0].key);
+};
+function renderPrefTabs(){
+  $("#prefsTabs").innerHTML=prefsFiles.map(f=>
+    `<div class="ptab" data-key="${f.key}">${esc(f.label)}</div>`).join("");
+  document.querySelectorAll("#prefsTabs .ptab").forEach(t=>
+    t.onclick=()=>switchPref(t.dataset.key));
+}
+function paintPrefTabs(){
+  document.querySelectorAll("#prefsTabs .ptab").forEach(t=>{
+    t.classList.toggle("sel",t.dataset.key===prefsKey);
+    t.classList.toggle("dirty",pdirty(t.dataset.key));
+  });
+}
+async function loadPref(key){
+  if(prefsOrig[key]===undefined){
+    const j=await (await fetch("/api/prefs/"+key)).json();
+    prefsOrig[key]=j.content;
+    if(prefsEdited[key]===undefined) prefsEdited[key]=j.content;
+  }
+  prefsKey=key;
+  $("#prefsText").value=prefsEdited[key];
+  $("#prefsStatus").textContent="";
+  paintPrefTabs();
+}
+function cachePref(){ if(prefsKey!=null) prefsEdited[prefsKey]=$("#prefsText").value; }
+async function switchPref(key){ cachePref(); await loadPref(key); }
+$("#prefsText").oninput=()=>{cachePref();paintPrefTabs();};
+$("#prefsRevert").onclick=()=>{
+  if(prefsKey==null)return;
+  prefsEdited[prefsKey]=prefsOrig[prefsKey];
+  $("#prefsText").value=prefsOrig[prefsKey];
+  $("#prefsStatus").textContent="Reverted to last saved version.";
+  paintPrefTabs();
+};
+$("#prefsSave").onclick=async()=>{
+  cachePref(); const key=prefsKey, content=prefsEdited[key];
+  const sv=$("#prefsSave"); sv.disabled=true; $("#prefsStatus").textContent="Saving…";
+  try{
+    const r=await fetch("/api/prefs/"+key,{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({content})});
+    const j=await r.json();
+    if(j.ok){prefsOrig[key]=content;
+      $("#prefsStatus").textContent=`✓ Saved ${j.file} (${j.bytes} bytes) — used on your next task.`;}
+    else $("#prefsStatus").textContent="⚠ "+(j.error||"save failed");
+  }catch(e){$("#prefsStatus").textContent="⚠ save failed";}
+  sv.disabled=false; paintPrefTabs();
+};
+function closePrefs(){
+  cachePref();
+  if(prefsFiles.some(f=>pdirty(f.key)) &&
+     !confirm("You have unsaved prompt edits. Close without saving?")) return;
+  $("#prefsModal").style.display="none";
+}
+$("#prefsClose").onclick=closePrefs;
+$("#prefsModal").onclick=e=>{if(e.target.id==="prefsModal")closePrefs();};
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&$("#prefsModal").style.display==="flex")closePrefs();});
+</script>
+</body>
+</html>

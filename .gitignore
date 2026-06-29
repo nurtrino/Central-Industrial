@@ -1,0 +1,25 @@
+# ── Secrets — never commit ───────────────────────────────────────────────────
+**/.env
+deep-research/config/.drt_vault_key
+deep-research/config/drt_credentials.enc
+
+# ── Virtual envs / build artifacts ───────────────────────────────────────────
+**/.venv/
+**/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# ── Runtime state / caches / generated data ──────────────────────────────────
+deep-research/.drt_chrome_profile/
+deep-research/reports/
+monkey-read-monkey-do/uploads/
+monkey-read-monkey-do/work/
+**/*.log
+
+# ── OS cruft ─────────────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+
+# ── Not deployed: legacy Windows/WSL2 Home Assistant launcher (kept locally) ──
+Home Assistant/

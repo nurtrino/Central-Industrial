@@ -1,0 +1,14 @@
+# Keep the build context lean. NOTE: fonts/ and vendor/ ARE needed (Flask serves them) — do not ignore.
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+config/.drt_vault_key
+config/drt_credentials.enc
+.drt_chrome_profile/
+reports/
+*.log
+_srv.log
+_restart.log
+# NOTE: the app serves "Boonies Basement Tub ... .mp3" via a route — keep mp3s in the image.

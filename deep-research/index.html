@@ -1,0 +1,1862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <title>Deep Research</title>
+  <!-- Vendored locally (no CDN): markdown renderer + Inter / JetBrains Mono fonts -->
+  <link href="/fonts/fonts.css" rel="stylesheet" />
+  <script src="/vendor/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ════════════════════════════════════════════════════════════════════
+       Special Projects — PHOSPHOR TERMINAL theme (shared with Monkey Read
+       Monkey Do). Green-on-black CRT green-screen look. Keep this palette in
+       sync across the two tools so the suite reads as one. */
+    :root {
+      --bg-base:      #04100A;
+      --bg-surface:   #08180E;
+      --bg-card:      #0A1E12;
+      --bg-elevated:  #0C2414;
+      --bg-hover:     #103018;
+
+      --border-dim:   #103A1C;
+      --border-mid:   #1C5A2C;
+      --border-bright:#2A7A3A;
+
+      --text-primary: #3BE859;   /* phosphor green */
+      --text-secondary:#23B045;
+      --text-muted:   #178A33;
+      --text-accent:  #74FB80;   /* bright highlight */
+
+      --hf-color:  #34E25A; --hf-glow: rgba(52,226,90,.18); --hf-sub: rgba(52,226,90,.08);
+      --admin-color: #34D24F; --admin-glow: rgba(52,210,79,.20); --admin-sub: rgba(52,210,79,.09);
+
+      /* the workspace accent resolves to the green accent everywhere */
+      --ws-color: var(--admin-color); --ws-glow: var(--admin-glow); --ws-sub: var(--admin-sub);
+
+      font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+      font-size: 14px;
+    }
+
+    html, body { height: 100%; background: var(--bg-base); color: var(--text-primary); -webkit-font-smoothing: antialiased; zoom: 1.12; }
+    .hidden { display: none !important; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+
+    /* page shell (replaces the old SPA sidebar/workspace chrome) */
+    .topbar {
+      position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px;
+      padding: 10px 20px; background: rgba(8,8,17,.85); backdrop-filter: blur(6px);
+      border-bottom: 1px solid var(--border-dim);
+    }
+    .topbar a.back {
+      font-size: 12px; color: var(--text-secondary); text-decoration: none;
+      border: 1px solid var(--border-mid); border-radius: 7px; padding: 6px 12px;
+      transition: border-color .15s, color .15s;
+    }
+    .topbar a.back:hover { border-color: var(--admin-color); color: var(--text-primary); }
+    .topbar .brand { font-size: 12.5px; font-weight: 600; letter-spacing: .04em; color: var(--admin-color); }
+    .topbar .brand .dim { color: var(--text-muted); font-weight: 400; }
+    .shell { display: flex; align-items: flex-start; }
+    .sidenav {
+      flex: 0 0 196px; position: sticky; top: 0; align-self: flex-start;
+      padding: 26px 14px; display: flex; flex-direction: column; gap: 7px;
+      border-right: 1px solid var(--border-dim); box-sizing: border-box;
+    }
+    .sidenav-h { font-size: 10px; letter-spacing: .18em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; }
+    .navitem {
+      display: block; text-align: left; background: transparent; border: 1px solid transparent;
+      border-radius: 8px; padding: 9px 12px; color: var(--text-secondary);
+      font-family: inherit; font-size: 13px; cursor: pointer;
+      transition: border-color .12s, color .12s, background .12s;
+    }
+    .navitem:hover { border-color: var(--border-mid); color: var(--text-primary); }
+    .navitem.active { background: var(--ws-sub); border-color: var(--ws-color); color: var(--text-primary); text-shadow: 0 0 7px var(--ws-glow); }
+    .sidenav-note { margin-top: 16px; font-size: 11px; line-height: 1.55; color: var(--text-muted); }
+    .page { flex: 1; min-width: 0; padding: 34px 24px 90px; display: flex; justify-content: center; }
+    .view { width: 100%; }
+    .view.hidden { display: none; }
+    #ws-main-inner, #or-main-inner { width: 100%; max-width: 980px; margin: 0 auto; }
+    .subtool-bar { max-width: 980px; margin: 0 auto 6px; display: flex; align-items: center; gap: 12px; }
+    .backbtn {
+      background: transparent; border: 1px solid var(--border-mid); border-radius: 8px;
+      padding: 7px 13px; color: var(--text-secondary); font-family: inherit; font-size: 12px;
+      cursor: pointer; transition: border-color .12s, color .12s;
+    }
+    .backbtn:hover { border-color: var(--ws-color); color: var(--text-primary); }
+    .subtool-tag { font-size: 11px; color: var(--text-muted); letter-spacing: .04em; }
+
+    .tool-content { max-width: 860px; margin: 0 auto; }
+    .ha-eyebrow {
+      font-size: 11px; font-weight: 600; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ws-color, var(--admin-color));
+      margin-bottom: 6px;
+    }
+    .ha-title { font-size: 22px; font-weight: 600; letter-spacing: -.3px; }
+
+    .pd-outer { max-width: 960px; }
+    .pd-header-row { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+    .pd-clear-btn {
+      padding: 6px 13px; border-radius: 6px; border: 1px solid var(--border-mid);
+      background: transparent; color: var(--text-secondary);
+      font-size: 11.5px; cursor: pointer; font-family: inherit;
+      transition: border-color .15s, color .15s;
+    }
+    .pd-clear-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+
+    /* Drop zone */
+    .pd-dropzone {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 13px; padding: 56px 32px;
+      border: 1.5px dashed var(--border-bright);
+      border-radius: 14px; background: var(--bg-surface);
+      transition: border-color .2s, background .2s; text-align: center;
+    }
+    .pd-dropzone.pd-drop-active { border-color: var(--ws-color, var(--admin-color)); background: var(--ws-sub, var(--admin-sub)); }
+    .pd-drop-icon { color: var(--text-muted); }
+    .pd-drop-icon svg { width: 40px; height: 40px; }
+    .pd-drop-title { font-size: 16px; font-weight: 600; }
+    .pd-drop-sub { font-size: 13px; color: var(--text-secondary); }
+    .pd-drop-sub code {
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      background: var(--bg-elevated); border: 1px solid var(--border-mid);
+      border-radius: 3px; padding: 1px 5px; color: var(--text-secondary);
+    }
+    .pd-drop-btn {
+      padding: 9px 22px; border-radius: 8px; background: var(--ws-color, var(--admin-color)); color: #fff;
+      font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity .15s; display: inline-block;
+    }
+    .pd-drop-btn:hover { opacity: .85; }
+
+    /* Deep Research form */
+    .dr-query-block { margin-bottom: 30px; }
+    .dr-label {
+      display: block; font-size: 11px; font-weight: 600; letter-spacing: .5px;
+      text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px;
+    }
+    .dr-textarea {
+      width: 100%; box-sizing: border-box; resize: vertical;
+      padding: 14px 16px; border-radius: 10px;
+      background: var(--bg-surface); border: 1.5px solid var(--border-mid);
+      color: var(--text-primary); font-family: inherit; font-size: 14px; line-height: 1.6;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .dr-textarea::placeholder { color: var(--text-muted); }
+    .dr-textarea:focus { outline: none; border-color: var(--ws-color, var(--admin-color)); box-shadow: 0 0 0 3px var(--ws-sub, var(--admin-sub)); }
+    .dr-textarea-err { border-color: #ff5555 !important; box-shadow: 0 0 0 3px rgba(255,85,85,.15) !important; }
+    .dr-chips { display: flex; gap: 10px; flex-wrap: wrap; }
+    .dr-chip {
+      flex: 1 1 0; min-width: 120px; text-align: left; cursor: pointer;
+      padding: 11px 14px; border-radius: 10px;
+      background: var(--bg-surface); border: 1.5px solid var(--border-mid);
+      color: var(--text-secondary); font-family: inherit;
+      transition: border-color .15s, background .15s, color .15s;
+    }
+    .dr-chip:hover { border-color: var(--border-bright); }
+    .dr-chip.active { border-color: var(--ws-color, var(--admin-color)); background: var(--ws-sub, var(--admin-sub)); color: var(--text-primary); }
+    .dr-chip-label { display: block; font-size: 13px; font-weight: 600; }
+    .dr-chip-sub { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .dr-run-btn {
+      margin-top: 22px; padding: 11px 26px; border-radius: 9px; border: none;
+      background: var(--ws-color, var(--admin-color)); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: opacity .15s;
+    }
+    .dr-run-btn:hover { opacity: .88; }
+    .dr-run-note { font-size: 11.5px; color: var(--text-muted); margin-top: 10px; }
+    .dr-attach-head { margin-bottom: 12px; }
+    .dr-attach-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+    .dr-attach-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+    .dr-filelist { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+    .dr-file-tag {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 5px 10px; border-radius: 7px; font-size: 11.5px;
+      background: var(--bg-elevated); border: 1px solid var(--border-mid); color: var(--text-secondary);
+    }
+    .dr-file-tag button { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0; line-height: 1; }
+    .dr-file-tag button:hover { color: #ff8888; }
+    .dr-run-row { display: flex; gap: 10px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
+    .dr-run-row .dr-run-btn { margin-top: 0; }
+    .dr-run-secondary { background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-mid); }
+    .dr-run-secondary:hover { opacity: 1; border-color: var(--border-bright); color: var(--text-primary); }
+    /* clarify */
+    .dr-clar-head { font-size: 15px; font-weight: 600; }
+    .dr-clar-sub { font-size: 12.5px; color: var(--text-secondary); margin: 4px 0 16px; }
+    .dr-clar-q { margin-bottom: 14px; }
+    /* sources panel */
+    .dr-src-panel { margin-top: 26px; border: 1px solid var(--border-dim); border-radius: 12px; overflow: hidden; }
+    .dr-src-head {
+      width: 100%; display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; background: var(--bg-surface); border: none; cursor: pointer;
+      color: var(--text-primary); font-family: inherit; font-size: 13px; font-weight: 600;
+    }
+    .dr-src-head:hover { background: var(--bg-elevated); }
+    .dr-src-count { font-size: 11.5px; color: var(--text-muted); font-weight: 400; }
+    .dr-src-body { padding: 14px 16px; border-top: 1px solid var(--border-dim); }
+    .dr-src-loading { color: var(--text-muted); font-size: 12.5px; }
+    .dr-src-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .dr-src-table th {
+      text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px;
+      color: var(--text-muted); font-weight: 600; padding: 4px 6px;
+    }
+    .dr-src-table td { padding: 4px 6px; }
+    .dr-src-desc-td { width: 42%; }
+    .dr-src-desc { font-size: 11.5px; }
+    .dr-src-in {
+      width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
+      background: var(--bg-elevated); border: 1px solid var(--border-mid);
+      color: var(--text-primary); font-family: inherit; font-size: 12px;
+    }
+    .dr-src-in:focus { outline: none; border-color: var(--admin-color); }
+    .dr-src-del { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 13px; }
+    .dr-src-del:hover { color: #ff8888; }
+    .dr-src-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+    .dr-src-btn {
+      padding: 7px 14px; border-radius: 7px; border: 1px solid var(--border-mid);
+      background: var(--bg-elevated); color: var(--text-secondary);
+      font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    .dr-src-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+    .dr-src-save { background: var(--admin-color); color: #fff; border-color: var(--admin-color); }
+    .dr-src-msg { font-size: 11.5px; }
+    .dr-src-note { font-size: 11px; color: var(--text-muted); margin-top: 10px; }
+    /* Stage-4 credential panel */
+    .dr-cred-list { margin: 6px 0 4px; }
+    .dr-cred-row { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border-dim); }
+    .dr-cred-row:last-child { border-bottom: none; }
+    .dr-cred-site { flex: 0 0 180px; min-width: 0; }
+    .dr-cred-domain { font-size: 13px; font-weight: 600; color: var(--text-primary); word-break: break-all; }
+    .dr-cred-reason { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .dr-cred-fields { flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
+    /* per-source login lock in the Sources table */
+    .dr-lock { border:none; background:none; cursor:pointer; font-size:14px; padding:2px 4px; border-radius:5px; opacity:.65; }
+    .dr-lock:hover { opacity:1; background:var(--bg-elevated); }
+    .dr-lock.on { opacity:1; }
+    .dr-lock-na { color:var(--text-muted); }
+    .dr-cred-edit-row td { padding: 0 6px 10px; }
+    .dr-cred-edit { background: var(--bg-surface); border: 1px solid var(--border-mid); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 7px; }
+    .dr-cred-edit-title { font-size: 12px; color: var(--text-secondary); }
+    /* skip-this-stage button */
+    .dr-skip-btn {
+      margin-top: 16px; padding: 8px 18px; border-radius: 8px;
+      background: var(--bg-elevated); color: var(--text-secondary);
+      border: 1px solid var(--border-mid); font-family: inherit; font-size: 12.5px; cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .dr-skip-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+    .dr-skip-note { margin-top: 16px; font-size: 12px; color: var(--text-muted); }
+    /* refine box */
+    .dr-refine-box { margin-top: 26px; padding: 16px 18px; border-radius: 12px; background: var(--bg-surface); border: 1px solid var(--border-dim); }
+    .dr-refine-head { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+    .dr-refine-sub { font-size: 12px; color: var(--text-secondary); margin: 3px 0 12px; }
+    /* research-channel toggles */
+    .dr-toggle-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .dr-toggle {
+      display: flex; align-items: flex-start; gap: 10px; flex: 1 1 160px; min-width: 160px;
+      padding: 11px 13px; border-radius: 10px; cursor: pointer;
+      background: var(--bg-surface); border: 1px solid var(--border-dim);
+      transition: border-color .15s, opacity .15s;
+    }
+    .dr-toggle.off { opacity: .55; }
+    .dr-toggle:hover { border-color: var(--border-bright); }
+    .dr-toggle input { display: none; }
+    .dr-toggle-sw { flex: 0 0 auto; margin-top: 2px; width: 34px; height: 19px; border-radius: 999px; background: var(--border-mid); position: relative; transition: background .15s; }
+    .dr-toggle-sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; transition: transform .15s; }
+    .dr-toggle.on .dr-toggle-sw { background: var(--admin-color); }
+    .dr-toggle.on .dr-toggle-sw::after { transform: translateX(15px); }
+    .dr-toggle-txt { display: flex; flex-direction: column; gap: 1px; }
+    .dr-toggle-label { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+    .dr-toggle-sub { font-size: 10.5px; color: var(--text-muted); }
+    /* "Go deeper?" CTA + panel */
+    .dr-deeper-cta {
+      margin-top: 26px; padding: 16px 18px; border-radius: 12px;
+      background: var(--bg-surface); border: 1px solid var(--border-dim);
+      display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    }
+    .dr-deeper-cta-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+    .dr-deeper-cta-sub { font-size: 12px; color: var(--text-secondary); margin-top: 3px; max-width: 560px; }
+    .dr-deeper-box { margin-top: 26px; padding: 18px 20px; border-radius: 12px; background: var(--bg-surface); border: 1px solid var(--border-dim); }
+    .dr-deeper-box .dr-drop-compact { margin: 10px 0 0; max-width: none; }
+    .dr-file-memo { background: var(--admin-color); color: #fff; border-color: var(--admin-color); }
+    /* compact supporting-docs dropzone */
+    .dr-drop-compact { padding: 22px 24px; gap: 8px; border-radius: 12px; max-width: 560px; margin: 0 auto; }
+    .dr-drop-compact .pd-drop-icon svg { width: 26px; height: 26px; }
+    .dr-drop-compact .pd-drop-title { font-size: 13.5px; }
+
+    /* spinner */
+    @keyframes pdSpin { to { transform: rotate(360deg); } }
+    .pd-spinner {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 2.5px solid var(--border-bright); border-top-color: var(--ws-color, var(--admin-color));
+      animation: pdSpin .75s linear infinite; flex-shrink: 0; margin: 0 auto;
+    }
+
+    /* report (rendered markdown) */
+    .vc-memo-outer { max-width: 860px; margin: 0 auto; }
+    .vc-memo-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; gap: 10px; flex-wrap: wrap; }
+    .vc-memo-files { font-size: 11.5px; color: var(--text-muted); flex: 1; line-height: 1.5; }
+    .vc-memo-download {
+      padding: 7px 16px; border-radius: 7px; background: var(--ws-color, var(--admin-color)); color: #fff;
+      font-size: 12.5px; font-weight: 500; cursor: pointer; border: none; font-family: inherit;
+      transition: opacity .15s; white-space: nowrap;
+    }
+    .vc-memo-download:hover { opacity: .85; }
+    .vc-memo-body {
+      background: var(--bg-card); border: 1px solid var(--border-dim);
+      border-radius: 10px; padding: 28px 32px;
+      font-size: 13.5px; line-height: 1.75; color: var(--text-primary);
+    }
+    .vc-memo-body h1 { font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 18px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--border-dim); }
+    .vc-memo-body h2 { font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin: 14px 0 4px; }
+    .vc-memo-body h3 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 10px 0 3px; }
+    .vc-memo-body p { margin: 0 0 10px; }
+    .vc-memo-body img { max-width: 100%; height: auto; display: block; margin: 12px auto; border-radius: 6px; border: 1px solid var(--border-dim); }
+    .vc-memo-body ul, .vc-memo-body ol { margin: 0 0 10px 18px; padding: 0; }
+    .vc-memo-body li { margin-bottom: 3px; }
+    .vc-memo-body strong { color: var(--text-primary); font-weight: 600; }
+    .vc-memo-body em { color: var(--text-secondary); }
+    .vc-memo-body hr { border: none; border-top: 1px solid var(--border-dim); margin: 18px 0; }
+    .vc-memo-body code { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--bg-elevated); border: 1px solid var(--border-mid); border-radius: 3px; padding: 1px 5px; }
+    .vc-memo-body table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 12.5px; }
+    .vc-memo-body th, .vc-memo-body td { border: 1px solid var(--border-mid); padding: 6px 9px; text-align: left; }
+    .vc-memo-body th { background: var(--bg-elevated); color: var(--text-primary); font-weight: 600; }
+    .vc-memo-body details { margin-top: 16px; border: 1px solid var(--border-dim); border-radius: 8px; padding: 10px 14px; background: var(--bg-surface); }
+    .vc-memo-body summary { cursor: pointer; color: var(--text-secondary); font-size: 12.5px; }
+    .vc-memo-body a { color: var(--text-accent); text-decoration: none; }
+    .vc-memo-body a:hover { text-decoration: underline; }
+
+    /* progress */
+    .mn-progress { max-width: 540px; margin: 8px auto 0; }
+    .mn-progress-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 16px; text-align: center; }
+    .mn-stages { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+    .mn-stage { display: flex; align-items: center; gap: 11px; font-size: 13px; color: var(--text-muted); transition: color .2s; }
+    .mn-stage-ic { width: 18px; height: 18px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; border-radius: 50%; }
+    .mn-stage.pending .mn-stage-ic { color: var(--text-muted); border: 1px solid var(--border-mid); }
+    .mn-stage.done { color: var(--text-secondary); }
+    .mn-stage.done .mn-stage-ic { color: #fff; background: var(--ws-color, var(--admin-color)); }
+    .mn-stage.active { color: var(--text-primary); font-weight: 600; }
+    .mn-stage-label { flex-shrink: 0; }
+    .mn-stage-detail { font-size: 11px; color: var(--text-muted); font-weight: 400; margin-left: auto; text-align: right; padding-left: 12px; }
+    .mn-mini-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--border-bright); border-top-color: var(--ws-color, var(--admin-color)); animation: pdSpin .7s linear infinite; display: inline-block; }
+    .mn-bar { height: 7px; border-radius: 4px; background: var(--bg-elevated); overflow: hidden; border: 1px solid var(--border-dim); }
+    .mn-bar-fill { height: 100%; background: var(--ws-color, var(--admin-color)); border-radius: 4px; transition: width .4s ease; }
+    .mn-bar-indet { width: 35% !important; animation: mnIndet 1.3s ease-in-out infinite; }
+    @keyframes mnIndet { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+    .mn-elapsed { margin-top: 12px; font-size: 11px; color: var(--text-muted); text-align: center; }
+
+    /* ── phosphor terminal polish: CRT scanlines + green glow ───────────── */
+    body { text-shadow: 0 0 1px rgba(59,232,89,.25); }
+    body::after {
+      content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+      background: repeating-linear-gradient(rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+      mix-blend-mode: multiply; opacity: .5;
+    }
+    .ha-title, .ha-eyebrow, .topbar .brand { text-shadow: 0 0 7px rgba(52,210,79,.4); }
+    /* dark text on filled-green buttons/badges for legibility (not the dim secondary) */
+    .dr-run-btn:not(.dr-run-secondary), .vc-memo-download, .pd-drop-btn, .dr-src-save { color: #03120a; }
+    .mn-stage.done .mn-stage-ic { color: #03120a; }
+    /* calmer green for long report / prose bodies; brighter for emphasis */
+    .vc-memo-body { color: #9fe6ab; }
+    .vc-memo-body strong { color: #d8ffdf; }
+
+    /* Firecrawl console */
+    .fc-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+    .fc-tab {
+      padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border-mid);
+      background: var(--bg-surface); color: var(--text-secondary);
+      font-family: inherit; font-size: 12px; cursor: pointer; transition: border-color .12s, color .12s, background .12s;
+    }
+    .fc-tab:hover { border-color: var(--border-bright); color: var(--text-primary); }
+    .fc-tab.active { background: var(--ws-sub); border-color: var(--ws-color); color: var(--text-primary); text-shadow: 0 0 7px var(--ws-glow); }
+    .fc-field { margin-bottom: 16px; }
+    .fc-in {
+      width: 100%; box-sizing: border-box; padding: 11px 13px; border-radius: 9px;
+      background: var(--bg-surface); border: 1.5px solid var(--border-mid);
+      color: var(--text-primary); font-family: inherit; font-size: 13.5px; line-height: 1.5;
+    }
+    .fc-in:focus { outline: none; border-color: var(--ws-color); box-shadow: 0 0 0 3px var(--ws-sub); }
+    .fc-desc { font-size: 12px; color: var(--text-muted); margin: 0 0 18px; line-height: 1.5; }
+    .fc-desc code, .fc-jobid code { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--bg-elevated); border: 1px solid var(--border-mid); border-radius: 3px; padding: 1px 5px; color: var(--text-secondary); }
+    .fc-jobid { background: var(--bg-elevated); border: 1px solid var(--border-mid); border-radius: 8px; padding: 12px 14px; margin-bottom: 4px; font-size: 12.5px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .fc-json {
+      white-space: pre-wrap; word-break: break-word; font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+      font-size: 11.5px; line-height: 1.5; color: #9fe6ab; background: var(--bg-surface);
+      border: 1px solid var(--border-dim); border-radius: 8px; padding: 14px 16px; max-height: 520px; overflow: auto; margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="back" href="http://127.0.0.1:5050/">← Special Projects</a>
+    <span class="brand">DEEP RESEARCH <span class="dim">· browser-driven web research</span></span>
+  </div>
+  <div class="shell">
+    <nav class="sidenav">
+      <div class="sidenav-h">Tools</div>
+      <button class="navitem active" data-view="dr" onclick="setView('dr')">Deep Research</button>
+      <button class="navitem" data-view="od" onclick="setView('od')">Odysseus</button>
+      <button class="navitem" data-view="vvd" onclick="setView('vvd');vvdEgg()">Very Very Deep</button>
+      <button class="navitem" data-view="fc" onclick="setView('fc')">Firecrawl</button>
+      <div class="sidenav-note"><strong>Odysseus</strong> — headless A/B comparison engine.<br><strong>Very Very Deep</strong> — chains an Odysseus pass into Deep Research.<br><strong>Firecrawl</strong> — direct web scrape / crawl / map / extract console.</div>
+    </nav>
+    <div class="page">
+      <div id="view-dr" class="view"><div id="ws-main-inner"></div></div>
+      <div id="view-od" class="view hidden">
+        <div class="subtool-bar">
+          <button class="backbtn" onclick="setView('dr')">← Deep Research</button>
+          <span class="subtool-tag">comparison engine</span>
+        </div>
+        <div id="or-main-inner"></div>
+      </div>
+      <div id="view-vvd" class="view hidden">
+        <div class="subtool-bar">
+          <button class="backbtn" onclick="setView('dr')">← Deep Research</button>
+          <span class="subtool-tag">Odysseus → Deep Research</span>
+        </div>
+        <div id="vvd-main-inner"></div>
+      </div>
+      <div id="view-fc" class="view hidden">
+        <div class="subtool-bar">
+          <button class="backbtn" onclick="setView('dr')">← Deep Research</button>
+          <span class="subtool-tag">web scraper / crawler · Firecrawl API</span>
+        </div>
+        <div id="fc-main-inner"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- easter egg: plays on a Very Very Deep button press -->
+  <audio id="vvd-egg" preload="auto" src="/vvd-egg.mp3"></audio>
+
+<script>
+"use strict";
+/* ── Standalone scaffolding (shims for what the old SPA shell provided) ─────── */
+const PERF_SERVER = '';                 // same origin — this server serves the page AND the API
+const PERF_WAIT_SEC = 20;
+const activeTool = 'deepResearch';
+
+function _esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+async function _pdAlive() {
+  try { const r = await fetch(`${PERF_SERVER}/api/health`, { cache: 'no-store' }); return r.ok; }
+  catch (_) { return false; }
+}
+function _pdFireProtocol() { /* standalone: the server is already running (it served this page) */ }
+function renderContent() { _drRender(); }   // single-tool dispatcher
+
+/* ── Save a generated .docx to the reports folder + open it in Word (server-side),
+   with a browser-download fallback if the save endpoint fails ─────────────────── */
+function _blobDownload(b64, name) {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function _toast(msg, ok) {
+  let t = document.getElementById('dr-toast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'dr-toast';
+    t.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:10000;max-width:82vw;' +
+      'padding:10px 16px;border-radius:8px;font-size:12.5px;font-family:inherit;border:1px solid var(--border-bright);' +
+      'background:var(--bg-elevated);color:var(--text-primary);box-shadow:0 0 14px rgba(52,210,79,.3);' +
+      'white-space:pre-wrap;text-align:center;transition:opacity .4s';
+    document.body.appendChild(t);
+  }
+  t.style.borderColor = (ok === false) ? '#ff6b6b' : 'var(--ws-color)';
+  t.textContent = msg; t.style.opacity = '1';
+  clearTimeout(t._h); t._h = setTimeout(() => { t.style.opacity = '0'; }, 6000);
+}
+async function saveAndOpen(docx_b64, query, label, fallbackName) {
+  if (!docx_b64) return;
+  _toast('Saving & opening in Word…');
+  try {
+    const r = await fetch(`${PERF_SERVER}/api/save_report`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docx_b64, query, label }) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || ('save failed (' + r.status + ')'));
+    _toast((j.opened ? '✓ Saved & opened in Word:\n' : '✓ Saved (open it manually):\n') + j.path);
+  } catch (e) {
+    _blobDownload(docx_b64, fallbackName);
+    _toast('Could not save to the reports folder (' + e.message + ').\nDownloaded via the browser instead.', false);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   DEEP RESEARCH — UI (lifted verbatim from the DDDD platform)
+   ════════════════════════════════════════════════════════════════════════════ */
+  const _dr = { data: null, abort: null, gen: 0, query: '', depth: 'standard', files: [],
+                clarify: null, clarAns: {}, sources: null, srcOpen: false,
+                deeperOpen: false, deeperFiles: [], deeperQuery: '',
+                channels: { api_search: true, web_engines: true, site_queries: true, neural_search: false },
+                prefs: { open: false, loaded: false, prompt: '', name: '', status: '' } };
+
+  function drReset() {
+    if (_dr.abort) { try { _dr.abort.abort(); } catch (_) {} _dr.abort = null; }
+    _dr.gen++;
+    _dr.data = null;
+    _dr.files = [];
+    _dr.credShown = false;
+    _dr.credInputs = {};
+    _dr.skipReqStage = null;
+    _dr.deeperOpen = false;
+    _dr.deeperFiles = [];
+    _dr.deeperQuery = '';
+  }
+
+  function _drRender() {
+    const main = document.getElementById('ws-main-inner');
+    const d = _dr.data;
+    main.innerHTML = `
+      <div class="tool-content pd-outer">
+        <div class="pd-header-row">
+          <div>
+            <div class="ha-eyebrow">Web Research</div>
+            <div class="ha-title">Deep Research</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="pd-clear-btn" onclick="drTogglePrefs()" title="Edit the editorial guidelines (prompts/deep_research.md)">⚙ Preferences</button>
+            ${d ? `<button class="pd-clear-btn" onclick="drClear()">✕ Clear</button>` : ''}
+          </div>
+        </div>
+        ${_drPrefsHtml()}
+        ${d ? _drResultsHtml() : _drForm()}
+      </div>`;
+  }
+
+  function _drPrefsSection() {
+    const open = _dr.prefs.open;
+    return `
+      <div style="margin-top:18px;text-align:center">
+        <button onclick="drTogglePrefs()" style="background:none;border:1px solid var(--border-mid);
+          color:var(--text-secondary);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer">
+          ⚙ ${open ? 'Hide' : 'Edit'} research prompt</button>
+      </div>
+      ${_drPrefsHtml()}`;
+  }
+
+  function _drPrefsHtml() {
+    const p = _dr.prefs;
+    if (!p.open) return '';
+    if (!p.loaded) {
+      return `<div style="margin-top:14px;text-align:center">
+        <div class="pd-spinner" style="margin:8px auto"></div>
+        <div style="color:var(--text-muted);font-size:12px">${_esc(p.status || 'Loading prompt…')}</div></div>`;
+    }
+    const ta = 'width:100%;height:340px;font-family:\'JetBrains Mono\',monospace;font-size:11.5px;line-height:1.5;' +
+               'background:var(--bg-surface);border:1px solid var(--border-mid);border-radius:8px;padding:12px;' +
+               'color:var(--text-secondary);resize:vertical;box-sizing:border-box';
+    return `
+      <div style="margin-top:14px;border:1px solid var(--border-mid);border-radius:10px;padding:16px 18px;
+           background:var(--bg-elevated);text-align:left">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+          This is the governing prompt for Deep Research (Part 1 search strategy · Part 2 output
+          framework). Saving writes the file on the server and it's used by <strong>all future runs
+          immediately</strong> — no restart. A <code>.bak</code> of the previous version is kept.</div>
+        <label class="dr-label">Research prompt <span style="color:var(--text-muted);font-weight:400">— ${_esc(p.name || 'deep_research.md')}</span></label>
+        <textarea style="${ta}" oninput="_dr.prefs.prompt=this.value;_dr.prefs.status=''">${_esc(p.prompt)}</textarea>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+          <button class="dr-run-btn" onclick="drSavePrompt()">Save prompt</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drTogglePrefs()">Close</button>
+          <span style="font-size:11.5px;color:var(--admin-color)">${_esc(p.status || '')}</span>
+        </div>
+      </div>`;
+  }
+
+  async function drTogglePrefs() {
+    _dr.prefs.open = !_dr.prefs.open;
+    if (_dr.prefs.open && !_dr.prefs.loaded) {
+      _dr.prefs.status = 'Loading prompt…';
+      _drRender();
+      let alive = await _pdAlive();
+      if (!alive) { _pdFireProtocol();
+        for (let i = 0; i < Math.ceil(PERF_WAIT_SEC / 1.5); i++) { await new Promise(r => setTimeout(r, 1500)); if (await _pdAlive()) { alive = true; break; } } }
+      if (!alive) { _dr.prefs.status = 'Could not reach the local server. Start it, then reopen.'; _drRender(); return; }
+      try {
+        const r = await fetch(`${PERF_SERVER}/api/deep_research/prompt`);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || `Server error ${r.status}`);
+        _dr.prefs.prompt = j.prompt || ''; _dr.prefs.name = j.name || '';
+        _dr.prefs.loaded = true; _dr.prefs.status = '';
+      } catch (e) {
+        _dr.prefs.status = 'Could not load prompt: ' + e.message; _dr.prefs.loaded = true;
+      }
+    }
+    _drRender();
+  }
+
+  async function drSavePrompt() {
+    _dr.prefs.status = 'Saving…'; _drRender();
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/prompt`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: _dr.prefs.prompt }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `Server error ${r.status}`);
+      _dr.prefs.status = j.saved === false ? 'Nothing saved (prompt was blank).' : '✓ Saved — applies to all future runs.';
+    } catch (e) {
+      _dr.prefs.status = 'Save failed: ' + e.message;
+    }
+    _drRender();
+  }
+
+  function _drForm() {
+    const depths = [
+      { id:'quick',    label:'Quick',    sub:'a handful of sources' },
+      { id:'standard', label:'Standard', sub:'balanced fan-out' },
+      { id:'deep',     label:'Deep',     sub:'exhaustive, verified' },
+    ];
+    const chips = depths.map(o => `
+      <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
+              onclick="drSetDepth('${o.id}')">
+        <span class="dr-chip-label">${o.label}</span>
+        <span class="dr-chip-sub">${o.sub}</span>
+      </button>`).join('');
+    const fileList = _dr.files.length
+      ? `<div class="dr-filelist">${_dr.files.map((f,i) =>
+          `<span class="dr-file-tag">${_esc(f.name)}<button onclick="drRemoveFile(${i})" title="Remove">✕</button></span>`).join('')}</div>`
+      : '';
+    return `
+      <div class="dr-query-block">
+        <label class="dr-label">Research question</label>
+        <textarea id="dr-query" class="dr-textarea" rows="3"
+          placeholder="e.g. What's the background, track record, and any controversies around [a person, company, product, or topic]? Summarize recent developments and any concerns."
+          oninput="_dr.query = this.value">${_esc(_dr.query)}</textarea>
+
+        <label class="dr-label" style="margin-top:18px">Depth</label>
+        <div class="dr-chips">${chips}</div>
+
+        ${_drChannelsHtml()}
+
+        <div class="dr-run-row">
+          <button class="dr-run-btn" onclick="drRun(false)">Run Deep Research →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drRun(true)"
+                  title="Skip the clarifying questions and research as written">No questions</button>
+        </div>
+        <div class="dr-run-note">Opens a visible Chrome and searches the web live. Unless you click “No questions,” it may ask 1–3 quick scoping questions first.</div>
+      </div>
+
+      ${_drSourcesPanel()}
+
+      <div class="dr-attach-head" style="margin-top:30px">
+        <div class="dr-attach-title">Supporting documents <span style="color:var(--text-muted);font-weight:400">(optional)</span></div>
+        <div class="dr-attach-sub">Drop documents, PDFs, decks, web pages, or notes to ground the research in your own material.</div>
+      </div>
+      <div class="pd-dropzone dr-drop-compact" id="dr-drop"
+           ondragover="event.preventDefault();this.classList.add('pd-drop-active')"
+           ondragleave="this.classList.remove('pd-drop-active')"
+           ondrop="drHandleDrop(event)">
+        <div class="pd-drop-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <div class="pd-drop-title">Drag &amp; drop supporting files</div>
+        <div class="pd-drop-sub">PDF, Excel, Word, PowerPoint, text — any document</div>
+        <label class="pd-drop-btn" style="background:var(--ws-color, var(--admin-color))">
+          Browse files
+          <input type="file" multiple style="display:none" onchange="drHandleFile(this)">
+        </label>
+        ${fileList}
+      </div>`;
+  }
+
+  function drSetDepth(id) { _dr.depth = id; _drRender(); }
+
+  function _drChannelsHtml() {
+    const items = [
+      { k:'api_search',    label:'Claude API search',  sub:'fast broad web search · uses API credits' },
+      { k:'web_engines',   label:'Open web engines',   sub:'DuckDuckGo · Brave · Google' },
+      { k:'site_queries',  label:'Curated sites',      sub:'your forum / blog source list + logins' },
+      { k:'neural_search', label:'Neural search (Exa)', sub:'semantic discovery + find-similar · needs EXA_API_KEY + DRT_EXA=1' },
+    ];
+    const rows = items.map(it => `
+      <label class="dr-toggle ${_dr.channels[it.k] ? 'on' : 'off'}">
+        <input type="checkbox" ${_dr.channels[it.k] ? 'checked' : ''}
+               onchange="drToggleChannel('${it.k}', this.checked)">
+        <span class="dr-toggle-sw"></span>
+        <span class="dr-toggle-txt">
+          <span class="dr-toggle-label">${it.label}</span>
+          <span class="dr-toggle-sub">${it.sub}</span>
+        </span>
+      </label>`).join('');
+    const allOff = !Object.values(_dr.channels).some(Boolean);
+    return `
+      <label class="dr-label" style="margin-top:18px">Research channels</label>
+      <div class="dr-toggle-row">${rows}</div>
+      <div class="dr-run-note" style="margin-top:6px">
+        Off = that channel is skipped entirely. On = the planner decides how hard to use it.
+        ${allOff ? '<span style="color:#ff8888"> — all channels are off; the run will have nothing to search.</span>' : ''}
+      </div>`;
+  }
+  function drToggleChannel(k, v) { _dr.channels[k] = v; _drRender(); }
+
+  function drHandleDrop(e) {
+    e.preventDefault();
+    document.getElementById('dr-drop')?.classList.remove('pd-drop-active');
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) { _dr.files = _dr.files.concat(files); _drRender(); }
+  }
+  function drHandleFile(input) {
+    const files = Array.from(input.files);
+    if (files.length) { _dr.files = _dr.files.concat(files); _drRender(); }
+  }
+  function drRemoveFile(i) { _dr.files.splice(i, 1); _drRender(); }
+
+  function drClear() { drReset(); renderContent(activeTool); }
+
+  function _drResultsHtml() {
+    const d = _dr.data;
+    if (!d || !d.report_md) return '<div style="color:var(--text-muted);padding:20px">No report available.</div>';
+    const reportHtml = (typeof marked !== 'undefined') ? marked.parse(d.report_md) : d.report_md.replace(/\n/g, '<br>');
+    const srcCount = (d.sources && d.sources.length) || d.source_count || 0;
+    return `
+      <div class="vc-memo-outer">
+        <div class="vc-memo-toolbar">
+          <div class="vc-memo-files">
+            <strong style="color:var(--text-secondary)">Question:</strong> ${_esc(d.query || _dr.query)}
+            ${srcCount ? ` &nbsp;·&nbsp; ${srcCount} source${srcCount > 1 ? 's' : ''} reviewed` : ''}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${d.docx_b64 ? `<button class="vc-memo-download" onclick="drDownloadDocx()">💾 Save &amp; open in Word</button>` : ''}
+          </div>
+        </div>
+        <div class="vc-memo-body">${reportHtml}</div>
+      </div>
+      ${_drDeeperPanel()}`;
+  }
+
+  function _drDeeperPanel() {
+    if (!_dr.deeperOpen) {
+      return `
+        <div class="dr-deeper-cta">
+          <div>
+            <div class="dr-deeper-cta-title">Go deeper?</div>
+            <div class="dr-deeper-cta-sub">Re-run the full research with this memo as context —
+              restate or sharpen the question and add any new materials to push the next pass further.</div>
+          </div>
+          <button class="dr-run-btn" onclick="drGoDeeperOpen()">Go deeper →</button>
+        </div>`;
+    }
+    const depths = [
+      { id:'quick',    label:'Quick',    sub:'a handful of sources' },
+      { id:'standard', label:'Standard', sub:'balanced fan-out' },
+      { id:'deep',     label:'Deep',     sub:'exhaustive, verified' },
+    ];
+    const chips = depths.map(o => `
+      <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
+              onclick="drSetDepth('${o.id}')">
+        <span class="dr-chip-label">${o.label}</span>
+        <span class="dr-chip-sub">${o.sub}</span>
+      </button>`).join('');
+    const fileList = _dr.deeperFiles.length
+      ? `<div class="dr-filelist">${_dr.deeperFiles.map((f,i) =>
+          `<span class="dr-file-tag ${f._memo?'dr-file-memo':''}">${f._memo?'📄 ':''}${_esc(f.name)}<button onclick="drDeeperRemoveFile(${i})" title="Remove">✕</button></span>`).join('')}</div>`
+      : '';
+    return `
+      <div class="dr-deeper-box">
+        <div class="dr-refine-head">Go deeper</div>
+        <div class="dr-refine-sub">The full research process re-runs with the materials below folded in as
+          context. Restate or modify the question, then drop in any additional materials.</div>
+
+        <label class="dr-label" style="margin-top:8px">Research question</label>
+        <textarea id="dr-deeper-query" class="dr-textarea" rows="3"
+          placeholder="Restate or sharpen the original question…"
+          oninput="_dr.deeperQuery = this.value">${_esc(_dr.deeperQuery)}</textarea>
+
+        <label class="dr-label" style="margin-top:16px">Depth</label>
+        <div class="dr-chips">${chips}</div>
+
+        ${_drChannelsHtml()}
+
+        <div class="dr-attach-head" style="margin-top:20px">
+          <div class="dr-attach-title">Materials &amp; context</div>
+          <div class="dr-attach-sub">The prior report is included automatically. Add documents, files,
+            decks, or notes — anything to ground and extend the next pass.</div>
+        </div>
+        <div class="pd-dropzone dr-drop-compact" id="dr-deeper-drop"
+             ondragover="event.preventDefault();this.classList.add('pd-drop-active')"
+             ondragleave="this.classList.remove('pd-drop-active')"
+             ondrop="drDeeperHandleDrop(event)">
+          <div class="pd-drop-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <div class="pd-drop-title">Drag &amp; drop materials</div>
+          <div class="pd-drop-sub">PDF, Excel, Word, PowerPoint, text — any document</div>
+          <label class="pd-drop-btn" style="background:var(--ws-color, var(--admin-color))">
+            Browse files
+            <input type="file" multiple style="display:none" onchange="drDeeperHandleFile(this)">
+          </label>
+          ${fileList}
+        </div>
+
+        <div class="dr-run-row" style="margin-top:16px">
+          <button class="dr-run-btn" onclick="drRunDeeper()">Re-run deeper →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drGoDeeperClose()">Cancel</button>
+        </div>
+      </div>`;
+  }
+
+  function drGoDeeperOpen() {
+    const d = _dr.data || {};
+    const md = d.report_md || '';
+    _dr.deeperFiles = (_dr.files || []).filter(f => f && !f._memo);
+    if (md) {
+      const memo = new File([md], 'prior_research_memo.md', { type: 'text/markdown' });
+      try { memo._memo = true; } catch (_) {}
+      _dr.deeperFiles.push(memo);
+    }
+    _dr.deeperQuery = d.query || _dr.query || '';
+    _dr.deeperOpen = true;
+    _drRender();
+  }
+  function drGoDeeperClose() { _dr.deeperOpen = false; _drRender(); }
+  function drDeeperHandleDrop(e) {
+    e.preventDefault();
+    document.getElementById('dr-deeper-drop')?.classList.remove('pd-drop-active');
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) { _dr.deeperFiles = _dr.deeperFiles.concat(files); _drRender(); }
+  }
+  function drDeeperHandleFile(input) {
+    const files = Array.from(input.files);
+    if (files.length) { _dr.deeperFiles = _dr.deeperFiles.concat(files); _drRender(); }
+  }
+  function drDeeperRemoveFile(i) { _dr.deeperFiles.splice(i, 1); _drRender(); }
+
+  function drRunDeeper() {
+    const ta = document.getElementById('dr-deeper-query');
+    const q = ((ta && ta.value) || _dr.deeperQuery || '').trim();
+    if (!q) { if (ta) { ta.focus(); ta.classList.add('dr-textarea-err'); setTimeout(()=>ta.classList.remove('dr-textarea-err'),1200);} return; }
+    _dr.query = q;
+    _dr.files = _dr.deeperFiles.slice();
+    ++_dr.gen;
+    _dr.data = null;
+    _dr.deeperOpen = false;
+    drStartJob('');
+  }
+
+  function drDownloadDocx() {
+    const d = _dr.data; if (!d || !d.docx_b64) return;
+    saveAndOpen(d.docx_b64, d.query || _dr.query, 'Deep Research', 'Deep Research — Report.docx');
+  }
+
+  function _drShell(inner) {
+    return `
+      <div class="tool-content pd-outer">
+        <div class="pd-header-row">
+          <div><div class="ha-eyebrow">Web Research</div><div class="ha-title">Deep Research</div></div>
+        </div>
+        ${inner}</div>`;
+  }
+
+  function _drErrorNote(msg) {
+    const main = document.getElementById('ws-main-inner');
+    if (!main) return;
+    const isKey = msg && msg.includes('ANTHROPIC_API_KEY');
+    main.innerHTML = _drShell(`
+      <div class="pd-dropzone" id="dr-drop" style="cursor:default">
+        <div class="pd-drop-title">Research could not run</div>
+        <div style="margin:14px auto 0;padding:12px 16px;border-radius:8px;background:rgba(255,85,85,.08);
+             border:1px solid rgba(255,85,85,.3);font-size:11.5px;color:#ff8888;max-width:600px;text-align:left;line-height:1.7">
+          ${isKey
+            ? `<strong>API key not configured.</strong> Add <code>ANTHROPIC_API_KEY</code> to the .env file, then restart the server.`
+            : `<pre style="white-space:pre-wrap;font-family:monospace;font-size:10.5px;margin:0">${_esc(msg)}</pre>`}
+        </div>
+        <button class="dr-run-btn" style="margin-top:16px" onclick="drClear()">← Back</button>
+      </div>`);
+  }
+
+  function _drSourcesPanel() {
+    const open = _dr.srcOpen;
+    let inner;
+    if (!open) {
+      inner = '';
+    } else if (_dr.sources === null) {
+      inner = `<div class="dr-src-body"><div class="dr-src-loading">Loading sources…</div></div>`;
+    } else {
+      const vault = _dr.vaultDomains || [];
+      const rows = _dr.sources.map((s, i) => {
+        const dom = (s.domain||'').trim().toLowerCase();
+        const hasCred = dom && vault.some(d => dom === d || dom.endsWith('.'+d) || d.endsWith('.'+dom));
+        const lock = !dom ? `<span class="dr-lock-na" title="Enter a domain first">·</span>`
+          : `<button class="dr-lock ${hasCred?'on':''}" onclick="drToggleCred(${i})"
+                 title="${hasCred?'Credentials stored — click to edit/remove':'Store a login for this source'}">${hasCred?'🔒':'🔑'}</button>`;
+        const editor = (_dr.credOpenIdx === i && dom) ? `
+          <tr class="dr-cred-edit-row"><td colspan="7">
+            <div class="dr-cred-edit">
+              <div class="dr-cred-edit-title">Login for <strong>${_esc(dom)}</strong>
+                <span class="dr-src-note" style="margin:0"> — saved to your encrypted local vault; makes this a Stage 3 source.</span></div>
+              <input class="dr-src-in" id="dr-cred-u-${i}" placeholder="username / email">
+              <input class="dr-src-in" id="dr-cred-p-${i}" type="password" placeholder="password">
+              <input class="dr-src-in" id="dr-cred-l-${i}" placeholder="login URL (optional)" value="${_esc(s.search_url&&s.search_url.includes('login')?s.search_url:'')}">
+              <div class="dr-src-actions" style="margin-top:8px">
+                <button class="dr-src-btn dr-src-save" onclick="drSaveCred(${i})">Save login</button>
+                ${hasCred?`<button class="dr-src-btn" onclick="drRemoveCred(${i})">Remove</button>`:''}
+                <button class="dr-src-btn" onclick="drToggleCred(-1)">Cancel</button>
+                <span id="dr-cred-msg-${i}" class="dr-src-msg"></span>
+              </div>
+            </div>
+          </td></tr>` : '';
+        return `
+          <tr>
+            <td><input class="dr-src-in" value="${_esc(s.name||'')}"    onchange="drEditSource(${i},'name',this.value)" placeholder="Name"></td>
+            <td><input class="dr-src-in" value="${_esc(s.domain||'')}"  onchange="drEditSource(${i},'domain',this.value)" placeholder="domain.com"></td>
+            <td><input class="dr-src-in" value="${_esc(s.type||'')}"    onchange="drEditSource(${i},'type',this.value)" placeholder="forum"></td>
+            <td class="dr-src-desc-td"><input class="dr-src-in dr-src-desc" value="${_esc(s.description||'')}" onchange="drEditSource(${i},'description',this.value)" placeholder="What subject matter this site covers" title="${_esc(s.description||'')}"></td>
+            <td style="text-align:center"><input type="checkbox" ${s.enabled!==false?'checked':''} onchange="drEditSource(${i},'enabled',this.checked)"></td>
+            <td style="text-align:center">${lock}</td>
+            <td style="text-align:center"><button class="dr-src-del" onclick="drRemoveSource(${i})" title="Remove">✕</button></td>
+          </tr>${editor}`;
+      }).join('');
+      inner = `
+        <div class="dr-src-body">
+          <table class="dr-src-table">
+            <thead><tr><th>Name</th><th>Domain</th><th>Type</th><th>Description</th><th>On</th><th>Login</th><th></th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="7" style="color:var(--text-muted);padding:10px">No sources yet.</td></tr>'}</tbody>
+          </table>
+          <div class="dr-src-actions">
+            <button class="dr-src-btn" onclick="drAddSource()">+ Add source</button>
+            <button class="dr-src-btn dr-src-save" onclick="drSaveSources()">Save sources</button>
+            <span id="dr-src-msg" class="dr-src-msg"></span>
+          </div>
+          <div class="dr-src-note">A seed list, not a fence — the agent also follows relevant forums/sites it discovers.
+            🔑 = store a login (saved encrypted; becomes a Stage 3 credentialed source). 🔒 = login stored.</div>
+        </div>`;
+    }
+    return `
+      <div class="dr-src-panel">
+        <button class="dr-src-head" onclick="drToggleSources()">
+          <span>${open ? '▾' : '▸'} Sources the agent sweeps</span>
+          <span class="dr-src-count">${_dr.sources ? _dr.sources.length + ' configured' : 'Reddit, Substack…'}</span>
+        </button>
+        ${inner}
+      </div>`;
+  }
+  async function drToggleSources() {
+    _dr.srcOpen = !_dr.srcOpen;
+    if (_dr.srcOpen && _dr.sources === null) { _drRender(); await drLoadSources(); }
+    _drRender();
+  }
+  async function drLoadSources() {
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/sources`);
+      const j = await r.json();
+      _dr.sources = Array.isArray(j.sources) ? j.sources : [];
+    } catch { _dr.sources = []; }
+    await drLoadVault();
+  }
+  async function drLoadVault() {
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/vault`);
+      const j = await r.json();
+      _dr.vaultDomains = Array.isArray(j.domains) ? j.domains : [];
+    } catch { _dr.vaultDomains = []; }
+  }
+  function drEditSource(i, k, v) {
+    if (!_dr.sources[i]) return;
+    _dr.sources[i][k] = v;
+    if (k === 'domain') _drRender();
+  }
+  function drToggleCred(i) { _dr.credOpenIdx = (_dr.credOpenIdx === i) ? -1 : i; _drRender(); }
+  async function drSaveCred(i) {
+    const s = _dr.sources[i]; if (!s) return;
+    const dom = (s.domain||'').trim().toLowerCase();
+    const msg = document.getElementById('dr-cred-msg-'+i);
+    const username = (document.getElementById('dr-cred-u-'+i)||{}).value || '';
+    const password = (document.getElementById('dr-cred-p-'+i)||{}).value || '';
+    const login_url = (document.getElementById('dr-cred-l-'+i)||{}).value || '';
+    if (!username.trim()) { if (msg){ msg.textContent='Username required'; msg.style.color='#ff8888'; } return; }
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/vault`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ domain:dom, username, password, login_url }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error||'save failed');
+      _dr.vaultDomains = j.domains || _dr.vaultDomains;
+      _dr.credOpenIdx = -1; _drRender();
+    } catch (e) { if (msg){ msg.textContent='Save failed: '+e.message; msg.style.color='#ff8888'; } }
+  }
+  async function drRemoveCred(i) {
+    const s = _dr.sources[i]; if (!s) return;
+    const dom = (s.domain||'').trim().toLowerCase();
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/vault`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ domain:dom, delete:true }) });
+      const j = await r.json();
+      _dr.vaultDomains = j.domains || [];
+      _dr.credOpenIdx = -1; _drRender();
+    } catch (_) {}
+  }
+  function drAddSource() {
+    _dr.sources = _dr.sources || [];
+    _dr.sources.push({ name:'', domain:'', type:'forum', enabled:true, description:'' });
+    _drRender();
+  }
+  function drRemoveSource(i) { _dr.sources.splice(i, 1); _drRender(); }
+  async function drSaveSources() {
+    const msg = document.getElementById('dr-src-msg');
+    try {
+      const clean = (_dr.sources||[]).filter(s => (s.domain||'').trim());
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/sources`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ sources: clean }) });
+      const j = await r.json();
+      if (msg) { msg.textContent = `✓ Saved ${j.count} source${j.count!==1?'s':''}`; msg.style.color = 'var(--admin-color)'; }
+    } catch (e) {
+      if (msg) { msg.textContent = 'Save failed: ' + e.message; msg.style.color = '#ff8888'; }
+    }
+  }
+
+  async function drRun(skipClarify) {
+    const q = (_dr.query || '').trim();
+    if (!q) {
+      const ta = document.getElementById('dr-query');
+      if (ta) { ta.focus(); ta.classList.add('dr-textarea-err'); setTimeout(() => ta.classList.remove('dr-textarea-err'), 1200); }
+      return;
+    }
+    const myGen = ++_dr.gen;
+    const main = document.getElementById('ws-main-inner');
+    main.innerHTML = _drShell(`
+      <div class="pd-dropzone" style="cursor:default">
+        <div class="pd-spinner"></div>
+        <div class="pd-drop-title">Connecting to local server…</div>
+      </div>`);
+
+    let alive = await _pdAlive();
+    if (!alive) {
+      _pdFireProtocol();
+      for (let i = 0; i < Math.ceil(PERF_WAIT_SEC / 1.5); i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        alive = await _pdAlive();
+        if (alive) break;
+      }
+    }
+    if (myGen !== _dr.gen) return;
+    if (!alive) { _drErrorNote('Could not reach the local server (dr_server.py on :5006). Start it from the Special Projects hub, then try again.'); return; }
+
+    if (!skipClarify) {
+      main.innerHTML = _drShell(`
+        <div class="pd-dropzone" style="cursor:default">
+          <div class="pd-spinner"></div>
+          <div class="pd-drop-title">Scoping the question…</div>
+        </div>`);
+      try {
+        const fd = new FormData(); fd.append('query', q);
+        const r = await fetch(`${PERF_SERVER}/api/deep_research/clarify`, { method:'POST', body: fd });
+        const j = await r.json();
+        if (myGen !== _dr.gen) return;
+        if (j.needs_clarification && (j.questions||[]).length) {
+          _dr.clarify = j.questions; _dr.clarAns = {};
+          main.innerHTML = _drShell(_drClarifyHtml(j.questions));
+          return;
+        }
+      } catch (_) { /* clarify is best-effort */ }
+    }
+    drStartJob('');
+  }
+
+  function _drClarifyHtml(questions) {
+    const fields = questions.map((qq, i) => `
+      <div class="dr-clar-q">
+        <label class="dr-label">${_esc(qq)}</label>
+        <input class="dr-textarea" style="font-size:13px" oninput="_dr.clarAns[${i}]=this.value"
+               value="${_esc(_dr.clarAns[i]||'')}" placeholder="Your answer (optional)">
+      </div>`).join('');
+    return `
+      <div class="dr-query-block">
+        <div class="dr-clar-head">A few quick questions to sharpen the search</div>
+        <div class="dr-clar-sub">Answer what you can — blanks are fine. Or skip and research as written.</div>
+        ${fields}
+        <div class="dr-run-row">
+          <button class="dr-run-btn" onclick="drSubmitClarify()">Research with these →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drStartJob('')">Skip &amp; research anyway</button>
+        </div>
+      </div>`;
+  }
+  function drSubmitClarify() {
+    const qs = _dr.clarify || [];
+    const lines = qs.map((qq, i) => {
+      const a = (_dr.clarAns[i]||'').trim();
+      return a ? `Q: ${qq}\nA: ${a}` : '';
+    }).filter(Boolean);
+    drStartJob(lines.join('\n\n'));
+  }
+
+  async function drStartJob(clarifications, extra) {
+    const myGen = _dr.gen;
+    _dr.credShown = false; _dr.credInputs = {}; _dr.skipReqStage = null;
+    const q = (_dr.query || '').trim();
+    const main = document.getElementById('ws-main-inner');
+
+    const form = new FormData();
+    form.append('query', q);
+    form.append('depth', _dr.depth);
+    if (clarifications) form.append('clarifications', clarifications);
+    if (extra && extra.refinement)  form.append('refinement', extra.refinement);
+    if (extra && extra.prior_report) form.append('prior_report', extra.prior_report);
+    for (const f of _dr.files) form.append('files', f);
+    const memoF = _dr.files.find(f => f && f._memo);
+    if (memoF) form.append('memo_filename', memoF.name);
+    form.append('channels', JSON.stringify(_dr.channels || {}));
+    const ctrl = new AbortController();
+    _dr.abort = ctrl;
+
+    let job;
+    try {
+      const resp = await fetch(`${PERF_SERVER}/api/deep_research`, { method: 'POST', body: form, signal: ctrl.signal });
+      job = await resp.json();
+      if (myGen !== _dr.gen) return;
+      if (!resp.ok) throw new Error(job.error || `Server error ${resp.status}`);
+    } catch (err) {
+      if (err.name === 'AbortError' || myGen !== _dr.gen) return;
+      _dr.abort = null; _drErrorNote(err.message); return;
+    }
+    const stages = job.stages || ['stage1','stage2','stage3','stage4','synthesize','report'];
+    const jobId = job.job_id;
+    _dr.jobId = jobId;
+    const t0 = Date.now();
+
+    main.innerHTML = _drShell(_drProgressHtml(stages, stages[0], null, 'Starting…', t0));
+    while (true) {
+      if (myGen !== _dr.gen) return;
+      await new Promise(r => setTimeout(r, 1500));
+      if (myGen !== _dr.gen) return;
+      let st;
+      try {
+        const r = await fetch(`${PERF_SERVER}/api/deep_research/status?job=${jobId}`, { signal: ctrl.signal });
+        st = await r.json();
+        if (!r.ok) throw new Error(st.error || `status ${r.status}`);
+      } catch (err) {
+        if (err.name === 'AbortError' || myGen !== _dr.gen) return;
+        _dr.abort = null; _drErrorNote(err.message); return;
+      }
+      if (myGen !== _dr.gen) return;
+      if (st.error) { _dr.abort = null; _drErrorNote(st.error); return; }
+      if (st.done)  { _dr.abort = null; _dr.data = st.result; renderContent(activeTool); return; }
+      const el = document.getElementById('ws-main-inner');
+      if (!el) continue;
+      if (st.awaiting_credentials && st.awaiting_credentials.length) {
+        if (!_dr.credShown) {
+          _dr.credShown = true;
+          _dr.credInputs = {};
+          el.innerHTML = _drShell(_drCredentialsHtml(st.awaiting_credentials));
+        }
+      } else {
+        _dr.credShown = false;
+        el.innerHTML = _drShell(_drProgressHtml(stages, st.stage, st.pct, st.message, t0));
+      }
+    }
+  }
+
+  function _drCredentialsHtml(candidates) {
+    const rows = candidates.map((c, i) => `
+      <div class="dr-cred-row">
+        <div class="dr-cred-site">
+          <div class="dr-cred-domain">${_esc(c.domain)}</div>
+          <div class="dr-cred-reason">${_esc(c.reason || 'login required')}</div>
+        </div>
+        <div class="dr-cred-fields">
+          <input class="dr-src-in" placeholder="username / email"
+                 oninput="drCredSet(${i},'${_esc(c.domain)}','username',this.value)">
+          <input class="dr-src-in" type="password" placeholder="password"
+                 oninput="drCredSet(${i},'${_esc(c.domain)}','password',this.value)">
+          <input class="dr-src-in" placeholder="login URL (optional)"
+                 oninput="drCredSet(${i},'${_esc(c.domain)}','login_url',this.value)">
+        </div>
+      </div>`).join('');
+    return `
+      <div class="dr-query-block">
+        <div class="dr-clar-head">Log in to ${candidates.length} gated source${candidates.length>1?'s':''}?</div>
+        <div class="dr-clar-sub">The agent found these behind a login/paywall and judged them worth pursuing.
+          Enter credentials for any you want it to access (saved to your encrypted local vault for next time),
+          or skip. Sites needing 2FA/captcha are skipped automatically.</div>
+        <div class="dr-cred-list">${rows}</div>
+        <div class="dr-run-row">
+          <button class="dr-run-btn" onclick="drSubmitCredentials()">Log in &amp; finish →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drSkipAllCredentials()">Skip all</button>
+        </div>
+      </div>`;
+  }
+  function drCredSet(i, domain, field, val) {
+    _dr.credInputs = _dr.credInputs || {};
+    (_dr.credInputs[domain] = _dr.credInputs[domain] || {})[field] = val;
+  }
+  async function drSubmitCredentials() {
+    const payload = {};
+    const inp = _dr.credInputs || {};
+    Object.keys(inp).forEach(dom => {
+      const c = inp[dom];
+      payload[dom] = (c && (c.username||'').trim()) ? c : null;
+    });
+    await _drSendCredentials(payload);
+  }
+  function drSkipAllCredentials() { _drSendCredentials({}); }
+  async function _drSendCredentials(credentials) {
+    const jobId = _dr.jobId;
+    if (!jobId) return;
+    _dr.credShown = false;
+    const main = document.getElementById('ws-main-inner');
+    if (main) main.innerHTML = _drShell(`<div class="pd-dropzone" style="cursor:default"><div class="pd-spinner"></div><div class="pd-drop-title">Logging in &amp; finishing…</div></div>`);
+    try {
+      await fetch(`${PERF_SERVER}/api/deep_research/credentials?job=${jobId}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ credentials }) });
+    } catch (_) {}
+  }
+
+  const DR_STAGE_LABELS = {
+    stage1: 'Claude web search',
+    stage2: 'Browser search engines',
+    stage3: 'Credentialed sources',
+    stage4: 'Gated sources (login)',
+    synthesize: 'Extract & synthesize report',
+    report: 'Assemble report',
+  };
+
+  function _drProgressHtml(stages, cur, pct, message, t0) {
+    const curIdx = stages.indexOf(cur);
+    const rows = stages.map((s, i) => {
+      const cls = i < curIdx ? 'done' : (i === curIdx ? 'active' : 'pending');
+      const ic  = cls === 'done' ? '✓' : (cls === 'active' ? '<span class="mn-mini-spin"></span>' : '○');
+      const detail = (cls === 'active' && message) ? `<span class="mn-stage-detail">${_esc(message)}</span>` : '';
+      return `<div class="mn-stage ${cls}"><span class="mn-stage-ic">${ic}</span>
+                <span class="mn-stage-label">${DR_STAGE_LABELS[s] || s}</span>${detail}</div>`;
+    }).join('');
+    const bar = (typeof pct === 'number')
+      ? `<div class="mn-bar-fill" style="width:${pct}%"></div>`
+      : `<div class="mn-bar-fill mn-bar-indet"></div>`;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const elapsed = `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    const canSkip = ['stage2','stage3','stage4'].includes(cur) && _dr.skipReqStage !== cur;
+    const skipBtn = canSkip
+      ? `<button class="dr-skip-btn" onclick="drSkipStage('${cur}')">Skip this stage →</button>`
+      : (_dr.skipReqStage === cur ? `<div class="dr-skip-note">Wrapping up this stage…</div>` : '');
+    return `
+      <div class="mn-progress">
+        <div class="mn-progress-title">Researching…</div>
+        <div class="mn-stages">${rows}</div>
+        <div class="mn-bar">${bar}</div>
+        <div class="mn-elapsed">elapsed ${elapsed}</div>
+        ${skipBtn}
+      </div>`;
+  }
+  async function drSkipStage(stage) {
+    if (!_dr.jobId) return;
+    _dr.skipReqStage = stage;
+    const el = document.getElementById('ws-main-inner');
+    const b = el && el.querySelector('.dr-skip-btn');
+    if (b) { b.outerHTML = '<div class="dr-skip-note">Wrapping up this stage…</div>'; }
+    try {
+      await fetch(`${PERF_SERVER}/api/deep_research/skip_stage?job=${_dr.jobId}`, { method:'POST' });
+    } catch (_) {}
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     ODYSSEUS RESEARCH — sub-tool (A/B comparison engine). Lifted from the
+     DDDD platform. Reuses Deep Research's controls/styles; renders into its
+     OWN #or-main-inner so the two views are independent (a run in one view
+     keeps updating even while the other is shown).
+     ════════════════════════════════════════════════════════════════════ */
+  const _or = { data: null, abort: null, gen: 0, query: '', rounds: 4, jobId: null };
+
+  function orReset() {
+    if (_or.abort) { try { _or.abort.abort(); } catch (_) {} _or.abort = null; }
+    _or.gen++; _or.data = null; _or.jobId = null;
+  }
+  function orClear() { orReset(); _orRender(); }
+  function orSetRounds(n) { _or.rounds = n; _orRender(); }
+
+  function _orRender() {
+    const d = _or.data;
+    document.getElementById('or-main-inner').innerHTML = `
+      <div class="tool-content pd-outer">
+        <div class="pd-header-row">
+          <div><div class="ha-eyebrow">Comparison Engine</div>
+               <div class="ha-title">Odysseus Research</div></div>
+          ${d ? `<button class="pd-clear-btn" onclick="orClear()">✕ Clear</button>` : ''}
+        </div>
+        ${d ? _orResultsHtml() : _orForm()}
+      </div>`;
+  }
+
+  function _orForm() {
+    const tiers = [
+      { n:2, label:'Quick',    sub:'2 rounds' },
+      { n:4, label:'Standard', sub:'4 rounds' },
+      { n:8, label:'Deep',     sub:'8 rounds' },
+    ];
+    const chips = tiers.map(t => `
+      <button type="button" class="dr-chip ${_or.rounds===t.n?'active':''}" onclick="orSetRounds(${t.n})">
+        <span class="dr-chip-label">${t.label}</span><span class="dr-chip-sub">${t.sub}</span>
+      </button>`).join('');
+    return `
+      <div class="dr-query-block">
+        <div class="dr-run-note" style="margin:0 0 14px">Vendored <strong>Odysseus / Alibaba IterResearch</strong>
+          engine (headless: DuckDuckGo + page-fetch), running on the same Claude model as Deep Research — here to
+          A/B the <em>methodology</em>. Note: it can't log into gated sites or be watched in a browser (that's Deep Research's edge).</div>
+        <label class="dr-label">Research question</label>
+        <textarea id="or-query" class="dr-textarea" rows="3"
+          placeholder="Same kind of question you'd give Deep Research — e.g. background, reputation, and recent news on [a person, company, or topic]."
+          oninput="_or.query = this.value">${_esc(_or.query)}</textarea>
+        <label class="dr-label" style="margin-top:18px">Depth (rounds)</label>
+        <div class="dr-chips">${chips}</div>
+        <button class="dr-run-btn" onclick="orRun()">Run Odysseus Research →</button>
+      </div>`;
+  }
+
+  function _orResultsHtml() {
+    const d = _or.data;
+    if (!d || !d.report_md) return '<div style="color:var(--text-muted);padding:20px">No report produced.</div>';
+    const html = (typeof marked !== 'undefined') ? marked.parse(d.report_md) : d.report_md.replace(/\n/g,'<br>');
+    const s = d.stats || {};
+    const statline = Object.keys(s).map(k => `<strong style="color:var(--text-secondary)">${_esc(k)}:</strong> ${_esc(String(s[k]))}`).join(' &nbsp;·&nbsp; ');
+    return `
+      <div class="vc-memo-outer">
+        <div class="vc-memo-toolbar">
+          <div class="vc-memo-files"><strong style="color:var(--text-secondary)">Question:</strong> ${_esc(d.query || _or.query)}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${d.docx_b64 ? `<button class="vc-memo-download" onclick="orDownloadDocx()">💾 Save &amp; open in Word</button>` : ''}
+          </div>
+        </div>
+        ${statline ? `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px">${statline}</div>` : ''}
+        <div class="vc-memo-body">${html}</div>
+      </div>`;
+  }
+
+  function orDownloadDocx() {
+    const d = _or.data; if (!d || !d.docx_b64) return;
+    saveAndOpen(d.docx_b64, d.query || _or.query, 'Odysseus', 'Odysseus Research — Report.docx');
+  }
+
+  function _orShell(inner) {
+    return `<div class="tool-content pd-outer"><div class="pd-header-row">
+        <div><div class="ha-eyebrow">Comparison Engine</div><div class="ha-title">Odysseus Research</div></div>
+      </div>${inner}</div>`;
+  }
+  function _orErr(msg) {
+    const m = document.getElementById('or-main-inner'); if (!m) return;
+    const isKey = msg && msg.includes('ANTHROPIC_API_KEY');
+    m.innerHTML = _orShell(`<div class="pd-dropzone" style="cursor:default">
+      <div class="pd-drop-title">Odysseus run failed</div>
+      <div style="margin:14px auto 0;padding:12px 16px;border-radius:8px;background:rgba(255,85,85,.08);
+           border:1px solid rgba(255,85,85,.3);font-size:11.5px;color:#ff8888;max-width:600px;text-align:left;line-height:1.7">
+        ${isKey ? '<strong>API key not configured.</strong> Add ANTHROPIC_API_KEY to .env and restart the server.'
+                : `<pre style="white-space:pre-wrap;font-family:monospace;font-size:10.5px;margin:0">${_esc(msg)}</pre>`}</div>
+      <button class="dr-run-btn" style="margin-top:16px" onclick="orClear()">← Back</button></div>`);
+  }
+  function _orProgressHtml(message, stats, t0) {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const elapsed = `${Math.floor(secs/60)}m ${secs%60}s`;
+    const bits = [];
+    if (stats && stats.round) bits.push(`round ${stats.round}`);
+    if (stats && stats.sources != null) bits.push(`${stats.sources} sources`);
+    if (stats && stats.findings != null) bits.push(`${stats.findings} findings`);
+    return `<div class="pd-dropzone" style="cursor:default">
+        <div class="pd-spinner"></div>
+        <div class="pd-drop-title">${_esc(message || 'Researching…')}</div>
+        <div class="pd-drop-sub">${bits.join(' · ')}${bits.length?' · ':''}elapsed ${elapsed}</div>
+      </div>`;
+  }
+
+  async function orRun() {
+    const q = (_or.query || '').trim();
+    if (!q) { const t = document.getElementById('or-query');
+      if (t) { t.focus(); t.classList.add('dr-textarea-err'); setTimeout(()=>t.classList.remove('dr-textarea-err'),1200);} return; }
+    const myGen = ++_or.gen;
+    const main = document.getElementById('or-main-inner');
+    main.innerHTML = _orShell(`<div class="pd-dropzone" style="cursor:default"><div class="pd-spinner"></div><div class="pd-drop-title">Connecting to local server…</div></div>`);
+    let alive = await _pdAlive();
+    if (!alive) { _pdFireProtocol();
+      for (let i=0;i<Math.ceil(PERF_WAIT_SEC/1.5);i++){ await new Promise(r=>setTimeout(r,1500)); alive=await _pdAlive(); if(alive)break; } }
+    if (myGen !== _or.gen) return;
+    if (!alive) { _orErr('Could not reach the local server (dr_server.py on :5006). Start it from the Special Projects hub, then try again.'); return; }
+
+    const form = new FormData();
+    form.append('query', q); form.append('max_rounds', String(_or.rounds));
+    const ctrl = new AbortController(); _or.abort = ctrl;
+    let job;
+    try {
+      const resp = await fetch(`${PERF_SERVER}/api/odysseus_research`, { method:'POST', body:form, signal:ctrl.signal });
+      job = await resp.json();
+      if (myGen !== _or.gen) return;
+      if (!resp.ok) throw new Error(job.error || `Server error ${resp.status}`);
+    } catch (err) { if (err.name==='AbortError'||myGen!==_or.gen) return; _or.abort=null; _orErr(err.message); return; }
+    _or.jobId = job.job_id; const t0 = Date.now();
+    main.innerHTML = _orShell(_orProgressHtml('Starting Odysseus engine…', {}, t0));
+    while (true) {
+      if (myGen !== _or.gen) return;
+      await new Promise(r => setTimeout(r, 2000));
+      if (myGen !== _or.gen) return;
+      let st;
+      try {
+        const r = await fetch(`${PERF_SERVER}/api/odysseus_research/status?job=${_or.jobId}`, { signal: ctrl.signal });
+        st = await r.json();
+        if (!r.ok) throw new Error(st.error || `status ${r.status}`);
+      } catch (err) { if (err.name==='AbortError'||myGen!==_or.gen) return; _or.abort=null; _orErr(err.message); return; }
+      if (myGen !== _or.gen) return;
+      if (st.error) { _or.abort=null; _orErr(st.error); return; }
+      if (st.done) { _or.abort=null; _or.data = st.result; _orRender(); return; }
+      const el = document.getElementById('or-main-inner');
+      if (el) el.innerHTML = _orShell(_orProgressHtml(st.message, st.stats, t0));
+    }
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     VERY VERY DEEP — sub-tool. Chains an Odysseus pre-pass into the full Deep
+     Research pipeline: one query at top, then Odysseus settings (rounds) +
+     Deep Research settings (depth, channels, docs). Backend runs Odysseus,
+     injects its findings + the query into Deep Research, returns the DR report.
+     ════════════════════════════════════════════════════════════════════ */
+  const _vvd = { data: null, abort: null, gen: 0, query: '', depth: 'standard', rounds: 4, files: [],
+                 channels: { api_search: true, web_engines: true, site_queries: true, neural_search: false },
+                 jobId: null, skipReqStage: null };
+
+  function vvdReset() {
+    if (_vvd.abort) { try { _vvd.abort.abort(); } catch (_) {} _vvd.abort = null; }
+    _vvd.gen++; _vvd.data = null; _vvd.files = []; _vvd.jobId = null; _vvd.skipReqStage = null;
+  }
+  function vvdClear() { vvdReset(); _vvdRender(); }
+  function vvdEgg() {  // little easter egg — restart + play on each Very Very Deep button press
+    var a = document.getElementById('vvd-egg'); if (!a) return;
+    try { a.currentTime = 0; a.volume = 0.7; var p = a.play(); if (p && p.catch) p.catch(function(){}); } catch (e) {}
+  }
+  function vvdSetRounds(n) { _vvd.rounds = n; _vvdRender(); }
+  function vvdSetDepth(id) { _vvd.depth = id; _vvdRender(); }
+  function vvdToggleChannel(k, v) { _vvd.channels[k] = v; _vvdRender(); }
+  function vvdHandleDrop(e) {
+    e.preventDefault(); document.getElementById('vvd-drop')?.classList.remove('pd-drop-active');
+    const f = Array.from(e.dataTransfer.files); if (f.length) { _vvd.files = _vvd.files.concat(f); _vvdRender(); }
+  }
+  function vvdHandleFile(input) { const f = Array.from(input.files); if (f.length) { _vvd.files = _vvd.files.concat(f); _vvdRender(); } }
+  function vvdRemoveFile(i) { _vvd.files.splice(i, 1); _vvdRender(); }
+
+  function _vvdShell(inner) {
+    return `<div class="tool-content pd-outer"><div class="pd-header-row">
+        <div><div class="ha-eyebrow">Chained Research</div><div class="ha-title">Very Very Deep</div></div>
+        ${_vvd.data ? `<button class="pd-clear-btn" onclick="vvdClear()">✕ Clear</button>` : ''}
+      </div>${inner}</div>`;
+  }
+  function _vvdRender() {
+    document.getElementById('vvd-main-inner').innerHTML = _vvdShell(_vvd.data ? _vvdResultsHtml() : _vvdForm());
+  }
+
+  function _vvdChannelsHtml() {
+    const items = [
+      { k:'api_search',    label:'Claude API search',  sub:'fast broad web search · uses API credits' },
+      { k:'web_engines',   label:'Open web engines',   sub:'DuckDuckGo · Brave · Google' },
+      { k:'site_queries',  label:'Curated sites',      sub:'your forum / blog source list + logins' },
+      { k:'neural_search', label:'Neural search (Exa)', sub:'semantic discovery · needs EXA_API_KEY + DRT_EXA=1' },
+    ];
+    const rows = items.map(it => `
+      <label class="dr-toggle ${_vvd.channels[it.k] ? 'on' : 'off'}">
+        <input type="checkbox" ${_vvd.channels[it.k] ? 'checked' : ''} onchange="vvdToggleChannel('${it.k}', this.checked)">
+        <span class="dr-toggle-sw"></span>
+        <span class="dr-toggle-txt"><span class="dr-toggle-label">${it.label}</span><span class="dr-toggle-sub">${it.sub}</span></span>
+      </label>`).join('');
+    return `<label class="dr-label" style="margin-top:18px">Pass 2 — Deep Research channels</label>
+      <div class="dr-toggle-row">${rows}</div>`;
+  }
+
+  function _vvdForm() {
+    const roundTiers = [
+      { n:2, label:'Quick',    sub:'2 rounds' },
+      { n:4, label:'Standard', sub:'4 rounds' },
+      { n:8, label:'Deep',     sub:'8 rounds' },
+    ];
+    const rchips = roundTiers.map(t => `
+      <button type="button" class="dr-chip ${_vvd.rounds===t.n?'active':''}" onclick="vvdSetRounds(${t.n})">
+        <span class="dr-chip-label">${t.label}</span><span class="dr-chip-sub">${t.sub}</span></button>`).join('');
+    const depths = [
+      { id:'quick',    label:'Quick',    sub:'a handful of sources' },
+      { id:'standard', label:'Standard', sub:'balanced fan-out' },
+      { id:'deep',     label:'Deep',     sub:'exhaustive, verified' },
+    ];
+    const dchips = depths.map(o => `
+      <button type="button" class="dr-chip ${_vvd.depth===o.id?'active':''}" onclick="vvdSetDepth('${o.id}')">
+        <span class="dr-chip-label">${o.label}</span><span class="dr-chip-sub">${o.sub}</span></button>`).join('');
+    const fileList = _vvd.files.length
+      ? `<div class="dr-filelist">${_vvd.files.map((f,i) =>
+          `<span class="dr-file-tag">${_esc(f.name)}<button onclick="vvdRemoveFile(${i})" title="Remove">✕</button></span>`).join('')}</div>` : '';
+    return `
+      <div class="dr-query-block">
+        <div class="dr-run-note" style="margin:0 0 16px">A <strong>two-pass</strong> deep dive: first a headless
+          <strong>Odysseus</strong> pass, then its findings + your question are injected into the full
+          <strong>Deep Research</strong> pipeline (browser-driven), which verifies and deepens them and writes the
+          final report per the Deep Research style guide. Runs unattended (the Deep Research pass auto-skips new
+          gated-login sources; stored logins still apply).</div>
+        <label class="dr-label">Research question</label>
+        <textarea id="vvd-query" class="dr-textarea" rows="3"
+          placeholder="One question drives both passes — e.g. background, track record, and any controversies around [a person, company, or topic]."
+          oninput="_vvd.query = this.value">${_esc(_vvd.query)}</textarea>
+
+        <label class="dr-label" style="margin-top:18px">Pass 1 — Odysseus depth (rounds)</label>
+        <div class="dr-chips">${rchips}</div>
+
+        <label class="dr-label" style="margin-top:18px">Pass 2 — Deep Research depth</label>
+        <div class="dr-chips">${dchips}</div>
+
+        ${_vvdChannelsHtml()}
+
+        <button class="dr-run-btn" onclick="vvdRun()">Run Very Very Deep →</button>
+        <div class="dr-run-note">Pass 2 opens a visible Chrome and searches the web live. This is the longest run —
+          two research passes back to back.</div>
+      </div>
+
+      <div class="dr-attach-head" style="margin-top:30px">
+        <div class="dr-attach-title">Supporting documents <span style="color:var(--text-muted);font-weight:400">(optional)</span></div>
+        <div class="dr-attach-sub">Drop documents, PDFs, decks, web pages, or notes — folded into the Deep Research pass alongside the Odysseus findings.</div>
+      </div>
+      <div class="pd-dropzone dr-drop-compact" id="vvd-drop"
+           ondragover="event.preventDefault();this.classList.add('pd-drop-active')"
+           ondragleave="this.classList.remove('pd-drop-active')" ondrop="vvdHandleDrop(event)">
+        <div class="pd-drop-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+        <div class="pd-drop-title">Drag &amp; drop supporting files</div>
+        <div class="pd-drop-sub">PDF, Excel, Word, PowerPoint, text — any document</div>
+        <label class="pd-drop-btn" style="background:var(--ws-color, var(--admin-color))">Browse files<input type="file" multiple style="display:none" onchange="vvdHandleFile(this)"></label>
+        ${fileList}
+      </div>`;
+  }
+
+  function _vvdResultsHtml() {
+    const d = _vvd.data;
+    if (!d || !d.report_md) return '<div style="color:var(--text-muted);padding:20px">No report produced.</div>';
+    const render = (md) => (typeof marked !== 'undefined') ? marked.parse(md) : md.replace(/\n/g,'<br>');
+    const srcCount = (d.sources && d.sources.length) || d.source_count || 0;
+    const os = d.odysseus_stats || {};
+    const odyLine = Object.keys(os).length ? `Odysseus pass: ${Object.keys(os).map(k=>`${_esc(k)} ${_esc(String(os[k]))}`).join(' · ')}` : '';
+    // Document 1 — the combined / edited Deep Research report
+    let out = `
+      <div class="vc-memo-outer">
+        <div class="vc-memo-toolbar">
+          <div class="vc-memo-files"><strong style="color:var(--text-secondary)">Document 1 · Combined research</strong> — Question: ${_esc(d.query || _vvd.query)}
+            ${srcCount ? ` &nbsp;·&nbsp; ${srcCount} source${srcCount>1?'s':''} reviewed (Deep Research pass)` : ''}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${d.docx_b64 ? `<button class="vc-memo-download" onclick="vvdDownloadDocx()">💾 Save combined → Word</button>` : ''}
+          </div>
+        </div>
+        ${odyLine ? `<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px">${odyLine}</div>` : ''}
+        <div class="vc-memo-body">${render(d.report_md)}</div>
+      </div>`;
+    // Document 2 — the Odysseus pre-research, on its own
+    if (d.odysseus_report_md) {
+      out += `
+      <div class="vc-memo-outer" style="margin-top:30px">
+        <div class="vc-memo-toolbar">
+          <div class="vc-memo-files"><strong style="color:var(--text-secondary)">Document 2 · Odysseus (standalone)</strong> — the headless Pass-1 pre-research, on its own</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${d.odysseus_docx_b64 ? `<button class="vc-memo-download" onclick="vvdDownloadOdysseus()">💾 Save Odysseus → Word</button>` : ''}
+          </div>
+        </div>
+        <div class="vc-memo-body">${render(d.odysseus_report_md)}</div>
+      </div>`;
+    }
+    return out;
+  }
+
+  function vvdDownloadDocx() {
+    const d = _vvd.data; if (!d || !d.docx_b64) return;
+    saveAndOpen(d.docx_b64, d.query || _vvd.query, 'Very Very Deep — Combined', 'Very Very Deep — Combined Report.docx');
+  }
+  function vvdDownloadOdysseus() {
+    const d = _vvd.data; if (!d || !d.odysseus_docx_b64) return;
+    saveAndOpen(d.odysseus_docx_b64, d.query || _vvd.query, 'Very Very Deep — Odysseus', 'Odysseus pre-research — Report.docx');
+  }
+
+  function _vvdErr(msg) {
+    const m = document.getElementById('vvd-main-inner'); if (!m) return;
+    const isKey = msg && msg.includes('ANTHROPIC_API_KEY');
+    m.innerHTML = _vvdShell(`<div class="pd-dropzone" style="cursor:default">
+      <div class="pd-drop-title">Very Very Deep run failed</div>
+      <div style="margin:14px auto 0;padding:12px 16px;border-radius:8px;background:rgba(255,85,85,.08);
+           border:1px solid rgba(255,85,85,.3);font-size:11.5px;color:#ff8888;max-width:600px;text-align:left;line-height:1.7">
+        ${isKey ? '<strong>API key not configured.</strong> Add ANTHROPIC_API_KEY to .env and restart the server.'
+                : `<pre style="white-space:pre-wrap;font-family:monospace;font-size:10.5px;margin:0">${_esc(msg)}</pre>`}</div>
+      <button class="dr-run-btn" style="margin-top:16px" onclick="vvdClear()">← Back</button></div>`);
+  }
+
+  function _vvdProgressHtml(st, t0) {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    const elapsed = `${Math.floor(secs/60)}m ${secs%60}s`;
+    const group = st.group || 'odysseus';
+    const p1done = group !== 'odysseus';
+    const passRow = (active, done, label, sub) =>
+      `<div class="mn-stage ${done?'done':(active?'active':'pending')}">
+         <span class="mn-stage-ic">${done?'✓':(active?'<span class="mn-mini-spin"></span>':'○')}</span>
+         <span class="mn-stage-label">${label}</span><span class="mn-stage-detail">${sub}</span></div>`;
+    let detail = '';
+    if (group === 'odysseus') {
+      const s = st.stats || {}; const bits = [];
+      if (s.round) bits.push(`round ${s.round}`);
+      if (s.sources != null) bits.push(`${s.sources} sources`);
+      if (s.findings != null) bits.push(`${s.findings} findings`);
+      detail = `<div class="pd-drop-sub" style="margin-top:14px;text-align:center">${_esc(st.message || 'Researching…')}${bits.length ? ' · ' + bits.join(' · ') : ''}</div>`;
+    } else {
+      const stages = st.stages || ['stage1','stage2','stage3','stage4','synthesize','report'];
+      const cur = st.stage; const curIdx = stages.indexOf(cur);
+      const rows = stages.map((s, i) => {
+        const cls = i < curIdx ? 'done' : (i === curIdx ? 'active' : 'pending');
+        const ic = cls === 'done' ? '✓' : (cls === 'active' ? '<span class="mn-mini-spin"></span>' : '○');
+        const d = (cls === 'active' && st.message) ? `<span class="mn-stage-detail">${_esc(st.message)}</span>` : '';
+        return `<div class="mn-stage ${cls}"><span class="mn-stage-ic">${ic}</span><span class="mn-stage-label">${DR_STAGE_LABELS[s] || s}</span>${d}</div>`;
+      }).join('');
+      const canSkip = ['stage2','stage3','stage4'].includes(cur) && _vvd.skipReqStage !== cur;
+      const skipBtn = canSkip ? `<button class="dr-skip-btn" onclick="vvdSkipStage('${cur}')">Skip this stage →</button>`
+        : (_vvd.skipReqStage === cur ? `<div class="dr-skip-note">Wrapping up this stage…</div>` : '');
+      detail = `<div class="mn-stages" style="margin-top:14px">${rows}</div>${skipBtn}`;
+    }
+    return `<div class="mn-progress">
+      <div class="mn-progress-title">Very Very Deep — two-pass research</div>
+      <div class="mn-stages">
+        ${passRow(group === 'odysseus', p1done, 'Pass 1 · Odysseus', p1done ? 'done' : 'running')}
+        ${passRow(group === 'deep_research', false, 'Pass 2 · Deep Research', group === 'deep_research' ? 'running' : 'queued')}
+      </div>
+      ${detail}
+      <div class="mn-elapsed">elapsed ${elapsed}</div>
+    </div>`;
+  }
+
+  async function vvdRun() {
+    const q = (_vvd.query || '').trim();
+    if (!q) { const t = document.getElementById('vvd-query');
+      if (t) { t.focus(); t.classList.add('dr-textarea-err'); setTimeout(()=>t.classList.remove('dr-textarea-err'),1200);} return; }
+    const myGen = ++_vvd.gen; _vvd.skipReqStage = null;
+    const main = document.getElementById('vvd-main-inner');
+    main.innerHTML = _vvdShell(`<div class="pd-dropzone" style="cursor:default"><div class="pd-spinner"></div><div class="pd-drop-title">Connecting to local server…</div></div>`);
+    let alive = await _pdAlive();
+    if (!alive) { _pdFireProtocol();
+      for (let i=0;i<Math.ceil(PERF_WAIT_SEC/1.5);i++){ await new Promise(r=>setTimeout(r,1500)); alive=await _pdAlive(); if(alive)break; } }
+    if (myGen !== _vvd.gen) return;
+    if (!alive) { _vvdErr('Could not reach the local server (dr_server.py on :5006). Start it from the Special Projects hub, then try again.'); return; }
+
+    const form = new FormData();
+    form.append('query', q); form.append('depth', _vvd.depth); form.append('max_rounds', String(_vvd.rounds));
+    for (const f of _vvd.files) form.append('files', f);
+    form.append('channels', JSON.stringify(_vvd.channels || {}));
+    const ctrl = new AbortController(); _vvd.abort = ctrl;
+    let job;
+    try {
+      const resp = await fetch(`${PERF_SERVER}/api/very_very_deep`, { method:'POST', body:form, signal:ctrl.signal });
+      job = await resp.json();
+      if (myGen !== _vvd.gen) return;
+      if (!resp.ok) throw new Error(job.error || `Server error ${resp.status}`);
+    } catch (err) { if (err.name==='AbortError'||myGen!==_vvd.gen) return; _vvd.abort=null; _vvdErr(err.message); return; }
+    _vvd.jobId = job.job_id; const t0 = Date.now();
+    main.innerHTML = _vvdShell(_vvdProgressHtml({ group:'odysseus', message:'Starting…', stats:{} }, t0));
+    while (true) {
+      if (myGen !== _vvd.gen) return;
+      await new Promise(r => setTimeout(r, 1800));
+      if (myGen !== _vvd.gen) return;
+      let st;
+      try {
+        const r = await fetch(`${PERF_SERVER}/api/very_very_deep/status?job=${_vvd.jobId}`, { signal: ctrl.signal });
+        st = await r.json();
+        if (!r.ok) throw new Error(st.error || `status ${r.status}`);
+      } catch (err) { if (err.name==='AbortError'||myGen!==_vvd.gen) return; _vvd.abort=null; _vvdErr(err.message); return; }
+      if (myGen !== _vvd.gen) return;
+      if (st.error) { _vvd.abort=null; _vvdErr(st.error); return; }
+      if (st.done) { _vvd.abort=null; _vvd.data = st.result; _vvdRender(); return; }
+      const el = document.getElementById('vvd-main-inner');
+      if (el) el.innerHTML = _vvdShell(_vvdProgressHtml(st, t0));
+    }
+  }
+  function vvdSkipStage(stage) {
+    if (!_vvd.jobId) return; _vvd.skipReqStage = stage;
+    const el = document.getElementById('vvd-main-inner'); const b = el && el.querySelector('.dr-skip-btn');
+    if (b) { b.outerHTML = '<div class="dr-skip-note">Wrapping up this stage…</div>'; }
+    fetch(`${PERF_SERVER}/api/deep_research/skip_stage?job=${_vvd.jobId}`, { method:'POST' }).catch(()=>{});
+  }
+
+  /* ── view switch: Deep Research ⇄ Odysseus ⇄ Very Very Deep (lazy-render once) ── */
+  var _viewRendered = { od: false, vvd: false, fc: false };
+  function setView(v) {
+    var map = { dr: 'view-dr', od: 'view-od', vvd: 'view-vvd', fc: 'view-fc' };
+    Object.keys(map).forEach(function (k) {
+      var el = document.getElementById(map[k]); if (el) el.classList.toggle('hidden', k !== v);
+    });
+    var items = document.querySelectorAll('.navitem');
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle('active', items[i].getAttribute('data-view') === v);
+    }
+    if (v === 'od' && !_viewRendered.od) { _viewRendered.od = true; _orRender(); }
+    if (v === 'vvd' && !_viewRendered.vvd) { _viewRendered.vvd = true; _vvdRender(); }
+    if (v === 'fc' && !_viewRendered.fc) { _viewRendered.fc = true; _fcRender(); }
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     FIRECRAWL — sub-tool. A data-driven console over the Firecrawl v2 REST API.
+     All calls go through the server-side proxy /api/firecrawl/<path> (the key
+     stays on the server). Async tools (crawl/batch/extract/llmstxt) return a
+     job id → "Check status →" jumps to the matching Status tool.
+     ════════════════════════════════════════════════════════════════════ */
+  const FC_TOOLS = [
+    { id:'scrape', name:'Scrape', method:'POST', path:'v2/scrape', desc:'Scrape one URL → clean markdown / HTML / links / screenshot.',
+      fields:[ {k:'url',label:'URL',type:'text',required:true,ph:'https://example.com'},
+               {k:'formats',label:'Formats',type:'multi',opts:['markdown','html','rawHtml','links','screenshot'],def:['markdown']},
+               {k:'onlyMainContent',label:'Only main content (strip nav/footer/ads)',type:'bool',def:true} ]},
+    { id:'search', name:'Search', method:'POST', path:'v2/search', desc:'Web search → ranked results.',
+      fields:[ {k:'query',label:'Query',type:'text',required:true,ph:'who founded …'},
+               {k:'limit',label:'Max results',type:'number',def:5} ]},
+    { id:'map', name:'Map', method:'POST', path:'v2/map', desc:'Discover all URLs on a site (fast, no scrape).',
+      fields:[ {k:'url',label:'URL',type:'text',required:true,ph:'https://example.com'},
+               {k:'search',label:'Filter (optional)',type:'text',ph:'blog'},
+               {k:'limit',label:'Limit (optional)',type:'number'} ]},
+    { id:'crawl', name:'Crawl', method:'POST', path:'v2/crawl', async:true, statusId:'crawl_status', desc:'Crawl a whole site (async → job id).',
+      fields:[ {k:'url',label:'URL',type:'text',required:true,ph:'https://example.com'},
+               {k:'limit',label:'Max pages',type:'number',def:25},
+               {k:'maxDiscoveryDepth',label:'Max depth (optional)',type:'number'} ]},
+    { id:'crawl_status', name:'Crawl Status', method:'GET', path:'v2/crawl/{id}', desc:'Fetch a crawl job by id.',
+      fields:[ {k:'id',label:'Job ID',type:'text',required:true} ]},
+    { id:'batch', name:'Batch Scrape', method:'POST', path:'v2/batch/scrape', async:true, statusId:'batch_status', desc:'Scrape many URLs at once (async → job id).',
+      fields:[ {k:'urls',label:'URLs (one per line)',type:'lines',required:true,ph:'https://a.com\nhttps://b.com'},
+               {k:'formats',label:'Formats',type:'multi',opts:['markdown','html','rawHtml','links'],def:['markdown']} ]},
+    { id:'batch_status', name:'Batch Status', method:'GET', path:'v2/batch/scrape/{id}', desc:'Fetch a batch-scrape job by id.',
+      fields:[ {k:'id',label:'Job ID',type:'text',required:true} ]},
+    { id:'extract', name:'Extract', method:'POST', path:'v2/extract', async:true, statusId:'extract_status', desc:'LLM-structured extraction from pages (async → job id).',
+      fields:[ {k:'urls',label:'URLs (one per line)',type:'lines',required:true,ph:'https://example.com'},
+               {k:'prompt',label:'Extraction prompt',type:'textarea',ph:'Extract the company name, founders, and total funding.'},
+               {k:'schema',label:'JSON schema (optional)',type:'json',ph:'{ "type": "object", "properties": { } }'} ]},
+    { id:'extract_status', name:'Extract Status', method:'GET', path:'v2/extract/{id}', desc:'Fetch an extract job by id.',
+      fields:[ {k:'id',label:'Job ID',type:'text',required:true} ]},
+    { id:'llmstxt', name:'Generate llms.txt', method:'POST', path:'v2/llmstxt', async:true, statusId:'llmstxt_status', desc:'Generate an llms.txt for a site (async → job id).',
+      fields:[ {k:'url',label:'URL',type:'text',required:true,ph:'https://example.com'},
+               {k:'maxUrls',label:'Max URLs (optional)',type:'number'},
+               {k:'showFullText',label:'Include full text',type:'bool',def:false} ]},
+    { id:'llmstxt_status', name:'llms.txt Status', method:'GET', path:'v2/llmstxt/{id}', desc:'Fetch an llms.txt job by id.',
+      fields:[ {k:'id',label:'Job ID',type:'text',required:true} ]},
+  ];
+  const _fc = { tool: 'scrape', values: {}, busy: false, result: null, error: null };
+
+  function _fcCur() { return FC_TOOLS.find(t => t.id === _fc.tool) || FC_TOOLS[0]; }
+  function fcSelectTool(id) { _fc.tool = id; _fc.result = null; _fc.error = null; _fc.busy = false; _fcRender(); }
+  function fcSetVal(k, v) { _fc.values[`${_fc.tool}.${k}`] = v; }
+  function fcGetVal(k) { return _fc.values[`${_fc.tool}.${k}`]; }
+  function fcToggleMulti(k, opt, on) {
+    const def = (_fcCur().fields.find(f => f.k === k) || {}).def || [];
+    let arr = Array.isArray(fcGetVal(k)) ? fcGetVal(k).slice() : def.slice();
+    if (on) { if (!arr.includes(opt)) arr.push(opt); } else { arr = arr.filter(x => x !== opt); }
+    fcSetVal(k, arr); _fcRender();
+  }
+
+  function _fcShell(inner) {
+    return `<div class="tool-content pd-outer">
+      <div class="pd-header-row">
+        <div><div class="ha-eyebrow">Web Scraper · Firecrawl API</div><div class="ha-title">Firecrawl</div></div>
+        <button class="pd-clear-btn" onclick="fcTest()" title="Test the Firecrawl API key / connection">⚡ Test connection</button>
+      </div>${inner}</div>`;
+  }
+  function _fcRender() {
+    const cur = _fcCur();
+    const tabs = FC_TOOLS.map(t => `<button class="fc-tab ${t.id === _fc.tool ? 'active' : ''}" onclick="fcSelectTool('${t.id}')">${t.name}</button>`).join('');
+    document.getElementById('fc-main-inner').innerHTML = _fcShell(`
+      <div class="fc-tabs">${tabs}</div>
+      <div class="fc-desc">${_esc(cur.desc || '')} &nbsp;·&nbsp; <code>${cur.method} /${cur.path}</code></div>
+      ${cur.fields.map(_fcField).join('')}
+      <button class="dr-run-btn" onclick="fcRun()" ${_fc.busy ? 'disabled' : ''}>${_fc.busy ? 'Running…' : ('Run ' + cur.name + ' →')}</button>
+      ${_fcResultHtml()}`);
+  }
+  function _fcField(f) {
+    const v = fcGetVal(f.k);
+    if (f.type === 'bool') {
+      const on = v == null ? !!f.def : !!v;
+      return `<div class="fc-field"><label class="dr-toggle ${on ? 'on' : 'off'}" style="max-width:none">
+        <input type="checkbox" ${on ? 'checked' : ''} onchange="fcSetVal('${f.k}', this.checked);_fcRender()">
+        <span class="dr-toggle-sw"></span><span class="dr-toggle-txt"><span class="dr-toggle-label">${_esc(f.label)}</span></span></label></div>`;
+    }
+    let ctrl;
+    if (f.type === 'multi') {
+      const sel = Array.isArray(v) ? v : (f.def || []);
+      ctrl = `<div class="dr-toggle-row">${f.opts.map(o => `<label class="dr-toggle ${sel.includes(o) ? 'on' : 'off'}">
+        <input type="checkbox" ${sel.includes(o) ? 'checked' : ''} onchange="fcToggleMulti('${f.k}','${o}', this.checked)">
+        <span class="dr-toggle-sw"></span><span class="dr-toggle-txt"><span class="dr-toggle-label">${o}</span></span></label>`).join('')}</div>`;
+    } else if (f.type === 'textarea' || f.type === 'lines' || f.type === 'json') {
+      ctrl = `<textarea class="dr-textarea" rows="${f.type === 'json' ? 6 : 4}" placeholder="${_esc(f.ph || '')}" oninput="fcSetVal('${f.k}', this.value)">${_esc(v == null ? '' : v)}</textarea>`;
+    } else {
+      ctrl = `<input class="fc-in" type="${f.type === 'number' ? 'number' : 'text'}" placeholder="${_esc(f.ph || '')}" value="${_esc(v == null ? '' : v)}" oninput="fcSetVal('${f.k}', this.value)">`;
+    }
+    return `<div class="fc-field"><label class="dr-label">${_esc(f.label)}${f.required ? ' *' : ''}</label>${ctrl}</div>`;
+  }
+
+  async function fcRun() {
+    const cur = _fcCur();
+    let path = cur.path; const body = {};
+    for (const f of cur.fields) {
+      let v = fcGetVal(f.k);
+      if (f.type === 'lines') v = (v || '').split('\n').map(s => s.trim()).filter(Boolean);
+      else if (f.type === 'number') v = (v === '' || v == null) ? undefined : Number(v);
+      else if (f.type === 'bool') v = (v == null ? !!f.def : !!v);
+      else if (f.type === 'multi') v = Array.isArray(v) ? v : (f.def || []);
+      else if (f.type === 'json') { if (v && v.trim()) { try { v = JSON.parse(v); } catch (e) { _fc.error = 'JSON schema is invalid: ' + e.message; _fc.result = null; _fcRender(); return; } } else v = undefined; }
+      else v = (v == null ? '' : String(v)).trim();
+      if (f.required && (v === undefined || v === '' || (Array.isArray(v) && !v.length))) { _fc.error = `${f.label} is required.`; _fc.result = null; _fcRender(); return; }
+      if (f.k === 'id') { path = path.replace('{id}', encodeURIComponent(v)); continue; }
+      if (v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)) body[f.k] = v;
+    }
+    _fc.busy = true; _fc.error = null; _fc.result = null; _fcRender();
+    try {
+      const opts = cur.method === 'GET' ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+      const r = await fetch(`${PERF_SERVER}/api/firecrawl/${path}`, opts);
+      const j = await r.json();
+      _fc.busy = false;
+      if (!r.ok) _fc.error = (j && j.error) || ('Firecrawl error ' + r.status + ': ' + JSON.stringify(j));
+      else _fc.result = j;
+    } catch (e) { _fc.busy = false; _fc.error = 'Request failed: ' + e.message; }
+    _fcRender();
+  }
+  function fcCheckStatus(id, statusId) {
+    _fc.tool = statusId; _fc.values[`${statusId}.id`] = id; _fc.result = null; _fc.error = null;
+    _fcRender(); fcRun();
+  }
+  async function fcTest() {
+    _toast('Testing Firecrawl connection…');
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/firecrawl/v2/map`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: 'https://firecrawl.dev' }) });
+      const j = await r.json();
+      if (r.ok && j && j.success !== false) _toast('✓ Firecrawl connected — the key works.');
+      else _toast('Firecrawl test failed: ' + ((j && j.error) || ('HTTP ' + r.status)), false);
+    } catch (e) { _toast('Firecrawl test failed: ' + e.message, false); }
+  }
+  function _fcCollectMarkdown(j) {
+    const out = [];
+    const push = (x) => { if (x && typeof x === 'object' && typeof x.markdown === 'string' && x.markdown.trim())
+      out.push((x.metadata && x.metadata.sourceURL ? ('## ' + x.metadata.sourceURL + '\n\n') : '') + x.markdown.trim()); };
+    const d = j && j.data;
+    if (d) { if (Array.isArray(d)) d.forEach(push); else { push(d); ['web', 'news', 'images'].forEach(kk => { if (Array.isArray(d[kk])) d[kk].forEach(push); }); } }
+    return out.join('\n\n---\n\n');
+  }
+  function _fcResultHtml() {
+    if (_fc.busy) return `<div class="pd-dropzone" style="cursor:default;margin-top:20px"><div class="pd-spinner"></div><div class="pd-drop-title">Running…</div></div>`;
+    if (_fc.error) return `<div style="margin-top:18px;padding:12px 16px;border-radius:8px;background:rgba(255,85,85,.08);border:1px solid rgba(255,85,85,.3);font-size:12px;color:#ff8888;white-space:pre-wrap">${_esc(_fc.error)}</div>`;
+    if (!_fc.result) return '';
+    const j = _fc.result, cur = _fcCur();
+    const parts = [];
+    const jobId = j.id || j.jobId;
+    if (cur.async && jobId) parts.push(`<div class="fc-jobid">Job started — <code>${_esc(jobId)}</code>
+      <button class="dr-run-btn dr-run-secondary" style="margin:0;padding:6px 12px" onclick="fcCheckStatus('${_esc(jobId)}','${cur.statusId}')">Check status →</button></div>`);
+    const md = _fcCollectMarkdown(j);
+    if (md) parts.push(`<div class="vc-memo-body">${(typeof marked !== 'undefined') ? marked.parse(md) : _esc(md)}</div>`);
+    parts.push(`<details ${md ? '' : 'open'} style="margin-top:14px"><summary style="cursor:pointer;color:var(--text-secondary);font-size:12.5px">Raw JSON response</summary><pre class="fc-json" style="margin-top:10px">${_esc(JSON.stringify(j, null, 2))}</pre></details>`);
+    return `<div class="vc-memo-outer" style="margin-top:8px">${parts.join('')}</div>`;
+  }
+
+  /* boot */
+  document.addEventListener('DOMContentLoaded', _drRender);
+  if (document.readyState !== 'loading') _drRender();
+</script>
+</body>
+</html>

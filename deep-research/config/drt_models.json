@@ -1,0 +1,10 @@
+{
+  "_comment": "Per-role model map for the Deep Research Tool. Edit a value to override the default, then restart the server (in-app 'Restart Server' or POST /api/restart) to apply. Roles: extract = per-page extraction + category classify (highest volume); search = browser agent loop + Stage-1 web search; route = relevance filters, stop-judge, gap-queries; plan = the upfront research planner; synthesize = the cited DD report (the deliverable). Valid ids include claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-8.",
+  "models": {
+    "extract": "claude-haiku-4-5-20251001",
+    "search": "claude-sonnet-4-6",
+    "route": "claude-sonnet-4-6",
+    "plan": "claude-opus-4-8",
+    "synthesize": "claude-opus-4-8"
+  }
+}

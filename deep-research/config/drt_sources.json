@@ -1,0 +1,74 @@
+{
+  "sources": [
+    {
+      "description": "general",
+      "domain": "x.com",
+      "enabled": true,
+      "name": "x",
+      "type": "forum"
+    },
+    {
+      "description": "tech",
+      "domain": "news.ycombinator.com",
+      "enabled": true,
+      "name": "hacker news",
+      "type": "forum"
+    },
+    {
+      "description": "tech",
+      "domain": "avforums.com",
+      "enabled": true,
+      "name": "avforum",
+      "type": "forum"
+    },
+    {
+      "description": "general",
+      "domain": "reddit.com",
+      "enabled": true,
+      "name": "reddit",
+      "type": "forum"
+    },
+    {
+      "description": "business",
+      "domain": "techcrunch.com",
+      "enabled": false,
+      "name": "techcrunch",
+      "type": "news"
+    },
+    {
+      "description": "tech",
+      "domain": "forums.tomshardware.com",
+      "enabled": false,
+      "name": "tom's hardware",
+      "type": "forum"
+    },
+    {
+      "description": "tech",
+      "domain": "linustechtips.com",
+      "enabled": true,
+      "name": "linus tech tips",
+      "type": "forum"
+    },
+    {
+      "description": "tech",
+      "domain": "wilderssecurity.com",
+      "enabled": true,
+      "name": "wilders security",
+      "type": "forum"
+    },
+    {
+      "description": "tech",
+      "domain": "rivianforums.com",
+      "enabled": false,
+      "name": "rivian forums",
+      "type": "forum"
+    },
+    {
+      "description": "pc",
+      "domain": "github.com",
+      "enabled": true,
+      "name": "github",
+      "type": "website"
+    }
+  ]
+}

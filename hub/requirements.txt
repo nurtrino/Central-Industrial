@@ -1,0 +1,3 @@
+# Central Industrial hub — standard library only (http.server, urllib, json).
+# No third-party dependencies. This file exists so Render's Python runtime has a
+# dependency manifest to install (it installs nothing).
