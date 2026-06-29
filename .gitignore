@@ -21,5 +21,8 @@ monkey-read-monkey-do/work/
 Thumbs.db
 .DS_Store
 
+# ── Local editor/preview tooling ─────────────────────────────────────────────
+.claude/
+
 # ── Not deployed: legacy Windows/WSL2 Home Assistant launcher (kept locally) ──
 Home Assistant/

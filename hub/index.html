@@ -75,12 +75,15 @@
 
 READY.
 LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
+
+<span id="hint" class="hint">[ PRESS ANY KEY ]</span>
 </pre>
     </div>
   </div>
 
-  <!-- background music: a short sample, plays ONCE on first keypress (user gesture) -->
-  <audio id="bgm" preload="auto" src="10-future_sound_of_london-central_industrial-eos.mp3"></audio>
+  <!-- background music: loops while on the hub; starts on the first key/click
+       (browsers block autoplay-with-sound until a user gesture). -->
+  <audio id="bgm" preload="auto" loop src="10-future_sound_of_london-central_industrial-eos.mp3"></audio>
 
 <script>
 (function(){
@@ -209,8 +212,11 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
     })();
   }
 
-  // Auto-boot — no keypress needed. Show the LOAD line briefly, then run.
-  setTimeout(boot, 700);
+  // Boot on the first user gesture (key or click). Required so the browser allows
+  // the music to play — autoplay-with-sound is blocked until the user interacts.
+  // This is the C64 "press any key" flow: first input → looping music + live menu.
+  window.addEventListener('keydown', boot, {once:true});
+  window.addEventListener('pointerdown', boot, {once:true});
 })();
 </script>
 </body>
