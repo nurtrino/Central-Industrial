@@ -1,76 +1,27 @@
 # Central Industrial — Render Blueprint.
 #
-# Two cloud services: the C64 hub (front door) and Deep Research.
-#   • Monkey Read Monkey Do is intentionally NOT deployed here — it runs on a local
-#     GPU box so audio never leaves the machine. The hub links to it as a LOCAL tool.
-#   • Home Assistant was dropped (it was a Windows/WSL2 launcher, not portable).
+# Three web services under the apex domain centralindustrial.ai, behind one access
+# gate (single sign-on via a shared cookie scoped to .centralindustrial.ai):
+#   • central-industrial-hub   → centralindustrial.ai (+ www)   — C64 home / login
+#   • deep-research            → research.centralindustrial.ai
+#   • monkey-read-monkey-do    → notes.centralindustrial.ai     — hosted UI; transcription
+#                                                                  runs on a LOCAL GPU worker
+# Home Assistant was dropped (Windows/WSL2 launcher, not portable). The GPU worker
+# (mrmd-worker/) is NOT deployed here — it runs on the home machine behind a tunnel.
 #
-# Deploy: push this repo to GitHub → in Render: New → Blueprint → select the repo.
-# After the first deploy:
-#   1. Set ANTHROPIC_API_KEY (and any optional keys) on the deep-research service.
-#   2. Set HUB_URL_MONKEYREADMONKEYDO on the hub to your local/Tailscale MRMD URL.
+# NOTE: the live services were created via the Render API; this file is the canonical
+# reference / re-deploy Blueprint. AUTH_SECRET is shared across all three via an env
+# var group so the cookie signed by the hub is trusted by every tool. ACCESS_CODE
+# (the password) and the API keys are secrets set in the dashboard.
+
+envVarGroups:
+  - name: central-industrial-auth
+    envVars:
+      - key: AUTH_SECRET          # shared HMAC key — signs/verifies the SSO cookie
+        generateValue: true
 
 services:
-  # ── Deep Research — headless browser-driven research (Docker + Chromium) ─────
-  - type: web
-    name: deep-research
-    runtime: docker
-    rootDir: deep-research
-    dockerfilePath: ./Dockerfile
-    plan: standard            # Chromium needs RAM; 'starter' (512MB) can OOM on heavy pages
-    healthCheckPath: /api/health
-    autoDeploy: true
-    envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false           # secret — set in the Render dashboard
-      - key: DRT_HEADED
-        value: "0"            # headless in the cloud
-      - key: DRT_BROWSER_CHANNEL
-        value: ""             # use Playwright's bundled Chromium (no "chrome" channel)
-      - key: DRT_EXA
-        sync: false
-      - key: EXA_API_KEY
-        sync: false
-      - key: FIRECRAWL_API_KEY
-        sync: false
-      # "← Special Projects" back-link → the hub's public URL.
-      - key: HUB_URL
-        fromService:
-          type: web
-          name: central-industrial-hub
-          property: host
-
-  # ── Monkey Read Monkey Do — hosted web UI (Python; transcription on local worker) ─
-  - type: web
-    name: monkey-read-monkey-do
-    runtime: python
-    rootDir: monkey-read-monkey-do
-    plan: starter
-    startCommand: gunicorn --workers 1 --threads 8 --timeout 300 --bind 0.0.0.0:$PORT app:app
-    healthCheckPath: /healthz
-    autoDeploy: true
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.6"
-      - key: MRMD_HOSTED
-        value: "1"
-      - key: SECRET_KEY
-        generateValue: true        # signs the access-gate session cookie
-      - key: MRMD_UI_PASSWORD
-        sync: false                # the C64 access code (secret)
-      - key: ANTHROPIC_API_KEY
-        sync: false                # Claude API for the notes step
-      - key: MRMD_WORKER_URL
-        sync: false                # your local worker's HTTPS tunnel URL
-      - key: MRMD_WORKER_TOKEN
-        sync: false                # MUST match the worker's MRMD_WORKER_TOKEN
-      - key: HUB_URL
-        fromService:
-          type: web
-          name: central-industrial-hub
-          property: host
-
-  # ── Central Industrial hub — C64 landing page (stdlib Python, no deps) ───────
+  # ── Central Industrial hub — C64 home page + access gate (stdlib Python) ─────
   - type: web
     name: central-industrial-hub
     runtime: python
@@ -79,17 +30,72 @@ services:
     startCommand: python hub_server.py
     healthCheckPath: /
     autoDeploy: true
+    domains:
+      - centralindustrial.ai
+      - www.centralindustrial.ai
     envVars:
+      - fromGroup: central-industrial-auth
       - key: PYTHON_VERSION
         value: "3.12.6"
-      # Auto-inject each tool's deployed hostname (the hub prepends https://).
+      - key: ACCESS_CODE          # the C64 access code (secret)
+        sync: false
+      - key: COOKIE_DOMAIN        # share the auth cookie across all subdomains
+        value: .centralindustrial.ai
       - key: HUB_URL_DEEP_RESEARCH
-        fromService:
-          type: web
-          name: deep-research
-          property: host
+        value: https://research.centralindustrial.ai
       - key: HUB_URL_MONKEYREADMONKEYDO
-        fromService:
-          type: web
-          name: monkey-read-monkey-do
-          property: host
+        value: https://notes.centralindustrial.ai
+
+  # ── Deep Research — headless browser-driven research (Docker + Chromium) ─────
+  - type: web
+    name: deep-research
+    runtime: docker
+    rootDir: deep-research
+    dockerfilePath: ./Dockerfile
+    plan: standard              # Chromium needs RAM; 'starter' (512MB) can OOM
+    healthCheckPath: /api/health
+    autoDeploy: true
+    domains:
+      - research.centralindustrial.ai
+    envVars:
+      - fromGroup: central-industrial-auth
+      - key: HOME_URL           # redirect target when not logged in
+        value: https://centralindustrial.ai
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DRT_HEADED
+        value: "0"
+      - key: DRT_BROWSER_CHANNEL
+        value: ""
+      - key: DRT_EXA
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+
+  # ── Monkey Read Monkey Do — hosted UI (Python; transcription on local worker) ─
+  - type: web
+    name: monkey-read-monkey-do
+    runtime: python
+    rootDir: monkey-read-monkey-do
+    plan: starter
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 300 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /healthz
+    autoDeploy: true
+    domains:
+      - notes.centralindustrial.ai
+    envVars:
+      - fromGroup: central-industrial-auth
+      - key: HOME_URL
+        value: https://centralindustrial.ai
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: MRMD_HOSTED
+        value: "1"
+      - key: ANTHROPIC_API_KEY
+        sync: false                # Claude API for the notes step
+      - key: MRMD_WORKER_URL
+        sync: false                # your local GPU worker's HTTPS tunnel URL
+      - key: MRMD_WORKER_TOKEN
+        sync: false                # MUST match the worker's MRMD_WORKER_TOKEN
