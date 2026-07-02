@@ -203,6 +203,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(status_payload())
         if parsed.path in ("/", ""):
             self.path = "/index.html"
+        elif parsed.path in ("/cave", "/cave/"):
+            self.path = "/cave_map.html"
         return super().do_GET()
 
 
