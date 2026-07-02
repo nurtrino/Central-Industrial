@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cave Location Map — Ohio · Indiana · Illinois · Wisconsin</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+  html, body { height: 100%; margin: 0; }
+  #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+  .info-box { font: 12.5px/1.45 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: rgba(255,255,255,0.94); padding: 8px 11px; border-radius: 8px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.3); max-width: 260px; }
+  .info-box .sub { color:#555; font-size:11.5px; }
+  .legend { font: 12.5px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: rgba(255,255,255,0.94); padding: 8px 11px; border-radius: 8px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.3); max-width:225px; max-height:46vh; overflow-y:auto; }
+  .legend .row { display:flex; align-items:center; margin:2px 0; }
+  .legend .dot { width:13px; height:13px; border-radius:50%; margin-right:7px; flex:0 0 auto;
+    border:1px solid rgba(0,0,0,0.35); }
+  .legend .dot.dash { border-style:dashed; }
+  .legend .sw { width:14px; height:11px; margin-right:7px; flex:0 0 auto; border:1px solid rgba(0,0,0,0.4); }
+  .legend hr { border:none; border-top:1px solid #ddd; margin:6px 0; }
+  .legend .ocs-sw { width:12px; height:12px; border-radius:2px; margin-right:7px; flex:0 0 auto; border:1px solid rgba(0,0,0,0.45); }
+  .ocs-icon { background:transparent; border:none; }
+  .ocs-sq { display:block; width:11px; height:11px; border:1.5px solid rgba(0,0,0,0.55); border-radius:2px; box-shadow:0 0 2px rgba(0,0,0,0.35); }
+  .rank-icon { background:transparent; border:none; }
+  .rank-badge { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%;
+    background:#fffbe6; border:2px solid #b8860b; color:#7a5200; font:700 12px -apple-system, Segoe UI, sans-serif; box-shadow:0 1px 3px rgba(0,0,0,0.45); }
+  .legend .rank-mini { width:15px; height:15px; border-radius:50%; background:#fffbe6; border:1.5px solid #b8860b; color:#7a5200;
+    font:700 9px sans-serif; display:flex; align-items:center; justify-content:center; margin-right:6px; flex:0 0 auto; }
+  .searchbox { background:rgba(255,255,255,0.96); border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,0.3); padding:6px; width:236px;
+    font:13px -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+  .searchbox input { width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid #bbb; border-radius:6px; font-size:13px; outline:none; }
+  .searchbox input:focus { border-color:#3f74c0; }
+  .search-results { max-height:250px; overflow-y:auto; }
+  .search-results:not(:empty) { margin-top:5px; }
+  .search-results .hit { padding:5px 7px; border-radius:5px; cursor:pointer; display:flex; align-items:center; gap:8px; line-height:1.2; }
+  .search-results .hit:hover { background:#eef3fb; }
+  .search-results .hit .ssw { width:11px; height:11px; flex:0 0 auto; border:1px solid rgba(0,0,0,0.45); }
+  .search-results .hit small { color:#888; display:block; font-size:11px; }
+  .search-results .none { padding:6px 7px; color:#999; }
+  .popup b { color:#1a1a1a; }
+  .popup .meta { color:#444; font-size:12px; }
+  .popup .role { margin-top:5px; }
+  .flag { display:inline-block; background:#fdecc8; color:#7a5200; border-radius:3px;
+    padding:0 5px; font-size:11px; font-weight:600; margin-top:5px; }
+  .leaflet-popup-content { margin:10px 12px; max-width:260px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<!-- Esri-Leaflet: lets us render ODNR's huge karst MapServer (46,789 points + region polygons) server-side -->
+<script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+<script>
+/* ------------------------------------------------------------------ *
+ * Caves of Ohio — Location Investigation
+ * Anchors transcribed from §6 of the working dossier (OH Caves.md).
+ * 11 coordinate-bearing anchors are exact; Trimmer Arch, Mustapha
+ * Island, and the Shoemaker lead are county/landmark approximations
+ * and are FLAGGED (dashed markers), because the dossier gives only a
+ * county or a road for them — never a point.
+ * Public-land overlays load at runtime: Wayne NF (USFS) and Ohio
+ * State Forests (ODNR) frame the documented/permitted candidates,
+ * vs. the crew's secret caves, which are on PRIVATE land by design.
+ * ------------------------------------------------------------------ */
+
+const points = [
+  { name:"Logan (crew home base)", lat:39.5403, lng:-82.4071, county:"Hocking", bedrock:"—",
+    role:"Operational center — Justin's Hocking Hills Adventure Trek & Lutra Adventures HQ. The single strongest geographic anchor in the dossier.",
+    cat:"home" },
+
+  { name:"Rock House", lat:39.4983, lng:-82.6171, county:"Hocking", bedrock:"Black Hand Sandstone",
+    role:"Hocking core cluster (also Saltpetre Cave, Old Man's Pantry, Surprise/Annex/Three-Hole arches). The type-site 'rock house' recess cave.",
+    cat:"hocking" },
+  { name:"Rockbridge", lat:39.5663, lng:-82.4994, county:"Hocking", bedrock:"Black Hand Sandstone",
+    role:"Ohio's longest natural bridge (92 ft); north end of the corridor.", cat:"hocking" },
+  { name:"Balcony Natural Bridge", lat:39.4283, lng:-82.5656, county:"Hocking", bedrock:"Black Hand Sandstone",
+    role:"Hocking cluster.", cat:"hocking" },
+  { name:"Unger Hollow Arch", lat:39.4542, lng:-82.5454, county:"Hocking", bedrock:"Black Hand Sandstone",
+    role:"Hocking cluster.", cat:"hocking" },
+  { name:"Old Man's Pantry", lat:39.4350, lng:-82.5404, county:"Hocking", bedrock:"Black Hand Sandstone",
+    role:"Hocking cluster.", cat:"hocking" },
+
+  { name:"Lake Katharine", lat:39.0833, lng:-82.6715, county:"Jackson", bedrock:"Sharon Formation",
+    role:"Southern reach (Lake Katharine Arch, Peephole Arch).", cat:"southern" },
+
+  { name:"Irish Run Natural Bridge", lat:39.5144, lng:-81.1808, county:"Washington", bedrock:"Permian sandstone",
+    role:"STRONGEST Episode-7 candidate — arch + 'the Great Cave' on one Wayne NF (Archers Fork) trail. Matches the honeycombed-cliffside labyrinth.",
+    cat:"river", strong:true },
+  { name:"Ladd Natural Bridge", lat:39.3117, lng:-81.8196, county:"Washington", bedrock:"Permian sandstone",
+    role:"River-country arch belt (permit-only).", cat:"river" },
+  { name:"Raven Rock", lat:38.7187, lng:-83.0547, county:"Scioto", bedrock:"Mississippian sandstone",
+    role:"Alternate Episode-7 candidate (bluff 500 ft above the Ohio River).", cat:"river" },
+
+  { name:"Fort Hill (Natural Y / Keyhole / Spring Creek)", lat:39.1230, lng:-83.3961, county:"Highland", bedrock:"Peebles Dolomite",
+    role:"SW karst ALTERNATIVE for the wet caves (7 arches in Baker Fork gorge). Lower-probability hypothesis.", cat:"karst" },
+
+  { name:"Trimmer Arch", lat:39.34, lng:-83.10, county:"Ross", bedrock:"Greenfield Dolomite",
+    role:"Western edge of the corridor (exact location not yet pinned / permit).", cat:"approx", approx:true },
+  { name:"Mineral / Mustapha Island Bridge", lat:39.32, lng:-81.90, county:"Athens", bedrock:"sandstone",
+    role:"Athens-county arches (Mustapha Is. on OH-124).", cat:"approx", approx:true },
+
+  { name:"Shoemaker / Eagle Township lead", lat:39.37, lng:-82.58, county:"Vinton", bedrock:"Black Hand Sandstone",
+    role:"'E. Shoemaker / 1869' signature lead. Eagle Twp = NW corner of Vinton, on the Hocking–Ross–Vinton tri-corner just south of Logan. Click the orange button (top-right) for the records workflow.",
+    cat:"lead", approx:true }
+];
+
+// Video-series anchor points (Source: Jaeck Caves) — all one color; the layer
+// menu still lists each sub-cluster separately. Home base is drawn larger.
+const JAECK = "#1565c0";
+const cats = {
+  home:    { label:"🔵 Logan home base",            color:JAECK, radius:10 },
+  hocking: { label:"🔵 Hocking core cluster",       color:JAECK, radius:7 },
+  southern:{ label:"🔵 Southern reach",             color:JAECK, radius:7 },
+  river:   { label:"🔵 Episode-7 river candidates", color:JAECK, radius:7 },
+  karst:   { label:"🔵 Fort Hill SW-karst alt.",    color:JAECK, radius:7 },
+  approx:  { label:"🔵 Approx. corridor arches",    color:JAECK, radius:6 },
+  lead:    { label:"🔵 Shoemaker / Eagle-Twp lead", color:JAECK, radius:9 }
+};
+
+/* ---- base layers ---- */
+// Esri World Topo as the default basemap — fast & reliable, shows relief + labels.
+// OpenTopoMap (richer contours, but slower/rate-limited) kept as an alternate.
+const esriTopo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Tiles &copy; Esri — Esri, HERE, Garmin, USGS, NGA & the GIS community'
+});
+const openTopo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+  maxZoom: 17, attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | Style: &copy; OpenTopoMap (CC-BY-SA)'
+});
+const usgsTopo = L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 16, attribution: 'Tiles courtesy of the USGS National Map'
+});
+const street = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+});
+const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics'
+});
+
+const map = L.map('map', { layers: [esriTopo] });
+
+/* dedicated pane so boundary polygons sit BELOW the markers */
+map.createPane('publiclands');
+map.getPane('publiclands').style.zIndex = 350;
+
+/* ---- one layer group per category ---- */
+const groups = {};
+for (const key in cats) groups[key] = L.layerGroup().addTo(map);
+
+const allLatLng = [];
+const searchIndex = [];  // {name, lat, lng, marker, group, color, kind, sub, hay} — powers the search box
+points.forEach(p => {
+  const c = cats[p.cat];
+  const radius = p.strong ? 11 : c.radius;
+  const marker = L.circleMarker([p.lat, p.lng], {
+    radius: radius,
+    color: p.strong ? "#ffffff" : "#333333",
+    weight: p.strong ? 3 : 1,
+    fillColor: c.color,
+    fillOpacity: 0.92,
+    dashArray: p.approx ? "3 3" : null
+  });
+  const coordTxt = p.lat.toFixed(4) + ", " + p.lng.toFixed(4);
+  const flag = p.approx ? '<div class="flag">approx — county/landmark only</div>' : '';
+  marker.bindPopup(
+    '<div class="popup"><b>' + p.name + '</b>'
+    + '<div class="meta">County: ' + p.county + '<br>Bedrock: ' + p.bedrock
+    + '<br>Coords: ' + coordTxt + '</div>'
+    + '<div class="role">' + p.role + '</div>' + flag + '</div>'
+  );
+  marker.bindTooltip(p.name, { direction:"top", offset:[0,-radius] });
+  marker.addTo(groups[p.cat]);
+  searchIndex.push({ name:p.name, lat:p.lat, lng:p.lng, marker:marker, group:groups[p.cat], color:c.color, kind:'circle', sub:p.county + ' County', hay:(p.name + ' ' + p.county + ' ' + p.role).toLowerCase() });
+  allLatLng.push([p.lat, p.lng]);
+});
+
+/* ---- REFINEMENT 1: Eagle Township focus rectangle (approx, NW Vinton) ---- */
+const eagleTwp = L.rectangle([[39.330,-82.645],[39.435,-82.515]], {
+  color:"#e67e22", weight:2, dashArray:"6 5", fillColor:"#e67e22", fillOpacity:0.06
+}).bindTooltip("Eagle Township (approx) — Shoemaker search frame", {sticky:true});
+eagleTwp.addTo(groups.lead);
+
+/* ---- optional: "down toward the Ohio River" reach (Episode 7), off by default ---- */
+const reach = L.polyline(
+  [[39.5403,-82.4071],[39.5144,-81.1808]],
+  { color:"#e74c3c", weight:2.5, dashArray:"8 7", opacity:0.7 }
+);
+
+/* ============================================================ *
+ * OHIO CAVE SURVEY caves (SQUARES) — a SEPARATE dataset from the
+ * round video-series anchors above. Synthesized from OCS meeting
+ * minutes + "Underground Ohio" newsletters, then geolocated via web
+ * research (USGS GNIS, park pages, Wikipedia, the OCS "Top-Ten
+ * Longest" list, and Warren Luther's Pholeos articles).
+ * Solid square  = exact public feature / good landmark.
+ * Faded+dashed  = county-level approx, or exact site not yet pinned
+ *                 (most wild caves are private-land; anchored to the
+ *                 nearest public landmark / county seat).
+ * ============================================================ */
+const ocsRegions = {
+  ne:      { label:"NE — Sharon Conglomerate",      color:"#8d6e63" },
+  erie:    { label:"Lake Erie Islands",             color:"#0097a7" },
+  central: { label:"Central Ohio",                  color:"#3f51b5" },
+  sw:      { label:"SW karst (Serpent Mound belt)", color:"#ff7043" },
+  wc:      { label:"W-central show caves",          color:"#c2185b" },
+  nw:      { label:"NW Ohio",                        color:"#00695c" },
+  se:      { label:"SE sandstone (OCS)",            color:"#f9a825" }
+};
+const ocsCaves = [
+  // —— NE Ohio: Sharon Conglomerate (Geauga / Lake / Summit / Portage) ——
+  {n:"Thompson Ledges caves", reg:"ne", county:"Geauga", lat:41.6870, lng:-81.0443, prec:"exact",
+   d:"Public Sharon Conglomerate ledges. A cluster of fracture / slump-block caves: Thompson Ledges Cave (a.k.a. Dead Man's, 44 ft), Right Angle Cave, Frank's Crawl, Dead Dog Cave, Sidley's Talus II."},
+  {n:"Ansel's Cave / Little Bear Cave — The West Woods", reg:"ne", county:"Geauga", lat:41.4593, lng:-81.2988, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Geauga Park District, 956-ac <b>West Woods</b> (Russell/Newbury Twp; nature center 9465 Kinsman Rd, 41.4630,-81.3042). <b>Ansel's Cave is not a true cave</b> &mdash; it's a dramatic Sharon-Conglomerate rock-shelter / narrow gorge with a ~20-ft tiered waterfall along a branch of Silver Creek (locally 'Pebble Brook'), which early settlers called a cave; legend ties it to Civil War soldiers, the Underground Railroad, Prohibition bootleggers, and a resident named Ansel. Cave access is restricted (naturalist-led only). <b>Little Bear Cave</b> &mdash; a single ~20-ft Sharon-Conglomerate fissure nearby &mdash; is open to the public. <b>Ansel's Real Cave</b> (the actual OCS-database cave) is a <i>separate</i> site in another part of the park &mdash; mapped separately. <b>Relocated 2026-07-02</b> from a wrong point ~1 mi S (41.443,-81.298, below the park) to the gorge on the Ansel's Cave Trail (confirmed via 3DEP LiDAR + Nominatim + the park's own brochure coordinate). Src: OCS 'Under Ohio' v3i2 (2025, F. Vlchek); Geauga Park District."},
+  {n:"Ansel's Real Cave — The West Woods", reg:"ne", county:"Geauga", lat:41.4608, lng:-81.2952, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate (exact site withheld).</b> The actual cave in the OCS database &mdash; distinct from the 'Ansel's Cave' rock-shelter, and in <i>another part of</i> The West Woods per OCS's 2025 relocation. A 28-ft Sharon-Conglomerate stream cave: a low entrance with constant water outflow plus two side-by-side dry entrances into a perpendicular passage; a <b>former bat hibernaculum</b> (pre-White-Nose-Syndrome &mdash; none seen 2025). OCS took a GPS reading (F. Vlchek) that matched their database, but the coordinates are unpublished and the (former-hibernaculum) entrance is protected &mdash; shown here only at park level, offset from the public Ansel's Cave. Src: OCS 'Under Ohio' v3i2, 2025."},
+  {n:"Little Mountain", reg:"ne", county:"Lake / Geauga", lat:41.6326, lng:-81.2728, prec:"exact",
+   d:"Holden Arboretum ridge on the Lake/Geauga line — a Sharon-Conglomerate knob ~39 km NE of Cleveland; this marker is the <b>385 m (1,263 ft) summit</b> (DEM-confirmed; the knob rises 365–385 m). On the N/E (Geauga) flank, on Holden land: <b>Little Mountain Caverns</b> (430 ft, the early-1900s resort show cave — sinkhole 'skylight' entrances + North &amp; South cave entrances + a wading passage by the abandoned resort <b>Pump House</b> in the 'Pump House Crevice'), Devil's Kitchen, King's Cave. Its largest sinkhole entrance (the 'Study Sinkhole', east flank) is <b>the largest sandstone sinkhole in Ohio</b> — ~8 m (26 ft) deep, 6.2&times;3.8 m, narrowing to a 0.75-m crawl; the caverns are joint/slump crevice caves further opened by <b>arenization</b> (dissolution of silica cement + granular disintegration), studied via photogrammetry. On the private SW/SOUTH side (lower slope): the Log Lurker Cave system (mapped separately). Src: <b>Novello &amp; Sasowsky 2019, J. Cave &amp; Karst Studies 81(1):44–56</b> (peer-reviewed; figures from an OCS cave map); owner The Holden Arboretum."},
+  {n:"Log Lurker Cave", reg:"ne", county:"Geauga", lat:41.6296, lng:-81.2770, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> ~544 ft — one of the longest caves in NE Ohio. A connected system of 3 Sharon-Conglomerate crevice caves (plus a 4th nearby via a large skylight) on the private SW/southern side of Little Mountain, just outside Holden Arboretum. Historic drinking-water reservoir for the Little Mountain resort: two brick dams, a pipe network + valve, and a Waterfall Room. Named for the Log Lurker millipedes found inside. OCS compass-&amp;-Disto survey Jul–Aug 2025 (F. Vlchek, M. Mooter, D. Peter). Src: OCS 'Under Ohio' v3i2. <b>Anchored to the SW plateau rim just S of Holden's Little Mountain parcel (OSM boundary), amid the large-lot private parcels along Griswold Rd (Geauga parcel GIS).</b> 3DEP LiDAR resolves the dramatic crevice/slot systems on the N &amp; E plateau edges (inside Holden = Little Mountain Caverns) but the SW flank reads subtler — an exact entrance needs Ohio OSIP LiDAR or OCS's unpublished GPS. (DEM check: this SW-slope anchor sits at ~345 m &mdash; ~40 m below the 385 m summit &mdash; consistent with the lower private SW flank.) The peer-reviewed Little Mountain study <b>Novello &amp; Sasowsky 2019 (JCKS 81(1):44–56)</b> documents the Sharon-Conglomerate crevice/arenization geology, but covers <b>Little Mountain Caverns</b> on Holden's N/E flank (incl. the 'largest sandstone sinkhole in Ohio' &amp; the Pump-House Crevice), <i>not</i> Log Lurker &mdash; geologic context, no new fix for the SW system."},
+  {n:"Dart's Cave / Merkle's Caves (Sand Hill)", reg:"ne", county:"Geauga", lat:41.5375, lng:-81.2775, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> On <b>Sand Hill</b> — a Sharon-Conglomerate upland whose southern base is at <b>Fowler's Mill</b> (GNIS hamlet 41.5276,-81.2559, on the E. Branch Chagrin R.), Munson Twp. Three parallel box-canyon gorges run S&rarr;N: Fern Gorge &middot; Twin Falls &middot; <b>Dart's-Merkle's</b> (northernmost). <b>Dart's Cave</b> = the old 'Skylight Cave': a walk-in stream entrance into a large dark room with sheer walls, where a ceiling skylight drops the stream ~30 ft; Dart's sits <b>downstream of Merkle's</b> (a long box canyon holding NE-Ohio's largest natural tunnel, ~30-ft span). <b>Refined 2026-07-02</b> from a wrong flat-upland point (41.540,-81.262) to the 3DEP-identified box-canyon complex NW of Fowler's Mill (dissected gorges ~41.533-41.540, -81.274 to -81.282; ~110-140 ft relief). Exact gorge/entrance pending OCS's 2025 GPS (unpublished) or OSIP LiDAR. Src: Pholeos v9(1) (geology), v3, Speleo Digest 1974 (Luther/Cleveland Grotto survey), OCS 'Under Ohio' v3i2 (2025); older refs Lynch 1974 (Cleve-O-Grotto News) &amp; Porter 1965 (NEOG Log). <b>RECONCILED 2026-07-02:</b> this <b>is</b> the group Pholeos v3 (M&amp;O 1982) mapped as the 'Chesterland Caves area' &mdash; their main 'Chesterland Cave' = 'Skylight Cave' = <b>Dart's Cave</b>, with Leaning Cave beside it (confirmed independently by Pholeos v9 &amp; OCS 2025, and by the shared Robber's = Bat/Parker Cave). The former Sunnybrook 'Chesterland' markers were consolidated onto this Sand Hill complex; exact per-cave gorges/entrances pending OCS's unpublished 2025 GPS."},
+  {n:"Card's Cave", reg:"ne", county:"Geauga", lat:41.5455, lng:-81.2900, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> A historic ~150-ft cave, now largely destroyed (blocks pulled apart for landscaping). On a small Sharon Conglomerate outlier between Sand Hill and Gildersleeve Mountain, Munson Twp (Pholeos v9; Warren Luther). Anchored to that outlier — no finer location in our sources."},
+  {n:"Roaring Springs Cave", reg:"ne", county:"Geauga", lat:41.4480, lng:-81.3020, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate.</b> A spring rock-shelter (~12&times;12&times;8 ft) the OCS relocated in 2025, matching Warren Luther's 1950s description; a stream &amp; a probable (unseen) waterfall issue from a low passage in the NW corner, and an inlet pipe feeds a neighbor's well. On private land 'just down the street' from The West Woods (Geauga Park District, home of Ansel's Cave). Exact site not yet pinned (OCS). Src: OCS 'Under Ohio' v3i2, 2025."},
+  {n:"Bierce Cave", reg:"ne", county:"Summit", lat:41.1243, lng:-81.4973, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> A Sharon-Conglomerate joint/crevice cave (two small rooms, ~10 ft high) on the north bank of the Cuyahoga in <b>Gorge Metropolitan Park</b>, Cuyahoga Falls, Summit Co. — near Mary Campbell's Cave. Named by the Ohio Cave Survey for <b>Gen. Lucius V. Bierce</b> (Akron historian; uncle of writer Ambrose Bierce), who discovered it in 1826 &amp; described it in his 1854 'Historical Reminiscences of Summit County,' then couldn't relocate it ('some future explorer will bring it again to light'). Bricked up in 1968 after a teen got stuck; re-gated 2022 to protect hibernating endangered tricolored (&amp; big brown) bats. Location well-confirmed (no county conflict); exact entrance protected/not publicized by Summit Metro Parks. Src: L.V. Bierce 1854 (via Pholeos v9 &amp; Speleo Digest 1988); OCS 'Under Ohio' v1i1 (2023); Summit Metro Parks."},
+  {n:"Devil's Den Fracture System", reg:"ne", county:"Portage", lat:41.33117, lng:-81.04204, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> #5 longest in Ohio (1,155 ft). A Sharon-Conglomerate crevice/fracture system at <b>Nelson-Kennedy Ledges State Park</b> — the park's famous ledge-crevice network (Devil's Icebox, Fat Man's Peril, etc.). Anchored to Nelson Ledge (GNIS); confirmed as 'the Devil's Den at Nelson Ledges' in Speleo Digest 1988. (NB: a different 'Devil's Den' exists in Adams/Ross Co.)"},
+  {n:"Hoaches Cave — 'Lost Hole of Hoaches'", reg:"ne", county:"Geauga", lat:41.6000, lng:-81.1900, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> An obscure, now-closed Sharon-Conglomerate joint-controlled cave (entrance drop, a low crawl 'Ehud's Revenge', a 'trunk' passage) in NE Ohio. <b>County corrected 2026-07-02: Summit&rarr;Geauga.</b> Our sources are all Cleveland-Grotto material and conflict on locale, but the reliable ones agree on the Geauga/Painesville area: NSS News Jan 1987 places it <b>'near Painesville'</b> (Doug Welker's post-earthquake resurvey); NSS News Aug 1988 says <b>'Geauga County'</b> (a rabbit-chase found a new connection into it); and the Speleo Digest 1986 trip report notes the cave lies <b>&lt;10 mi from the 31 Jan 1986 Leroy earthquake epicenter</b> (41.650,-81.162) and was reached from 'near Chardon.' The <b>American Caving Accidents</b> account ('near Twinsburg,' Summit) — the basis for our old point — is the <b>outlier</b> (its editor flagged the toilet-trap story '(Is this real??? Ed.)') and Twinsburg is ~27 mi from the epicenter, breaking the &lt;10-mi note. Re-anchored to <b>N Geauga near Chardon</b>, inside the 10-mi epicenter circle. The cave-name origin is <b>undocumented</b> in our sources — a 'Hoach' landowner was an assumption and is <b>not</b> confirmed in Geauga/Lake land or genealogy records searched (2026-07-02); exact entrance unknown/possibly lost. Src: Nadich 1989 (Cleve-O-Grotto News 35(7)); NSS News 1/1987 &amp; 8/1988; Speleo Digest 1986; ACA (Dec 1990)."},
+  // —— Lake Erie Islands: dolomite (Ottawa — South Bass / Put-in-Bay) ——
+  {n:"Perry's Cave", reg:"erie", county:"Ottawa", lat:41.64730, lng:-82.82723, prec:"exact",
+   d:"Commercial cave on South Bass Island / Put-in-Bay (979 Catawba Ave). Celestite; its freshwater pool is argued to have supplied Perry's fleet in the 1813 Battle of Lake Erie. [Coords upgraded to exact 2026-07-01: OSM cave node + Census geocode of 979 Catawba Ave agree.]"},
+  {n:"Paradise Cave", reg:"erie", county:"Ottawa", lat:41.6545, lng:-82.8175, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> #9 longest in Ohio (640 ft). A clear-water dolomite cave on South Bass Island."},
+  {n:"Kindt's Cave (+ island caves)", reg:"erie", county:"Ottawa", lat:41.6450, lng:-82.8335, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate.</b> Entered down a roadside 'wishing well'; owner Bob Kindt — the OCS landowner-appreciation 'Kint' cave. Nearby island caves: Larcomb (sealed), Duffs (Dodge Woods Preserve) & the Cedar Forest caves."},
+  {n:"Crystal Cave", reg:"erie", county:"Ottawa", lat:41.64670, lng:-82.82794, prec:"exact",
+   d:"The world's largest geode — a vug lined with blue celestite (strontium sulfate) crystals up to ~3 ft long, beneath Heineman's Winery (978 Catawba Ave) on South Bass Island / Put-in-Bay. Commercial show cave. (Source: DUG 'Ohio Commercial Caves' list.)"},
+  // —— Central Ohio (Franklin / Muskingum) ——
+  {n:"Griggs Dam Caves 1 & 2", reg:"central", county:"Franklin", lat:40.0162, lng:-83.0936, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Two small caves (~80 ft) in the Scioto River canyon beside Griggs Dam, Columbus. Surveyed by the Central Ohio Grotto."},
+  {n:"Tunis Cave", reg:"central", county:"Muskingum", lat:40.0299, lng:-82.0870, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> 248 ft; a Central Ohio Grotto survey project, '1 hour east of Columbus.' Namesake = Tunis Rd, west of Zanesville."},
+  {n:"Courtesy Cave", reg:"central", county:"Central Ohio", lat:40.0500, lng:-82.9300, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate.</b> A LIVE COG dig: a property with five sinkholes and a 20–25-ft pit; landowner 'Jerry.' Exact location not public (an active dig on private land) — anchored to a generic central-Ohio point."},
+  {n:"Olentangy Indian Caverns", reg:"central", county:"Delaware", lat:40.19455, lng:-83.06507, prec:"exact",
+   d:"A 3-level limestone show cave ~55–105 ft deep (1779 Home Rd, Delaware), historically used by the Wyandot; north of Columbus. Commercial show cave with self-guided tours. [Coords corrected 2026-07-01: was ~3 mi NW; now the U.S. Census geocode of 1779 Home Rd, independently confirmed by Wikipedia geodata.]"},
+  // —— SW karst: Silurian dolomite, Serpent Mound belt (Adams / Highland / Ross / Pike) ——
+  {n:"Freeland's Cave", reg:"sw", county:"Adams", lat:38.7776, lng:-83.3302, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate.</b> #2 longest in Ohio (2,323 ft) — the longest WILD cave. Silurian dolomite, Meigs Twp near Blue Creek; private/permit. Anchored to Blue Creek (exact entrance not public (federal land))."},
+  {n:"Reif's Cave", reg:"sw", county:"Ross", lat:39.3394, lng:-82.9950, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> #3 longest in Ohio (2,288 ft). A cave property that's been for sale — OCS is seeking a benefactor to conserve it. Ross County anchor (Chillicothe). Developed in the Cedarville (Niagara) Dolomite. Src: Pholeos (Wittenberg) #1."},
+  {n:"Cedar Fork Cave", reg:"sw", county:"Adams", lat:38.7917, lng:-83.5442, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> #6 longest in Ohio (1,023 ft). Adams County dolomite karst (West Union anchor). One of the larger cave entrances in Ohio; surrounded by sinkholes. Src: Pholeos (Wittenberg) v4."},
+  // ==== Rocky Fork Caves (White 1926) — Highlands Nature Sanctuary, Paint Twp Highland Co.; added/relocated 2026-07-02 ====
+  {n:"Dry Cave (Rocky Fork)", reg:"sw", county:"Highland", lat:39.2226, lng:-83.3782, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 1 on White's map: ~1 mi W of the main group, on a small Rocky Fork tributary; 180 ft, entirely dry, arch entrance, very thick weathered travertine + a grape-cluster rock pendant. Separately owned (not on the Seven Caves tract)."},
+  {n:"Ellison's Cave (Rocky Fork)", reg:"sw", county:"Highland", lat:39.2237, lng:-83.3592, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 2: across the Rocky Fork gorge ~opposite Cave Run, from a hanging-valley ravine; ~75 ft; the best-preserved marble-like travertine of the group; seldom visited. Named for Andrew Ellison, a contemporary of Daniel Boone (the traditional first white visitors)."},
+  {n:"Marble Cave (Rocky Fork)", reg:"sw", county:"Highland", lat:39.2231, lng:-83.3606, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 3: on a small tributary on the S side of Rocky Fork, ~100 yd W of the Cave Run junction; ~5 ft high; thick weathered travertine (the name). WUSS re-survey ~33 m (1982)."},
+  {n:"Crescent Cave (McKimmey's Cave)", reg:"sw", county:"Highland", lat:39.2230, lng:-83.3598, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 4: W side of the Cave Run gorge, just S of the Rocky Fork junction; two entrances + a cliff walk. A.k.a. <b>McKimmey's Cave</b> &mdash; a post-Civil-War bandit's hideout; = the WUSS 'McKimie Cave' (~70.8 m, 1982). Named for a former crown-shaped stalactite cluster."},
+  {n:"King's Wardrobe Cave", reg:"sw", county:"Highland", lat:39.2224, lng:-83.3600, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 5: W side of Cave Run, 50 ft N of Wet Cave (floor at Wet's roof level); ~5 ft high, splits then rejoins. Named for a former inverted-crown ring of stalactites."},
+  {n:"Wet Cave (Cave of the Springs)", reg:"sw", county:"Highland", lat:39.2222, lng:-83.3598, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Cave 6 of White's <b>Rocky Fork Caves</b> (Highlands Nature Sanctuary, Paint Twp, Highland Co.). #8 longest in Ohio (807 ft; WUSS 246 m, 1981). A.k.a. Cave of the Springs &mdash; the largest &amp; only actively-forming cave of the group: 32&times;15-ft entrance, 275-ft main cavern, a 'bottomless' pool, very muddy. <b>Corrected 2026-07-02</b> ~4.4 mi NW from a wrong prior spot to the real Rocky Fork Gorge. Src: White 1926 + Pholeos v3."},
+  {n:"Buzzard's Glory Cave", reg:"sw", county:"Highland", lat:39.2218, lng:-83.3599, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 7: W side of Cave Run, 60 ft N of Dancing Cave; low, wide, damp; a too-small crawl connects it to Wet Cave. Buzzards nested here (the name)."},
+  {n:"Dancing Cave (Rocky Fork)", reg:"sw", county:"Highland", lat:39.2217, lng:-83.3601, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 8: farthest S on the W side of Cave Run (~across from Bear Cave); imposing vaulted 15-ft entrance, extends 110 ft SW."},
+  {n:"Bear Cave (Rocky Fork)", reg:"sw", county:"Highland", lat:39.2217, lng:-83.3591, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 9: E side of Cave Run, ~200 yd S of the Rocky Fork junction; arch 10-ft entrance; a former bear den; has a column of coalesced stalactite + stalagmite."},
+  {n:"Fox and Coon Cave", reg:"sw", county:"Highland", lat:39.2233, lng:-83.3594, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> One of White's (1926) <b>Rocky Fork Caves</b> &mdash; now the <b>Highlands Nature Sanctuary</b> / Rocky Fork Gorge (former 'Seven Caves'), Paint Twp, Highland Co.; Cedarville dolomite. Position scaled from White's 1926 map relative to the Cave Run&ndash;Rocky Fork junction; landmark precision. Cave 10: at the Cave Run&ndash;Rocky Fork junction (~75 ft above Rocky Fork); the smallest of the group (~20 ft, fish-hook shape); a small-animal den (the name)."},
+  {n:"Lost Cap Cave", reg:"sw", county:"Highland", lat:39.2400, lng:-83.5800, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate.</b> A LIVE OCS dig: a 2021 sinkhole collapse near Hillsboro in dolomitic limestone, named when the owner lost his cap at the bottom. Found on a Cleveland Grotto trip to the Highland-Pike-Ross area; exact site not yet pinned."},
+  {n:"Spider Cave", reg:"sw", county:"Highland", lat:39.2250, lng:-83.5400, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> Highland County (an OCS/ODNR file: 'Spider Cave, Highland County, Ohio-122, 1986')."},
+  {n:"Breakfast Caves", reg:"sw", county:"Adams", lat:38.9734, lng:-83.3490, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> A cluster of 5 caves (surveyed 2007) on the W side of the Scioto Brush Creek valley near Bacon Flat Rd, NE Adams County (Pholeos 30(2))."},
+  {n:"Serpent Mound impact structure", reg:"sw", county:"Adams", lat:39.0264, lng:-83.4308, prec:"frame",
+   d:"FRAME FEATURE (not a cave): a meteorite-impact crater whose fracture network localizes the SW-Ohio karst caves. A National Historic & Natural Landmark spanning the Adams-Highland-Pike tri-corner."},
+  // —— W-central show-cave belt (Champaign / Logan) ——
+  {n:"Ohio Caverns (Reames Cave)", reg:"wc", county:"Champaign", lat:40.23809, lng:-83.69643, prec:"exact",
+   d:"#1 longest in Ohio by far — 15,787 ft (2.99 mi). Commercial show cave near West Liberty (Salem Twp). OCS reports a sinkhole 'hole' being dug nearby. [Coords refined 2026-07-01 to the OSM-tagged cave_entrance node, 2210 E SR-245.]"},
+  {n:"Zane Caverns", reg:"wc", county:"Logan", lat:40.37576, lng:-83.63512, prec:"exact",
+   d:"#4 longest in Ohio (1,529 ft). Zane Shawnee Caverns, 7092 SR-540, between Zanesfield and Bellefontaine, Logan County. [Coords corrected 2026-07-01: was ~3.3 mi off; now the OSM 'Zane Caverns Park' node, matching the U.S. Census geocode of 7092 SR-540.]"},
+  {n:"Slate Stone (Sanborn's) Cave", reg:"wc", county:"Champaign", lat:40.2600, lng:-83.7100, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> #7 longest in Ohio (902 ft). Champaign County."},
+  // —— NW Ohio (Wyandot / Seneca) ——
+  {n:"Seneca Caverns", reg:"nw", county:"Seneca", lat:41.22622, lng:-82.87567, prec:"exact",
+   d:"Commercial deep 'earth-crack' show cave near Flat Rock (Bellevue area), Seneca Co.; an OCS meeting host. Historically documented by George W. White (1926) as <b>'Good's Cave'</b> — on the Emanuel Good farm (NW Sec.14, Thompson Twp, ~1 mi SW of Flat Rock), which White ranked among Ohio's largest caves. The separate 'Good's Cave' marker (White 1926) was merged into this one — same cave — on 2026-07-02."},
+  {n:"Indian Trail Caverns (Sheriden Cave)", reg:"nw", county:"Wyandot", lat:40.9807, lng:-83.4448, prec:"exact",
+   d:"#10 longest in Ohio (597 ft). The Sheriden Cave Ice-Age fossil & Paleo-archaeology site, Ridge Twp."},
+  // —— SE sandstone (fits the original video-series corridor) ——
+
+  // ==== CORPUS-FOUND OHIO CAVES (non-PLSS; prose-geocoded, 2026-07-01) ====
+  {n:"Ferncliff Cave", reg:"wc", county:"Clark", lat:39.9372, lng:-83.8223, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Small Cedarville-Dolomite cave; entrance in Ferncliff Cemetery, Springfield. Corpus-found (Speleo Digest 1983). Geocoded to the cemetery."},
+  {n:"Chesterland Caves / Sand Hill complex", reg:"ne", county:"Geauga", lat:41.5370, lng:-81.2778, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Umbrella label for the <b>Sand Hill</b> Sharon-Conglomerate three-gorge complex (Munson Twp; southern base at <b>Fowler's Mill</b>, on the E. Branch Chagrin). This is the cave group Pholeos v3 (Madigan &amp; O'Sickey, 1982) mapped as the 'Chesterland Caves area' (Fig. 1) &mdash; <b>reconciled 2026-07-02</b> to Sand Hill: v3's main 'Chesterland Cave'/'Skylight Cave' = <b>Dart's Cave</b>, with Leaning Cave beside it (per Pholeos v9 &amp; OCS 2025). Three gorges S&rarr;N: Fern &middot; Twin Falls (the barren 'Middle Gorge', twin waterfalls) &middot; Dart's-Merkle's (the caves + NE-Ohio's largest natural tunnel). The former Sunnybrook placement (~2 mi W) was retired as a probable mis-match. Individual caves clustered here at landmark precision; exact entrances pending OCS's unpublished 2025 GPS."},
+  {n:"Oscar Hole", reg:"sw", county:"Ross", lat:39.2276, lng:-83.2705, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> 16 m; Greenfield Dolomite, discovered upstream from the Buckskin I &amp; II caves, Ross Co. Corpus-found (Pholeos / Speleo Digest 1995). Anchored near Bainbridge / Buckskin Creek (~landmark)."},
+  {n:"Lost Pack Cave", reg:"sw", county:"Adams", lat:38.86332, lng:-83.5052, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> 10 m; Peebles Dolomite, SE Adams County. Corpus-found (Speleo Digest 1983). County-level — exact site not published."},
+  {n:"Loop Cave", reg:"sw", county:"Adams", lat:38.83, lng:-83.47795, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> 15.9 m dolomite-bluff cave w/ two entrances, Adams Co.; Sullivant's Cave lies ~7 m south (named for the Ohio-endemic plant Sullivantia). Corpus-found (Pholeos / Speleo Digest 1995). County-level."},
+  {n:"Sullivant's Cave", reg:"sw", county:"Adams", lat:38.82484, lng:-83.52824, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> Small Adams Co. dolomite cave ~7 m S of Loop Cave; namesake of Sullivantia sullivantii at its entrance. Corpus-found (Pholeos / Speleo Digest 1995). County-level."},
+  {n:"Highland Co. dolomite caves (Alpha·Gator·Pseudo·Raccoon)", reg:"sw", county:"Highland", lat:39.20372, lng:-83.6304, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> A 1982 survey cluster of small Peebles/Greenfield-dolomite caves &amp; pits in Highland County (Alpha, Gator, Pseudo, Raccoon, incl. Carcass &amp; Thirty-Foot pits). Corpus-found (Speleo Digest 1982). County-level."},
+  {n:"Tinker's Cave", reg:"se", county:"Hocking", lat:39.48782, lng:-82.547, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> Hocking County cave (a.k.a. Thieves' Cave, from an outlaw legend). Corpus-found (Pholeos 6(1) / Speleo Digest 1986). County-level."},
+  {n:"John Henry Adams Cave", reg:"se", county:"Jackson", lat:39.03662, lng:-82.6089, prec:"county",
+   d:"&#9888; <b>Location approximate.</b> Long-surveyed Jackson County cave (Berea College cavers; virgin passage reported 1989). Corpus-found (NSS News 1989 / Electric Caver). County-level."},
+
+  // ==== From White (1926), 'The Limestone Caves and Caverns of Ohio' — added 2026-07-01 ====
+  {n:"Crystal Rock Cave", reg:"nw", county:"Erie", lat:41.44783, lng:-82.84269, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> In Crystal Rock Park, NW corner of Margaretta Twp, ~8 mi W of Sandusky &amp; 3/4 mi S of Lake Erie (marked 'Crystal Rock Spring' on the Bellevue quad). Src: White 1926."},
+  {n:"Underground River Cave", reg:"nw", county:"Wyandot", lat:40.98299, lng:-83.42272, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> N part of Ridge Twp, NW Wyandot Co., ~3 mi NW of Carey on the Carey–Fostoria road (M. L. Kelly). Same township as Indian Trail/Sheriden Cave. Src: White 1926 (cited by Winchell 1873)."},
+  {n:"Lawrence Cave", reg:"central", county:"Delaware", lat:40.19407, lng:-83.08088, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> On the Lawrence farm ~1/2 mi W of the Olentangy River &amp; 2.5 mi N of Powell, Liberty Twp, Delaware Co. (Delaware limestone). Near Olentangy Indian Caverns. Src: White 1926."},
+  {n:"Thompson's Cave", reg:"wc", county:"Miami", lat:40.11003, lng:-84.35384, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Small cave on the Harry Thompson farm, 1/2 mi S of Covington, S part of Newberry Twp, Miami Co.; entrance on the E bank of the Stillwater River (Cedarville dolomite). Src: White 1926."},
+  {n:"Painter Creek Cave", reg:"wc", county:"Miami", lat:40.05172, lng:-84.36333, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> On the Charles Senseman farm, N side of Painter Creek ~1 mi W of its junction with the Stillwater River, Sec.7 Newton Twp, Miami Co. Two entrances (lower Niagara limestone). Src: White 1926."},
+  {n:"Miami River Cave", reg:"wc", county:"Shelby", lat:40.26072, lng:-84.24624, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> On the W bank of the Great Miami River, Clinton Twp, Shelby Co. (Sec.11/14 boundary), ~8 mi N of Piqua. Entrance ~3 ft above the water (Niagara). Src: White 1926."},
+  {n:"Buckskin Caves", reg:"sw", county:"Ross", lat:39.2493, lng:-83.27047, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Two small caves on the W bank of Buckskin Creek, ~1.5 mi N of Bainbridge, N part of Paint Twp, Ross Co. (Greenfield dolomite). These are the Buckskin I &amp; II caves that Oscar Hole was discovered upstream from. Src: White 1926."},
+
+  // ==== Sand Hill / Dart's-Merkle's complex — Munson Twp (Pholeos v3 'Chesterland' report + v9 + OCS 2025; consolidated here 2026-07-02) ====
+  {n:"Extension Cave", reg:"ne", county:"Geauga", lat:41.5378, lng:-81.2782, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Cave 'E' on Pholeos v3 Fig. 1 (1982) — a small (~4 m) 'Y/V'-shaped expansion cave sharing a common wall with Dart's Cave (v3's 'Chesterland Cave'/'Skylight Cave'), just up-gorge. North (Dart's-Merkle's) gorge of the <b>Sand Hill</b> complex, Munson Twp. Consolidated from the former Sunnybrook placement; landmark, exact entrance pending OCS GPS."},
+  {n:"Leaning Cave", reg:"ne", county:"Geauga", lat:41.5372, lng:-81.2785, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Tall 'leaning' entrance; ~100 m downstream of Dart's/Skylight Cave in the North (Dart's-Merkle's) gorge of the <b>Sand Hill</b> complex, Munson Twp. Cave 'L' on Pholeos v3 Fig. 1 (1982); the first cave OCS reached in 2025. Landmark; exact entrance pending OCS GPS."},
+  {n:"South Gorge Cave", reg:"ne", county:"Geauga", lat:41.5345, lng:-81.2772, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Cave 'S' on Pholeos v3 Fig. 1 (1982) — a ~7 m joint-fracture cave with a small spring, in the southern gorge (v9's 'Fern Gorge') of the <b>Sand Hill</b> complex, Munson Twp. Consolidated from the former Sunnybrook placement; landmark, exact entrance pending OCS GPS."},
+  {n:"Cats Den", reg:"ne", county:"Geauga", lat:41.5368, lng:-81.2770, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Sharon-Conglomerate joint/box-canyon cave of the <b>Sand Hill</b> / Dart's complex, Munson Twp (map #8, Pholeos v3 / SD 1974). Landmark; exact gorge/entrance pending OCS GPS."},
+  {n:"Bainbridge Cave", reg:"ne", county:"Geauga", lat:41.5382, lng:-81.2767, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> ~27.7 m (re-surveyed 2009), furthest penetration along a joint; <b>Sand Hill</b> / Dart's complex, Munson Twp (map #9; Pholeos v3 / v30 / SD 1974). Landmark; exact entrance pending OCS GPS."},
+  {n:"Robber's Cave", reg:"ne", county:"Geauga", lat:41.5245, lng:-81.2762, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> A.k.a. <b>Bat Cave / Parker Cave</b>; entered through a sinkhole in flat woods ~1 mi S of the Dart's-Merkle's gorges on the Sand Hill plateau (Munson Twp); its stream resurges at Parker Spring Cave ~1500 ft distant (W. Luther sketch, 1956). Src: Pholeos v9 (map) &amp; v3 (map #6). Landmark; exact entrance pending OCS GPS."},
+  {n:"Munson Pit Cave", reg:"ne", county:"Geauga", lat:41.5360, lng:-81.2792, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> A pit cave in Munson Twp, Geauga Co. (surveyed with Crinoid Crypt). Src: Speleo Digest 1990 (J. Bailey, CIG) — a different survey; its gorge isn't identified, so anchored to the edge of the Sand Hill / Dart's complex."},
+  {n:"Crinoid Crypt Cave", reg:"ne", county:"Geauga", lat:41.5357, lng:-81.2795, prec:"landmark",
+   d:"&#9888; <b>Location approximate.</b> Munson Twp, Geauga Co. (surveyed with Munson Pit). Src: Speleo Digest 1990 (J. Bailey, CIG). Gorge not identified; anchored to the edge of the Sand Hill / Dart's complex, next to Munson Pit."},
+  {n:"Gallia shelter cave (unnamed)", reg:"se", county:"Gallia", lat:38.8200, lng:-82.3200, prec:"undisclosed",
+   d:"&#9888; <b>Location approximate.</b> ODNR botanists found a sandstone shelter cave with rare carbonate speleothems (Conemaugh Group), summer 2025. Gallia County — exact site not yet pinned. NOTE: this sits inside the original Caves-of-Ohio SE corridor."}
+];
+const ocsGroups = {};
+for (const r in ocsRegions) ocsGroups[r] = L.layerGroup().addTo(map);
+function ocsIcon(reg, faded){
+  const c = ocsRegions[reg].color;
+  return L.divIcon({ className:'ocs-icon',
+    html:'<span class="ocs-sq" style="background:'+c+';opacity:'+(faded?0.5:0.95)+';border-style:'+(faded?'dashed':'solid')+'"></span>',
+    iconSize:[13,13], iconAnchor:[6,6] });
+}
+const precLabel = { exact:"exact public feature", landmark:"landmark anchor (cave is nearby)", county:"county-level approximation", undisclosed:"exact location not yet pinned (anchored to a landmark)", frame:"geological frame feature" };
+ocsCaves.forEach(c => {
+  const faded = (c.prec==='county' || c.prec==='undisclosed');
+  const m = L.marker([c.lat,c.lng], { icon: ocsIcon(c.reg, faded) });
+  m.bindPopup('<div class="popup"><b>'+c.n+'</b>'
+    + '<div class="meta">Region: '+ocsRegions[c.reg].label+' &middot; '+c.county
+    + '<br>Coords: '+c.lat.toFixed(4)+', '+c.lng.toFixed(4)
+    + '<br>Precision: '+precLabel[c.prec]+'</div>'
+    + '<div class="role">'+c.d+'</div></div>');
+  m.bindTooltip(c.n, {direction:"top", offset:[0,-6]});
+  m.addTo(ocsGroups[c.reg]);
+  searchIndex.push({ name:c.n, lat:c.lat, lng:c.lng, marker:m, group:ocsGroups[c.reg], color:ocsRegions[c.reg].color, kind:'square', sub:ocsRegions[c.reg].label, hay:(c.n + ' ' + c.county + ' ' + ocsRegions[c.reg].label + ' ' + c.d).toLowerCase() });
+  allLatLng.push([c.lat,c.lng]);
+});
+
+/* ============================================================ *
+ * KARST — ODNR Division of Geological Survey Map EG-1, "Known and
+ * Probable Karst in Ohio," served live from the public
+ * Karst_InteractiveMap MapServer. Rendered server-side (Esri-Leaflet
+ * dynamic map layers) so all 46,789 known-karst points + the karst
+ * terranes draw as images — no browser overload. Click a karst dot
+ * for that site's notes (county, township, type, comments).
+ * ============================================================ */
+map.createPane('karstpane');
+map.getPane('karstpane').style.zIndex = 250;   // above tiles (200), below vectors/markers
+const KARST_URL = "https://gis.ohiodnr.gov/arcgis/rest/services/DGS_Services/Karst_InteractiveMap/MapServer";
+let karstRegions = null, karstPoints = null;
+if (window.L && L.esri) {
+  // Karst GEOLOGY regions — ODNR layer 2 "Karst Geology of Ohio", drawn in ODNR's NATIVE symbology
+  //  (blue = Silurian–Devonian carbonate = the main cave-bearing rock; yellow = interbedded Ordovician
+  //   limestone & shale; paler shade = <20 ft glacial-drift cover / more karst-prone, darker = >20 ft). On by default.
+  karstRegions = L.esri.dynamicMapLayer({
+    url: KARST_URL, layers:[2], pane:'karstpane', opacity:0.55
+  }).addTo(map);
+  // Known karst FEATURES — ODNR layer 4 "Karst Points" (all 46,789), ODNR native colors = confidence tier:
+  //  reddish-orange #d3492b = field-verified · orange #e69800 = suspect/field-visited · yellow #e6e600 = suspect/not-visited.
+  karstPoints = L.esri.dynamicMapLayer({ url: KARST_URL, layers:[4], pane:'karstpane', opacity:0.9 }); // off by default — toggle in the layer menu
+  const kv = function(x){ return (x===null||x===undefined||x===''||(''+x).toLowerCase()==='null') ? null : (''+x).replace(/\s+/g,' ').trim(); };
+  const titleCase = function(s){ return s.replace(/\b\w/g, function(c){ return c.toUpperCase(); }); };
+  const kscore = function(pr){ let s=0; ['COUNTY','TOWNSHIP','BG_UNIT','COMMENTS','DGS_KARSTID'].forEach(function(k){ if(kv(pr[k])) s++; }); if(/verified/i.test(pr.POINT_TYPE||'')) s+=2; return s; };
+  karstPoints.bindPopup(function(err, fc){
+    if (err || !fc || !fc.features || !fc.features.length) return false;
+    const n = fc.features.length;
+    let p = fc.features[0].properties, bs = kscore(p);
+    for (let i=1;i<n;i++){ const s = kscore(fc.features[i].properties); if (s>bs){ bs=s; p=fc.features[i].properties; } }
+    const type = kv(p.POINT_TYPE) || 'Karst feature';
+    const county = kv(p.COUNTY), twp = kv(p.TOWNSHIP), bg = kv(p.BG_UNIT), id = kv(p.DGS_KARSTID), com = kv(p.COMMENTS);
+    const meta = [];
+    if (county) meta.push(county + ' County' + (twp ? (' &middot; ' + titleCase(twp) + ' Twp') : ''));
+    if (bg) meta.push('Bedrock unit: ' + bg);
+    if (id) meta.push('ODNR karst ID: ' + id);
+    if (n > 1) meta.push('<i>' + n + ' known karst features at this spot</i>');
+    return '<div class="popup"><b>' + type + '</b>'
+      + (meta.length ? ('<div class="meta">' + meta.join('<br>') + '</div>') : '')
+      + (com ? ('<div class="role">' + com.slice(0,240) + '</div>') : '')
+      + '<div class="flag">ODNR EG-1 known karst site</div></div>';
+  });
+}
+
+/* ---- OCS Top-Ten Longest Caves — ranked overlay (numbered badges) ---- */
+const top10 = [
+  {r:1,n:"Ohio Caverns (Reames Cave)",ft:"15,787 ft (2.99 mi)",county:"Champaign",lat:40.23809,lng:-83.69643},
+  {r:2,n:"Freeland's Cave",ft:"2,323 ft",county:"Adams",lat:38.7776,lng:-83.3302},
+  {r:3,n:"Reif's Cave",ft:"2,288 ft",county:"Ross",lat:39.3394,lng:-82.9950},
+  {r:4,n:"Zane Caverns",ft:"1,529 ft",county:"Logan",lat:40.37576,lng:-83.63512},
+  {r:5,n:"Devil's Den Fracture System",ft:"1,155 ft",county:"Portage",lat:41.33117,lng:-81.04204},
+  {r:6,n:"Cedar Fork Cave",ft:"1,023 ft",county:"Adams",lat:38.7917,lng:-83.5442},
+  {r:7,n:"Slate Stone (Sanborn's) Cave",ft:"902 ft",county:"Champaign",lat:40.2600,lng:-83.7100},
+  {r:8,n:"Wet Cave",ft:"807 ft",county:"Highland",lat:39.2222,lng:-83.3598},
+  {r:9,n:"Paradise Cave",ft:"640 ft",county:"Ottawa",lat:41.6545,lng:-82.8175},
+  {r:10,n:"Indian Trail Caverns",ft:"597 ft",county:"Wyandot",lat:40.9807,lng:-83.4448}
+];
+const top10Layer = L.layerGroup();
+top10.forEach(t => {
+  const ic = L.divIcon({ className:'rank-icon', html:'<span class="rank-badge">'+t.r+'</span>', iconSize:[22,22], iconAnchor:[11,11] });
+  L.marker([t.lat,t.lng], { icon:ic, zIndexOffset:1500 })
+   .bindPopup('<div class="popup"><b>#'+t.r+' &middot; '+t.n+'</b><div class="meta">'+t.county+' County'
+     +'<br>Coords: '+t.lat.toFixed(4)+', '+t.lng.toFixed(4)+'</div>'
+     +'<div class="role">Length: <b>'+t.ft+'</b>. From the OCS unofficial "Top-Ten Longest Caves" list (NSS Cave Files / Long &amp; Deep Caves).</div></div>')
+   .bindTooltip('#'+t.r+' '+t.n+' — '+t.ft, {direction:'top', offset:[0,-11]})
+   .addTo(top10Layer);
+});
+
+/* ---- OCS "Ohio Cave Regions" — generalized zones (NOT exact boundaries) ---- */
+const caveRegionsData = [
+  { name:"NE Conglomerate Plateau", color:"#8d6e63",
+    poly:[[41.95,-81.55],[41.95,-80.52],[41.20,-80.85],[41.02,-81.40],[41.40,-81.78]],
+    note:"Sharon Conglomerate cap-rock highlands (Geauga, Lake, Summit, Portage, Cuyahoga). Fracture & slump-block caves: Thompson Ledges, Little Mountain/Log Lurker, Dart's–Merkle, Bierce, Devil's Den. Pseudokarst, not true solution karst." },
+  { name:"N-central Bellevue–Seneca karst band", color:"#0097a7",
+    poly:[[41.52,-83.30],[41.55,-82.55],[41.12,-82.62],[41.08,-83.28]],
+    note:"A band of solution-collapse depressions from NE Seneca County to Lake Erie (ODNR EG-1). Home of Seneca Caverns and the Bellevue karst-flooding zone." },
+  { name:"W-central Bellefontaine carbonate upland", color:"#c2185b",
+    poly:[[40.58,-84.05],[40.58,-83.42],[40.02,-83.45],[40.05,-84.05]],
+    note:"Silurian–Devonian carbonate upland of Logan & Champaign Counties — Ohio's deepest-developed karst. Holds the state's longest caves: Ohio Caverns/Reames (#1), Zane (#4), Slate Stone (#7)." },
+  { name:"Central carbonate (Scioto–Olentangy)", color:"#3f51b5",
+    poly:[[40.45,-83.32],[40.45,-82.78],[39.78,-82.86],[39.84,-83.30]],
+    note:"Thin-drift carbonate uplands adjacent to the Scioto & Olentangy Rivers (Franklin/Delaware/Union). Griggs Dam caves sit in the Scioto canyon here." },
+  { name:"SW Serpent Mound dolomite karst", color:"#ff7043",
+    poly:[[39.45,-83.78],[39.45,-82.82],[38.58,-83.05],[38.60,-83.78]],
+    note:"Silurian dolomite karst beyond the Wisconsinan glacial margin (Adams/Highland/Pike/Ross), with dissolution localized along the Serpent Mound impact fractures. Freeland's (#2), Reif's (#3), Cedar Fork (#6), Wet (#8), Breakfast, Lost Cap, Spider." },
+  { name:"SE sandstone 'rock-house' belt", color:"#f9a825",
+    poly:[[39.78,-82.72],[39.78,-81.95],[39.02,-82.05],[39.08,-82.85]],
+    note:"Black Hand / Pennsylvanian sandstone recess caves, rock-houses & arches — the original Caves-of-Ohio video corridor. Pseudokarst (slump-block / stream-capture), not carbonate solution karst." },
+  { name:"Lake Erie Islands", color:"#00695c",
+    poly:[[41.72,-82.93],[41.72,-82.70],[41.54,-82.70],[41.54,-82.93]],
+    note:"Dolomite/limestone island caves (Ottawa County) — Perry's, Paradise (#9), Kindt's, Larcomb, Duffs." }
+];
+const caveRegionLayer = L.layerGroup();
+caveRegionsData.forEach(z => {
+  L.polygon(z.poly, { pane:'publiclands', color:z.color, weight:1.6, dashArray:"6 4", fillColor:z.color, fillOpacity:0.10 })
+   .bindPopup('<div class="popup"><b>'+z.name+'</b><div class="role">'+z.note+'</div>'
+     +'<div class="flag">generalized cave region — not an exact boundary</div></div>')
+   .bindTooltip(z.name, { sticky:true })
+   .addTo(caveRegionLayer);
+});
+
+/* ---- generic graceful-degradation GeoJSON loader ---- */
+function loadGeo(url, layer, transform, onfail){
+  fetch(url).then(r => r.json()).then(geo => {
+    const feats = transform ? transform(geo) : (geo.features || []);
+    layer.addData({ type:"FeatureCollection", features: feats });
+  }).catch(() => { if (onfail) onfail(); });
+}
+
+/* ---- 13-county search corridor (county polygons fetched at runtime) ---- */
+const corridorFips = new Set([
+  "39073","39045","39127","39009","39163","39079","39141","39131","39145","39167","39105","39053","39087"
+]); // Hocking, Fairfield, Perry, Athens, Vinton, Jackson, Ross, Pike, Scioto, Washington, Meigs, Gallia, Lawrence
+const corridorLayer = L.geoJSON(null, {
+  pane:'publiclands',
+  style: { color:"#1f4e79", weight:1.1, fillColor:"#3388ff", fillOpacity:0.06 },
+  onEachFeature: (f, lyr) => {
+    const nm = (f.properties && f.properties.NAME) ? f.properties.NAME + " County" : "County";
+    lyr.bindTooltip(nm, { sticky:true });
+  }
+}).addTo(map);
+loadGeo(
+  'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json',
+  corridorLayer,
+  geo => geo.features.filter(f => corridorFips.has(f.id)),
+  () => {
+    const note = L.control({ position:'bottomleft' });
+    note.onAdd = function(){ const d=L.DomUtil.create('div','info-box');
+      d.innerHTML='<span class="sub">Boundary overlays need internet — connect to load the county corridor &amp; public-land layers.</span>'; return d; };
+    note.addTo(map);
+  }
+);
+
+/* ---- REFINEMENT 2a: Wayne National Forest (USFS admin boundary) ---- */
+const wayneLayer = L.geoJSON(null, {
+  pane:'publiclands',
+  style: { color:"#1b5e20", weight:1.6, dashArray:"5 3", fillColor:"#2e7d32", fillOpacity:0.20 },
+  onEachFeature: (f, lyr) => lyr.bindTooltip("Wayne National Forest (federal)", {sticky:true})
+}).addTo(map);
+loadGeo(
+  "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_ForestSystemBoundaries_01/MapServer/0/query"
+  + "?where=FORESTNAME%3D'Wayne%20National%20Forest'&outFields=FORESTNAME&returnGeometry=true"
+  + "&geometryPrecision=4&maxAllowableOffset=0.004&outSR=4326&f=geojson",
+  wayneLayer
+);
+
+/* ---- REFINEMENT 2b: Ohio State Forests (ODNR Lands, SE-corridor extent) ---- */
+const stateForestLayer = L.geoJSON(null, {
+  pane:'publiclands',
+  style: { color:"#33691e", weight:1, fillColor:"#558b2f", fillOpacity:0.30 },
+  onEachFeature: (f, lyr) => {
+    const nm = (f.properties && f.properties.LANDS_NAME) ? f.properties.LANDS_NAME : "Ohio State Forest";
+    lyr.bindTooltip(nm + " (state forest)", {sticky:true});
+  }
+}).addTo(map);
+loadGeo(
+  "https://gis2.ohiodnr.gov/ArcGIS/rest/services/OIT_Services/ODNR_ODNR_Lands_External/MapServer/0/query"
+  + "?where=PROP_TYPE%20IN%20('Forest','Experimental%20Forest','Forest%20Reserve')"
+  + "&geometry=-83.6,38.4,-80.9,39.85&geometryType=esriGeometryEnvelope&inSR=4326"
+  + "&spatialRel=esriSpatialRelIntersects&outFields=LANDS_NAME,PROP_TYPE&returnGeometry=true"
+  + "&geometryPrecision=4&maxAllowableOffset=0.003&outSR=4326&f=geojson",
+  stateForestLayer
+);
+
+/* ================================================================== *
+ * MULTI-STATE EXPANSION — Illinois & Wisconsin
+ * State frames are drawn now; the cave layers are wired up EMPTY and
+ * ready to be populated later. To add a cave, push an object into
+ * `expansionCaves` with the same shape as ocsCaves:
+ *   { n:"Name", reg:"IL"|"WI", county:"…", lat:0, lng:0, prec:"exact", d:"notes" }
+ * ================================================================== */
+const expansionRegions = {
+  IN: { label:"Indiana caves",   color:"#c2185b", frame:"#c2185b" },
+  IL: { label:"Illinois caves",  color:"#8e44ad", frame:"#8e44ad" },
+  WI: { label:"Wisconsin caves", color:"#0f8b8d", frame:"#0f8b8d" }
+};
+const expansionGroups = {};
+for (const r in expansionRegions) expansionGroups[r] = L.layerGroup().addTo(map);
+
+function expIcon(color, faded){
+  return L.divIcon({ className:'ocs-icon',
+    html:'<span class="ocs-sq" style="background:'+color+';opacity:'+(faded?0.5:0.95)+';border-style:'+(faded?'dashed':'solid')+'"></span>',
+    iconSize:[13,13], iconAnchor:[6,6] });
+}
+
+/* Populated from USA_Long_Cave_List.xlsx (OH/IL/IN/WI). Only caves with an
+ * accurate public location are included: show caves, state parks, preserves,
+ * GNIS/grottomap.org entrance points. Protected/withheld wild-cave entrances
+ * (Indiana Cave Survey / IKC / grottomap "sensitive") are intentionally omitted. */
+const expansionCaves = [
+  // ---- INDIANA ----
+  { n:"Binkley's Cave System", reg:"IN", county:"Harrison", lat:38.182773, lng:-86.150206, prec:"exact",
+    d:"Indiana's longest cave — 46.1 mi. Public entrance = Indiana Caverns show cave (Corydon); the wider system is conservancy-protected. Src: grottomap.org + Wikipedia." },
+  { n:"Blue Spring Cave (Bluespring Caverns)", reg:"IN", county:"Lawrence", lat:38.796193, lng:-86.546029, prec:"exact",
+    d:"20.9 mi — the wild system behind the Bluespring Caverns show cave, ~5 mi SW of Bedford. Coords = show-cave entrance. Src: Wikipedia/GNIS." },
+  { n:"Wyandotte Cave", reg:"IN", county:"Crawford", lat:38.22838, lng:-86.29704, prec:"exact",
+    d:"9.1 mi. State-owned show cave in O'Bannon Woods SP / Harrison-Crawford State Forest. Src: grottomap.org + Wikipedia." },
+  { n:"Whistling Cave", reg:"IN", county:"Lawrence", lat:38.727, lng:-86.417, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 7.81 mi wild cave in/near Spring Mill State Park (multiple entrances, some private). Landmark placement in the park's cave area (~1-2 km)." },
+  { n:"Marengo Cave", reg:"IN", county:"Crawford", lat:38.37556, lng:-86.339471, prec:"exact",
+    d:"5.56 mi. National-landmark commercial show cave, town of Marengo. Src: grottomap.org + marengocave.com." },
+  { n:"Wayne Cave", reg:"IN", county:"Monroe", lat:39.13273, lng:-86.64869, prec:"exact",
+    d:"4.25 mi. In the IKC-owned Wayne Cave Preserve, Garrison Chapel karst valley W of Bloomington. NE&frac14; SE&frac14; NE&frac14; Sec.17, T.8N R.2W, Whitehall Quad (off Gardner Rd). Upgraded landmark→exact 2026-07-01 from 1973 IN Guidebook legal description via BLM PLSS — same section as Buckner &amp; Blair Spring caves." },
+  { n:"Buckner Cave", reg:"IN", county:"Monroe", lat:39.12523, lng:-86.65333, prec:"exact",
+    d:"3.47 mi. NSS-owned caver-training cave, Richard Blenz Nature Preserve (Eller Rd, Bloomington). NE&frac14; SW&frac14; SE&frac14; Sec.17, T.8N R.2W, Whitehall Quad — 500 ft N of the old barn at the end of Eller Rd. Upgraded landmark→exact 2026-07-01 from 1973 IN Guidebook via BLM PLSS." },
+  { n:"Upper Twin Cave", reg:"IN", county:"Lawrence", lat:38.724361, lng:-86.410000, prec:"exact",
+    d:"3.1 mi. Part of the Twin Caves (boat-tour cave) in Spring Mill State Park. Src: Wikipedia/GNIS." },
+  { n:"Parker's Pit Cave", reg:"IN", county:"Harrison", lat:38.21091, lng:-86.246426, prec:"exact",
+    d:"2.8 mi (~74 m vertical pit). Published entrance (not flagged sensitive) on grottomap.org." },
+  { n:"Organ Springs Cave", reg:"IN", county:"Washington", lat:38.47722, lng:-86.16444, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 1.97 mi. Namesake of the Organ Springs community (Howard Twp); the cave is the spring's source. Landmark (~1-2 km). Src: Wikipedia." },
+  { n:"Shawnee Cave (Donaldson-Bronson)", reg:"IN", county:"Lawrence", lat:38.730389, lng:-86.415278, prec:"exact",
+    d:"1.52 mi. The Donaldson-Bronson system in Spring Mill State Park (Donaldson entrance). Src: Wikipedia/GNIS." },
+  { n:"Hamer's Cave", reg:"IN", county:"Lawrence", lat:38.73350, lng:-86.42633, prec:"exact",
+    d:"1.49 mi. Its flume powers the grist mill in Spring Mill SP's Pioneer Village. Upgraded landmark→exact 2026-07-01 to the OSM-tagged cave_entrance node (~0.55 mi from prior estimate)." },
+  { n:"Endless Cave", reg:"IN", county:"Washington", lat:38.69215, lng:-86.25660, prec:"exact",
+    d:"1.31 mi. In Cave River Valley Natural Area (a.k.a. Dry Clifty Cave). SW&frac14; NE&frac14; SE&frac14; Sec.14, T.3N R.2E, Campbellsburg Quad. Corrected 2026-07-01: prior landmark was ~3.8 mi SW; relocated from Speleo Digest 1958 / 1973 IN Guidebook legal description via BLM PLSS." },
+  { n:"Mitchell Crushed Stone Co. Cave", reg:"IN", county:"Lawrence", lat:38.735, lng:-86.51, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 1.31 mi. At the Rogers Group (Mitchell Crushed Stone) quarry, SR 60 W of Mitchell. Landmark at the quarry (~1-2 km)." },
+  { n:"Waterfall Cave", reg:"IN", county:"Washington", lat:38.652, lng:-86.217, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 1.07 mi. In Henderson Park / Twin Creek Valley (TNC), ~7-8 mi W of Salem. Landmark at the preserve (~1 km). Src: IKC." },
+  { n:"Lost River Cave System", reg:"IN", county:"Orange", lat:38.63115, lng:-86.55711, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 22.2 mi disappearing-river karst. Anchored to the public Orangeville Rise (National Natural Landmark), the system's resurgence ~2 mi E of Orangeville; the passages themselves are not published." },
+  // ---- INDIANA: recovered from the NSS substrate (previously "To Find") ----
+  // These entrances are suppressed in modern databases but were published with full PLSS
+  // legal descriptions in mid-century NSS literature; geo-located via the BLM PLSS CadNSDI
+  // (township -> section polygon -> quarter-quarter subdivision) and cross-checked against
+  // an independent town/landmark clue in each source.
+  { n:"Pless Cave", reg:"IN", county:"Lawrence", lat:38.80760, lng:-86.54293, prec:"exact",
+    d:"2.70 mi. SE&frac14; NE&frac14; SE&frac14; Sec.5, T.4N R.1W (2nd PM); just S of SR-450, a few mi W off US-50. Falls ~0.8 mi N of Blue Spring Cave &mdash; matching the survey note 'Blue Spring Cave 0.5 mi to the south.' Reported polluted by a leaking underground fuel tank (1992 IN Guidebook). Geo-located from Speleo Digest 1961 legal description via BLM PLSS." },
+  { n:"Shiloh Cave", reg:"IN", county:"Lawrence", lat:38.86808, lng:-86.56327, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 1.26 mi. Sec.18, T.5N R.1W (2nd PM). Entrance in a sinkhole behind Shiloh Church, ~5 mi out of Bedford on Rte 158. Section-centroid placement (~1 km) from Speleo Digest 1961 &amp; 1965 IN Guidebook via BLM PLSS." },
+  { n:"Blair Spring Cave", reg:"IN", county:"Monroe", lat:39.13086, lng:-86.66030, prec:"exact",
+    d:"3.12 mi. SW&frac14; SE&frac14; NW&frac14; Sec.17, T.8N R.2W (2nd PM), Whitehall Quad. ~&frac14; mi E of Blair Spring, ~200 ft SE of Little Blair Spring; W end of the Garrison Chapel karst valley. Geo-located from Speleo Digest 1965 (James Rodemaker survey) via BLM PLSS." },
+  { n:"Hudelson Cave (Cavern)", reg:"IN", county:"Orange", lat:38.60302, lng:-86.48303, prec:"exact",
+    d:"1.02 mi. NE&frac14; SW&frac14; SE&frac14; Sec.14, T.2N R.1W (2nd PM), Paoli Quad. A 20-ft entrance pit on the Clifford Hudelson Farm, ~4 mi N of Paoli; lies on the route between the Stamper Creek sinks and the Rise of Lost River. Geo-located from Speleo Digest 1958/1963 via BLM PLSS." },
+  // ---- ILLINOIS ----
+  { n:"Fogelpole Cave", reg:"IL", county:"Monroe", lat:38.19700, lng:-90.12928, prec:"exact",
+    d:"Illinois' longest cave (~15 mi). Paul Wightman Subterranean Nature Preserve (Clifftop), ~9.5 mi S of Waterloo. Coords = preserve/entrance area." },
+  { n:"Pautler Cave", reg:"IL", county:"Monroe", lat:38.31, lng:-90.20, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 6 mi. Illinois Nature Preserve (Karst Conservancy of IL); INPC withholds the point. Landmark ~3 mi WSW of Waterloo." },
+  { n:"Illinois Caverns (Little Mammoth)", reg:"IL", county:"Monroe", lat:38.23561, lng:-90.13706, prec:"exact",
+    d:"5.62 mi. Former Illinois Caverns State Natural Area (near Burksville, S of Waterloo); public access point. Src: Wikipedia." },
+  { n:"Ava Cave", reg:"IL", county:"Jackson", lat:37.85453, lng:-89.55169, prec:"exact",
+    d:"1.3 mi. Downstream entrance ~4 km SW of Ava. Src: grottomap.org (single-source)." },
+
+  // ==== CORPUS-FOUND ILLINOIS CAVES (Meyer via PLSS; rest prose/protected, 2026-07-01) ====
+  { n:"Meyer Cave", reg:"IL", county:"Monroe", lat:38.3947, lng:-90.25254, prec:"exact",
+    d:"In the Mississippi River limestone bluff ~4 mi SSW of Columbia. NW&amp;frac14; Sec.6, T.2S R.10W (3rd PM), New Hanover Twp. Geo-located from NSS Bulletin vol-29 legal description via BLM PLSS." },
+  { n:"Krueger System", reg:"IL", county:"Monroe", lat:38.195, lng:-90.145, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 3.86 mi. Major cave of the Waterloo–Renault sinkhole plain (entrances incl. Fruth, Dry Run Pit, Big Sink; near O'Leary School). Protected (Armin Krueger Speleological NP) — exact entrance not yet pinned; anchored to the Renault plain ~2.5 mi NNW of Illinois Caverns. Src: NSS News 1980–83." },
+  { n:"Kelly Spring Cave", reg:"IL", county:"Monroe", lat:38.185, lng:-90.135, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> 1.92 mi. Drainage outlet of the Krueger system; the spring lies ~½ mi E of O'Leary School (water connection proven). Protected; anchored to the Renault sinkhole plain. Src: Speleo Digest 1962 / NSS News 1980–81." },
+  { n:"Camp Vandeventer Cave", reg:"IL", county:"Monroe", lat:38.16, lng:-90.15, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Monroe County sinkhole-plain cave near Renault (Camp Vandeventer). Anchored to Renault (~landmark). Src: NSS Bulletin vol.40 faunal survey." },
+  { n:"Dry Run Cave", reg:"IL", county:"Monroe", lat:38.205, lng:-90.148, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Monroe County cave in the Krueger/Dry Run drainage of the Renault sinkhole plain. Anchored to the Renault plain (~landmark). Src: NSS Bulletin vol.40." },
+  { n:"Madonnaville Cave", reg:"IL", county:"Monroe", lat:38.26505, lng:-90.24678, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Monroe County cave near the hamlet of Madonnaville. Geocoded to Madonnaville (~landmark). Src: NSS Bulletin vol.40." },
+  { n:"Horsethief Cave", reg:"IL", county:"Monroe", lat:38.30538, lng:-90.30015, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Monroe County bluff cave near Valmeyer. Anchored to Valmeyer (~landmark). Src: NSS Bulletin vol.40." },
+  { n:"Stemler Cave", reg:"IL", county:"St. Clair", lat:38.45, lng:-90.13, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> St. Clair County sinkhole-plain cave (INPC conservation site) near Columbia/Millstadt. Entrance protected; anchored to the Columbia–Millstadt karst (~landmark). Src: NSS Bulletin vol.40 / Missouri Speleology 2015." },
+  { n:"Falling Spring Cave", reg:"IL", county:"St. Clair", lat:38.52956, lng:-90.18356, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> St. Clair County spring-cave at the Falling Spring landmark near Dupo. Geocoded to Falling Spring (~landmark). Src: NSS Bulletin vol.40." },
+  { n:"Frieze Cave", reg:"IL", county:"Pope", lat:37.41, lng:-88.56, prec:"county",
+    d:"&#9888; <b>Location approximate.</b> Pope County cave (Shawnee Hills). County-level — no finer location in corpus. Src: NSS Bulletin vol.40 faunal survey." },
+  { n:"Layoff Cave", reg:"IL", county:"Hardin", lat:37.475, lng:-88.175, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Hardin County cave near Cave-in-Rock (lower Ohio River bluffs). Anchored to Cave-in-Rock (~landmark). Src: NSS Bulletin vol.40." },
+  { n:"Brown's Hole", reg:"IL", county:"Hardin", lat:37.46, lng:-88.155, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Hardin County cave near Cave-in-Rock. Anchored to Cave-in-Rock (~landmark). Src: NSS Bulletin vol.40." },
+  { n:"Devil's Backbone Cave", reg:"IL", county:"Jackson", lat:37.62811, lng:-89.33676, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Jackson County cave in the Fountain Bluff / Pomona area of the Mississippi bluffs. Anchored to Pomona (~landmark). Src: NSS Bulletin vol.40." },
+
+  // ==== CORPUS-RECOVERED WILD CAVES (NSS legal descriptions -> BLM PLSS, 2026-07-01) ====
+  { n:"Armstrong Spring", reg:"IN", county:"Lawrence", lat:38.91633, lng:-86.64563, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; NW&frac14; NW&frac14; Sec.33, T.6N R.2W (2nd PM). Src: Speleo Digest SD_1974-compressed +1 more. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Coon Cave", reg:"IN", county:"Monroe", lat:39.13998, lng:-86.65799, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; SE&frac14; SW&frac14; Sec.8, T.8N R.2W (2nd PM). Src: Guidebooks 1973-Guidebook-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Eller Cave", reg:"IN", county:"Monroe", lat:39.12876, lng:-86.62773, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; NW&frac14; SW&frac14; Sec.15, T.8N R.2W (2nd PM). Src: Guidebooks 1973-Guidebook-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Grinstaff's Cave", reg:"IN", county:"Lawrence", lat:38.87477, lng:-86.62949, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; NE&frac14; NE&frac14; Sec.16, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Hornecker Cave", reg:"IN", county:"Lawrence", lat:38.86581, lng:-86.66866, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; NE&frac14; SE&frac14; Sec.18, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Ramsey Cave", reg:"IN", county:"Harrison", lat:38.323, lng:-86.15332, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; NE&frac14; SW&frac14; Sec.23, T.2S R.3E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Salamander-Crystal Cave", reg:"IN", county:"Monroe", lat:39.14356, lng:-86.64642, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; NW&frac14; SW&frac14; Sec.9, T.8N R.2W (2nd PM). Src: Guidebooks 1973-Guidebook-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Shaft Cave", reg:"IN", county:"Monroe", lat:39.14365, lng:-86.64869, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; NE&frac14; SE&frac14; Sec.8, T.8N R.2W (2nd PM). Src: Guidebooks 1973-Guidebook-compressed +1 more. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Stones Cave", reg:"IN", county:"Crawford", lat:38.3077, lng:-86.30926, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; SW&frac14; SW&frac14; Sec.28, T.2S R.2E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Atkins Pit", reg:"IN", county:"Harrison", lat:38.33648, lng:-86.20549, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; SE&frac14; Sec.17, T.2S R.3E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Baker's Cave", reg:"IN", county:"Lawrence", lat:38.87017, lng:-86.63065, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; NE&frac14; Sec.16, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Cheese Cave", reg:"IN", county:"Orange", lat:38.55565, lng:-86.3621, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; NW&frac14; Sec.1, T.1N R.1E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Deep Cave", reg:"IN", county:"Lawrence", lat:38.78987, lng:-86.60342, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; SW&frac14; Sec.11, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Green's Cave", reg:"IN", county:"Lawrence", lat:38.76111, lng:-86.57965, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; SE&frac14; Sec.24, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1972-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Jug Hole", reg:"IN", county:"Harrison", lat:38.1658, lng:-86.24959, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; SE&frac14; Sec.13, T.4S R.2E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Pinnacle Pit", reg:"IN", county:"Lawrence", lat:38.84862, lng:-86.64916, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; SE&frac14; Sec.20, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Rainey Cave", reg:"IN", county:"Lawrence", lat:38.84121, lng:-86.61718, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; NE&frac14; Sec.27, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Ray Spring", reg:"IN", county:"Lawrence", lat:38.73575, lng:-86.65797, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; SW&frac14; Sec.32, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Red Oak Hole", reg:"IN", county:"Crawford", lat:38.23289, lng:-86.30741, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; NW&frac14; Sec.28, T.3S R.2E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Reeder Cave", reg:"IN", county:"Lawrence", lat:38.83763, lng:-86.63553, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; SE&frac14; Sec.28, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Russell Cave", reg:"IN", county:"Washington", lat:38.68916, lng:-86.24646, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; SW&frac14; Sec.13, T.3N R.2E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Seven-Up Cave", reg:"IN", county:"Lawrence", lat:38.84862, lng:-86.65849, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; SW&frac14; Sec.20, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Shoals Farm Cave", reg:"IN", county:"Orange", lat:38.66715, lng:-86.57417, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SE&frac14; NE&frac14; Sec.25, T.3N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (~exact)." },
+  { n:"Bear Cave", reg:"IN", county:"Lawrence", lat:38.7751, lng:-86.6167, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; Sec.15, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Blue River Bend Cave", reg:"IN", county:"Crawford", lat:38.32982, lng:-86.30654, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; Sec.21, T.2S R.2E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Coulter Pit", reg:"IN", county:"Washington", lat:38.54648, lng:-86.25684, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. SE&frac14; Sec.2, T.1N R.2E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Drake's Cave", reg:"IN", county:"Harrison", lat:38.30289, lng:-86.20074, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.32, T.2S R.3E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Dry Cave", reg:"IN", county:"Lawrence", lat:38.88694, lng:-86.5765, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.12, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Ed's Hole", reg:"IN", county:"Harrison", lat:38.36056, lng:-86.22173, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.7, T.2S R.3E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Edwards Cave", reg:"IN", county:"Lawrence", lat:38.76717, lng:-86.61093, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.22, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Freeman Cave", reg:"IN", county:"Monroe", lat:39.20062, lng:-86.6817, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NW&frac14; Sec.19, T.9N R.2W (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Frohman's Cave", reg:"IN", county:"Crawford", lat:38.2758, lng:-86.33555, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.7, T.3S R.2E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Green Cave", reg:"IN", county:"Washington", lat:38.70755, lng:-86.2701, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. SW&frac14; Sec.11, T.3N R.2E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Linden Pit", reg:"IN", county:"Lawrence", lat:38.95656, lng:-86.63077, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.16, T.6N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"May Pit", reg:"IN", county:"Lawrence", lat:38.90797, lng:-86.57753, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. SE&frac14; Sec.36, T.6N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Saltpeter Cave", reg:"IN", county:"Orange", lat:38.42681, lng:-86.31304, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. SE&frac14; Sec.17, T.1S R.2E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Seaton's Pit", reg:"IN", county:"Harrison", lat:38.34107, lng:-86.26526, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. NE&frac14; Sec.14, T.2S R.2E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Terry Cave", reg:"IN", county:"Lawrence", lat:38.76273, lng:-86.60518, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. SW&frac14; Sec.23, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Travertine Cave", reg:"IN", county:"Lawrence", lat:38.82831, lng:-86.58727, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. NW&frac14; Sec.36, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Wiesbach Cave", reg:"IN", county:"Martin", lat:38.66103, lng:-86.74322, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. SE&frac14; Sec.28, T.3N R.3W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"BB Hole", reg:"IN", county:"Crawford", lat:38.242, lng:-86.30456, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.21, T.3S R.2E (2nd PM). Src: Speleo Digest SD_2000-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Bear Cave", reg:"IN", county:"Owen", lat:39.18835, lng:-86.74873, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.28, T.9N R.3W (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Bex Pit", reg:"IN", county:"Lawrence", lat:38.76447, lng:-86.61206, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.22, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Blue Springs", reg:"IN", county:"Lawrence", lat:38.76627, lng:-86.61883, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.22, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Bryant's Cave", reg:"IN", county:"Harrison", lat:38.34209, lng:-86.2079, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.17, T.2S R.3E (2nd PM). Src: Speleo Digest SD_1970-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Buzzard's Cave", reg:"IN", county:"Lawrence", lat:38.80974, lng:-86.57956, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.1, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Click's Cave", reg:"IN", county:"Washington", lat:38.53631, lng:-86.16905, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.10, T.1N R.3E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Counterfeiter's Cave", reg:"IN", county:"Washington", lat:38.52158, lng:-86.1505, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.14, T.1N R.3E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Dubois Cave", reg:"IN", county:"Crawford", lat:38.28596, lng:-86.29234, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.3, T.3S R.2E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"East Pit", reg:"IN", county:"Lawrence", lat:38.82472, lng:-86.54426, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.32, T.5N R.1W (2nd PM). Src: NSS News October_02. BLM PLSS section-centroid (~1 km)." },
+  { n:"Fat Man's Misery Cave", reg:"IN", county:"Jefferson", lat:38.73467, lng:-85.35978, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.1, T.3N R.10E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Fault Cave", reg:"IN", county:"Monroe", lat:39.13145, lng:-86.59859, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.14, T.8N R.2W (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Flat Rock Cave", reg:"IN", county:"Shelby", lat:39.40216, lng:-85.75079, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.16, T.11N R.7E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Gilmore Spring", reg:"IN", county:"Monroe", lat:39.22822, lng:-86.58561, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.12, T.9N R.2W (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Green Eye II Pit", reg:"IN", county:"Monroe", lat:38.99935, lng:-86.58287, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.36, T.7N R.2W (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Hidden Pit", reg:"IN", county:"Owen", lat:39.19942, lng:-86.68467, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.24, T.9N R.3W (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Ice Cave", reg:"IN", county:"Greene", lat:39.02918, lng:-86.74675, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.21, T.7N R.3W (2nd PM). Src: Speleo Digest SD_1974-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Indian Cave", reg:"IN", county:"Jefferson", lat:38.73467, lng:-85.35978, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.1, T.3N R.10E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Jesse Tate Cave", reg:"IN", county:"Jennings", lat:38.84597, lng:-85.63856, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.28, T.5N R.8E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Jim Sale Cave", reg:"IN", county:"Ripley", lat:39.08165, lng:-85.23214, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.6, T.7N R.12E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Joraen's Cave", reg:"IN", county:"Harrison", lat:38.23257, lng:-86.16424, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.22, T.3S R.3E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Lackey Cave", reg:"IN", county:"Lawrence", lat:38.8248, lng:-86.60113, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.35, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Ladder Cave", reg:"IN", county:"Washington", lat:38.53579, lng:-86.24298, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.12, T.1N R.2E (2nd PM). Src: Speleo Digest SD_1958-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Laurel Cave", reg:"IN", county:"Jennings", lat:38.86075, lng:-85.63884, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.21, T.5N R.8E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Lewis Creek Cave", reg:"IN", county:"Jefferson", lat:38.76089, lng:-85.62132, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.27, T.4N R.8E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Lowery Cave", reg:"IN", county:"Jennings", lat:39.12421, lng:-85.6402, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.21, T.8N R.8E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Meek Cave", reg:"IN", county:"Jennings", lat:38.933, lng:-85.71226, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.26, T.6N R.7E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Miller's Cave", reg:"IN", county:"Lawrence", lat:38.81067, lng:-86.65651, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.5, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Morris Cave", reg:"IN", county:"Jefferson", lat:38.68061, lng:-85.56, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.19, T.3N R.9E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Moss Cave", reg:"IN", county:"Lawrence", lat:38.80889, lng:-86.58358, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.1, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Old Lady Cave", reg:"IN", county:"Lawrence", lat:38.88062, lng:-86.5847, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.12, T.5N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Owl Canyon Cave", reg:"IN", county:"Morgan", lat:39.37637, lng:-86.56691, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.19, T.11N R.1W (2nd PM). Src: Speleo Digest SD_1976-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Popcorn Springs", reg:"IN", county:"Lawrence", lat:38.93166, lng:-86.64912, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.29, T.6N R.2W (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Rainbow Cave", reg:"IN", county:"Morgan", lat:39.37637, lng:-86.5841, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.24, T.11N R.2W (2nd PM). Src: Speleo Digest SD_1976-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Slider Cave", reg:"IN", county:"Jefferson", lat:38.70819, lng:-85.5246, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.16, T.3N R.9E (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Steprow Cave", reg:"IN", county:"Harrison", lat:38.2246, lng:-86.1732, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.27, T.3S R.3E (2nd PM). Src: Speleo Digest SD_1960-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Stroud's Still Cave", reg:"IN", county:"Crawford", lat:38.36975, lng:-86.29818, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.4, T.2S R.2E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Swaren's Cave", reg:"IN", county:"Harrison", lat:38.31534, lng:-86.24354, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.25, T.2S R.2E (2nd PM). Src: Speleo Digest SD_1961-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Swarren's Cave", reg:"IN", county:"Harrison", lat:38.31441, lng:-86.24469, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.25, T.2S R.2E (2nd PM). Src: Speleo Digest SD_1967. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Sweet Potato Cave", reg:"IN", county:"Lawrence", lat:38.81146, lng:-86.58438, prec:"exact",
+    d:"Wild cave, geo-located from the NSS corpus. Sec.1, T.4N R.2W (2nd PM). Src: Speleo Digest SD_1959-compressed. BLM PLSS quarter-quarter (sharpened from a fuller aliquot)." },
+  { n:"Flatbush Cave", reg:"WI", county:"Fond du Lac", lat:43.64002, lng:-88.61179, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.32, T.14N R.16E (4th PM). Src: Speleo Digest SD_1976-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Ford's Cave", reg:"WI", county:"Fond du Lac", lat:43.64018, lng:-88.63315, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.31, T.14N R.16E (4th PM). Src: Speleo Digest SD_1976-compressed. BLM PLSS section-centroid (~1 km)." },
+  { n:"Harlem Cave", reg:"WI", county:"Fond du Lac", lat:43.64002, lng:-88.61179, prec:"landmark",
+    d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.32, T.14N R.16E (4th PM). Src: Speleo Digest SD_1976-compressed. BLM PLSS section-centroid (~1 km)." },
+
+];
+expansionCaves.forEach(c => {
+  const faded = (c.prec==='county' || c.prec==='undisclosed');
+  const m = L.marker([c.lat,c.lng], { icon: expIcon(expansionRegions[c.reg].color, faded) });
+  m.bindPopup('<div class="popup"><b>'+c.n+'</b>'
+    + '<div class="meta">'+expansionRegions[c.reg].label+' &middot; '+(c.county||'')
+    + '<br>Coords: '+c.lat.toFixed(4)+', '+c.lng.toFixed(4)
+    + (c.prec ? '<br>Precision: '+(precLabel[c.prec]||c.prec) : '')+'</div>'
+    + '<div class="role">'+(c.d||'')+'</div></div>');
+  m.bindTooltip(c.n, {direction:"top", offset:[0,-6]});
+  m.addTo(expansionGroups[c.reg]);
+  searchIndex.push({ name:c.n, lat:c.lat, lng:c.lng, marker:m, group:expansionGroups[c.reg],
+    color:expansionRegions[c.reg].color, kind:'square', sub:expansionRegions[c.reg].label,
+    hay:(c.n+' '+(c.county||'')+' '+expansionRegions[c.reg].label+' '+(c.d||'')).toLowerCase() });
+  allLatLng.push([c.lat,c.lng]);
+});
+
+/* State outline frames for IL & WI (publiclands pane, on by default) */
+const stateFrameLayer = L.layerGroup().addTo(map);
+fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
+  .then(r => r.json()).then(geo => {
+    (geo.features||[]).forEach(f => {
+      const nm = f.properties && f.properties.name;
+      const reg = nm==='Indiana' ? 'IN' : (nm==='Illinois' ? 'IL' : (nm==='Wisconsin' ? 'WI' : null));
+      if (!reg) return;
+      L.geoJSON(f, { pane:'publiclands', color:expansionRegions[reg].frame, weight:2.2,
+        fill:true, fillColor:expansionRegions[reg].frame, fillOpacity:0.05, dashArray:'5 4' })
+        .bindTooltip(nm+' — expansion frame (caves to be added)', {sticky:true})
+        .addTo(stateFrameLayer);
+    });
+  }).catch(()=>{});
+
+/* ---- controls ---- */
+const baseLayers = {
+  "Topographic (Esri)": esriTopo,
+  "Topographic (OpenTopoMap)": openTopo,
+  "USGS Topo": usgsTopo,
+  "Street": street,
+  "Satellite": sat
+};
+const overlays = {};
+for (const key in cats) overlays[cats[key].label] = groups[key];
+overlays["↘ 'Toward the Ohio River' (Ep. 7)"] = reach;
+overlays["🟩 Wayne National Forest"] = wayneLayer;
+overlays["🟩 Ohio State Forests"] = stateForestLayer;
+overlays["▦ 13-county search corridor"] = corridorLayer;
+for (const r in ocsRegions) overlays["■ OCS · " + ocsRegions[r].label] = ocsGroups[r];
+if (karstRegions) overlays["🟦🟨 Karst geology — ODNR EG-1 (blue=carbonate, yellow=Ordovician)"] = karstRegions;
+if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
+overlays["① Top-10 longest caves (ranked)"] = top10Layer;
+overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
+overlays["◇ State frames — IL &amp; WI"] = stateFrameLayer;
+for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
+L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
+
+/* ---- keyword search over all named caves & sites (names + their notes) ---- */
+const search = L.control({ position:'topleft' });
+search.onAdd = function(){
+  const d = L.DomUtil.create('div','searchbox');
+  d.innerHTML = '<input type="text" id="caveSearch" placeholder="Search caves &amp; sites…" autocomplete="off">'
+    + '<div class="search-results" id="searchResults"></div>';
+  L.DomEvent.disableClickPropagation(d);
+  L.DomEvent.disableScrollPropagation(d);
+  return d;
+};
+search.addTo(map);
+(function(){
+  const inp = document.getElementById('caveSearch');
+  const res = document.getElementById('searchResults');
+  let current = [];
+  function go(h){
+    if (h.group && !map.hasLayer(h.group)) map.addLayer(h.group);  // make sure its layer is on
+    map.flyTo([h.lat, h.lng], 13, { duration:1.0 });
+    setTimeout(function(){ h.marker.openPopup(); }, 1050);
+    res.innerHTML = ''; inp.value = h.name;
+  }
+  function run(){
+    const q = inp.value.trim().toLowerCase();
+    res.innerHTML = ''; current = [];
+    if (q.length < 2) return;
+    current = searchIndex
+      .filter(function(e){ return e.hay.indexOf(q) >= 0; })
+      .sort(function(a,b){
+        const ai = a.name.toLowerCase().indexOf(q), bi = b.name.toLowerCase().indexOf(q);
+        return (ai < 0 ? 9999 : ai) - (bi < 0 ? 9999 : bi);
+      })
+      .slice(0, 12);
+    if (!current.length){ res.innerHTML = '<div class="none">No matches</div>'; return; }
+    current.forEach(function(h){
+      const row = document.createElement('div');
+      row.className = 'hit';
+      const rad = (h.kind === 'circle') ? '50%' : '2px';
+      row.innerHTML = '<span class="ssw" style="background:'+h.color+';border-radius:'+rad+'"></span>'
+        + '<span>'+h.name+'<small>'+h.sub+'</small></span>';
+      row.addEventListener('click', function(){ go(h); });
+      res.appendChild(row);
+    });
+  }
+  inp.addEventListener('input', run);
+  inp.addEventListener('focus', run);
+  inp.addEventListener('keydown', function(e){ if (e.key === 'Enter' && current.length){ e.preventDefault(); go(current[0]); } });
+})();
+
+/* ---- legend ---- */
+const legend = L.control({ position:'bottomright' });
+legend.onAdd = function(){
+  const d = L.DomUtil.create('div','legend');
+  let html = '<b>Source: Jaeck Caves</b>'
+       + '<div class="row" style="color:#666;font-size:11px;margin:0 0 3px">Anchor points from the video series:</div>';
+  for (const key in cats){
+    const dash = (key === 'approx') ? ' dash' : '';
+    html += '<div class="row"><span class="dot'+dash+'" style="background:'+cats[key].color+'"></span>'
+         + cats[key].label.replace(/^[^ ]+ /, '') + '</div>';
+  }
+  html += '<hr><b>Caves &mdash; IN &middot; IL &middot; WI &#9642;</b>';
+  for (const r in expansionRegions){
+    html += '<div class="row"><span class="ocs-sw" style="background:'+expansionRegions[r].color+'"></span>'+expansionRegions[r].label+'</div>';
+  }
+  html += '<div class="row" style="margin-top:4px;color:#666;font-size:11px">Show caves, parks &amp; preserves + wild caves recovered from the NSS library via PLSS legal descriptions. (WI seeded, 3 so far.)</div>';
+  html += '<hr><b>Ohio Cave Survey caves &#9642;</b>';
+  for (const r in ocsRegions){
+    html += '<div class="row"><span class="ocs-sw" style="background:'+ocsRegions[r].color+'"></span>'+ocsRegions[r].label+'</div>';
+  }
+  html += '<div class="row"><span class="rank-mini">1</span>Top-10 longest OH caves (ranked)</div>'
+       + '<div class="row" style="margin-top:4px;color:#666;font-size:11px">Squares = OCS-documented caves (statewide).</div>';
+  html += '<hr><b>Karst &mdash; ODNR Map EG-1 (live)</b>'
+       + '<div class="row" style="color:#555;font-size:11px;margin-bottom:1px"><b>Geology</b> (shaded regions):</div>'
+       + '<div class="row"><span class="sw" style="background:#adceed"></span>Silurian&ndash;Devonian carbonate &mdash; main cave rock</div>'
+       + '<div class="row"><span class="sw" style="background:#e6e600"></span>Ordovician limestone &amp; shale &mdash; less soluble</div>'
+       + '<div class="row" style="color:#888;font-size:10px;margin:1px 0 3px 2px">paler = &lt;20 ft glacial cover (more karst-prone) &middot; darker = &gt;20 ft</div>'
+       + '<div class="row" style="color:#555;font-size:11px;margin-bottom:1px"><b>Known features</b> (dots), by confidence:</div>'
+       + '<div class="row"><span class="dot" style="background:#d3492b;width:9px;height:9px"></span>field-verified karst</div>'
+       + '<div class="row"><span class="dot" style="background:#e69800;width:9px;height:9px"></span>suspected &mdash; field-visited</div>'
+       + '<div class="row"><span class="dot" style="background:#e6e600;width:9px;height:9px"></span>suspected &mdash; not visited</div>'
+       + '<div class="row" style="margin-top:4px;color:#666;font-size:11px">Dots off by default &mdash; toggle in the layer menu; click one for notes.</div>';
+  html += '<hr><b>Public land (search frame)</b>'
+       + '<div class="row"><span class="sw" style="background:#2e7d32;opacity:.55;border-style:dashed"></span>Wayne National Forest</div>'
+       + '<div class="row"><span class="sw" style="background:#558b2f;opacity:.6"></span>Ohio State Forests</div>'
+       + '<div class="row"><span class="sw" style="background:#3388ff;opacity:.25"></span>13-county corridor</div>';
+  html += '<hr><div class="row" style="color:#555;font-size:11px">&#9888; <b>Location approximate</b> in a cave\'s popup = not precisely geolocated (dashed/faded marker means the same).</div>';
+  d.innerHTML = html;
+  return d;
+};
+legend.addTo(map);
+
+// Default view frames the tri-state expansion (OH · IL · WI). Ohio holds the
+// data for now; IL & WI frames are visible and ready to be populated.
+const triStateBounds = L.latLngBounds([[37.0,-91.6],[47.1,-80.4]]);
+function fitView(){ map.fitBounds(triStateBounds); }
+function fitOhio(){ map.fitBounds(L.latLngBounds(allLatLng).pad(0.12)); }
+fitView();
+</script>
+</body>
+</html>

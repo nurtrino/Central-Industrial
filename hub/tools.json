@@ -9,6 +9,11 @@
       "id": "monkeyreadmonkeydo",
       "name": "Monkey Read Monkey Do",
       "url": "http://127.0.0.1:5005/"
+    },
+    {
+      "id": "cavemap",
+      "name": "Cave Map",
+      "url": "https://central-industrial-hub.onrender.com/cave_map.html"
     }
   ]
 }
