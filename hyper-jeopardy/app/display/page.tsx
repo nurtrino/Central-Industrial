@@ -17,7 +17,13 @@ export default function Display() {
   const [, setSocket] = useState<Socket | null>(null);
   const [state, setState] = useState<GameState | null>(null);
   const [connected, setConnected] = useState(false);
+  const [revealHyper, setRevealHyper] = useState(false);
   const prevCluePhaseRef = useRef<string | null>(null);
+
+  // Testing aid: ?reveal marks the hyper cells on the board.
+  useEffect(() => {
+    setRevealHyper(new URLSearchParams(window.location.search).has('reveal'));
+  }, []);
 
   useEffect(() => {
     const s = getSocket();
@@ -70,7 +76,7 @@ export default function Display() {
   if (state.phase === 'lobby') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center px-8 gap-8">
-        <h1 className="jeo-title text-7xl sm:text-9xl">JEOPARDY!</h1>
+        <h1 className="jeo-title text-6xl sm:text-8xl">HYPER JEOPARDY</h1>
         <p className="jeo-headline tracking-[0.4em] uppercase text-blue-200/80 text-2xl">Waiting for players</p>
         <div className="mt-8 w-full max-w-3xl space-y-3">
           {state.players.length === 0 && (
@@ -136,7 +142,7 @@ export default function Display() {
   const wageringPlayer = state.players.find(p => p.id === state.boardController);
 
   const roundLabel =
-    state.phase === 'jeopardy' ? 'Jeopardy!'
+    state.phase === 'jeopardy' ? 'Hyper Jeopardy!'
     : state.phase === 'double_jeopardy' ? 'Double Jeopardy!'
     : 'Final Jeopardy!';
 
@@ -161,6 +167,7 @@ export default function Display() {
               state={state}
               playerId={null}
               onSelectClue={() => {}}
+              revealHyper={revealHyper}
             />
           </div>
         )}

@@ -1,6 +1,5 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import Image from 'next/image';
 import { GameState, Player } from '@/lib/gameEngine';
 import { unlockAudio } from '@/lib/audio';
 import {
@@ -88,14 +87,9 @@ export default function Lobby({
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4">
       <div className="text-center mb-10">
-        <Image
-          src="/jeopardy-logo.png"
-          alt="JEOPARDY!"
-          width={3840}
-          height={2160}
-          priority
-          className="jeo-logo w-[280px] sm:w-[420px] md:w-[520px] h-auto mx-auto select-none"
-        />
+        <h1 className="jeo-title text-5xl sm:text-7xl md:text-8xl leading-[1.05] mx-auto select-none">
+          HYPER&nbsp;JEOPARDY
+        </h1>
         <p className="mt-4 text-blue-200/80 jeo-headline text-sm tracking-[0.3em] uppercase">
           {state.showNumber ? `Show #${state.showNumber} · ${state.airDate}` : 'Loading...'}
         </p>

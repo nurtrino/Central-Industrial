@@ -227,7 +227,35 @@ html, body {
   100% { transform: scale(1.8); opacity: 0; }
 }
 
+/* Testing aid (?reveal): mark the hyper (mini-game) cells so they can be
+   activated in rapid succession. Magenta cast + a ⚡ badge, distinct from the
+   cyan→magenta value spectrum. */
+.cell-hyper {
+  border-color: var(--neon-magenta) !important;
+  background: linear-gradient(160deg, rgba(60, 16, 66, 0.8), rgba(28, 10, 40, 0.8)) !important;
+  box-shadow: 0 0 18px rgba(255, 47, 214, 0.45), inset 0 0 0 1px rgba(255, 47, 214, 0.4) !important;
+  animation: cell-hyper-pulse 1.8s ease-in-out infinite;
+}
+.cell-hyper .jeo-value {
+  background: none !important;
+  -webkit-text-fill-color: #ff6fe4 !important;
+  color: #ff6fe4 !important;
+  text-shadow: 0 0 12px rgba(255, 47, 214, 0.75) !important;
+}
+.hyper-badge {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 12px;
+  line-height: 1;
+  filter: drop-shadow(0 0 4px rgba(255, 47, 214, 0.9));
+}
+@keyframes cell-hyper-pulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(255,47,214,0.4), inset 0 0 0 1px rgba(255,47,214,0.35); }
+  50%      { box-shadow: 0 0 26px rgba(255,47,214,0.7), inset 0 0 0 1px rgba(255,47,214,0.6); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .jeo-buzz, .hyper-title, .hyper-burst { animation: none; }
+  .jeo-buzz, .hyper-title, .hyper-burst, .cell-hyper { animation: none; }
   .jeo-tile-hover:hover { transform: none; }
 }

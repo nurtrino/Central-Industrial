@@ -1,6 +1,5 @@
 'use client';
 import { useState } from 'react';
-import Image from 'next/image';
 import { GameState } from '@/lib/gameEngine';
 import { unlockAudio } from '@/lib/audio';
 
@@ -26,14 +25,9 @@ export default function Rejoin({ state, onJoin }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4">
-      <Image
-        src="/jeopardy-logo.png"
-        alt="JEOPARDY!"
-        width={3840}
-        height={2160}
-        priority
-        className="jeo-logo w-[200px] sm:w-[320px] h-auto mb-8 select-none"
-      />
+      <h1 className="jeo-title text-4xl sm:text-6xl mb-8 text-center leading-[1.05] select-none">
+        HYPER&nbsp;JEOPARDY
+      </h1>
 
       <div className="jeo-card rounded-3xl p-8 w-full max-w-md">
         <h2 className="jeo-headline text-2xl text-center text-[var(--jeo-gold)] uppercase tracking-wider mb-2">

@@ -31,7 +31,13 @@ export default function Home() {
   const [dbCount, setDbCount] = useState(0);
   const [scraping, setScraping] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [revealHyper, setRevealHyper] = useState(false);
   const lastBoardPhaseRef = useRef<string | null>(null);
+
+  // Testing aid: ?reveal marks the hyper cells on the board.
+  useEffect(() => {
+    setRevealHyper(new URLSearchParams(window.location.search).has('reveal'));
+  }, []);
 
   useEffect(() => {
     const s = getSocket();
@@ -259,7 +265,7 @@ export default function Home() {
   }
 
   const boardController = state.players.find(p => p.id === state.boardController);
-  const roundLabel = state.phase === 'jeopardy' ? 'Jeopardy!' : 'Double Jeopardy!';
+  const roundLabel = state.phase === 'jeopardy' ? 'Hyper Jeopardy!' : 'Double Jeopardy!';
 
   return (
     <div className="min-h-screen flex flex-col pb-24 sm:pb-0">
@@ -319,6 +325,7 @@ export default function Home() {
               state={state}
               playerId={playerId}
               onSelectClue={handleSelectClue}
+              revealHyper={revealHyper}
             />
           )}
         </div>

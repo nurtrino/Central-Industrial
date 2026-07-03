@@ -7,15 +7,17 @@ interface Props {
   state: GameState;
   playerId: string | null;
   onSelectClue: (catIdx: number, clueIdx: number) => void;
+  revealHyper?: boolean; // testing aid: mark the hyper (mini-game) cells
 }
 
 const VALUES_J = [200, 400, 600, 800, 1000];
 const VALUES_DJ = [400, 800, 1200, 1600, 2000];
 
-export default function Board({ board, state, playerId, onSelectClue }: Props) {
+export default function Board({ board, state, playerId, onSelectClue, revealHyper }: Props) {
   const isController = state.boardController === playerId;
   const isIdle = state.cluePhase === 'idle';
   const values = state.phase === 'double_jeopardy' ? VALUES_DJ : VALUES_J;
+  const hyperClues = Array.isArray(state.hyperClues) ? state.hyperClues : [];
 
   return (
     <div className="w-full overflow-x-auto">
@@ -44,6 +46,7 @@ export default function Board({ board, state, playerId, onSelectClue }: Props) {
               (Array.isArray(usedSet) ? usedSet.includes(clue.id) : false);
             const value = clue?.value || values[rowIdx];
             const canClick = isController && isIdle && !used && !!clue;
+            const isHyper = !!revealHyper && !used && !!clue && hyperClues.includes(clue.id);
 
             return (
               <button
@@ -51,13 +54,14 @@ export default function Board({ board, state, playerId, onSelectClue }: Props) {
                 onClick={() => canClick && onSelectClue(colIdx, rowIdx)}
                 disabled={!canClick}
                 className={`
-                  v${rowIdx + 1} rounded-md flex items-center justify-center min-h-[64px] sm:min-h-[88px] text-center transition-all duration-150
+                  relative v${rowIdx + 1} rounded-md flex items-center justify-center min-h-[64px] sm:min-h-[88px] text-center transition-all duration-150
                   ${used
                     ? 'jeo-tile-used cursor-default'
                     : canClick
                       ? 'jeo-tile jeo-tile-hover cursor-pointer'
                       : 'jeo-tile cursor-not-allowed opacity-80'
                   }
+                  ${isHyper ? 'cell-hyper' : ''}
                 `}
               >
                 {!used && (
@@ -65,6 +69,7 @@ export default function Board({ board, state, playerId, onSelectClue }: Props) {
                     ${value.toLocaleString()}
                   </span>
                 )}
+                {isHyper && <span className="hyper-badge" aria-hidden>⚡</span>}
               </button>
             );
           })
