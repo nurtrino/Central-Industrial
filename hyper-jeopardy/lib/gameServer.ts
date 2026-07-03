@@ -625,7 +625,9 @@ function maybeAdvanceRound() {
   if (phase === 'jeopardy') {
     advanceRound(gameState); // → 'double_jeopardy'
     gameState.currentBoard = currentGame.doubleJeopardyRound;
-    gameState.hyperClues = assignSpecialCells(currentGame.doubleJeopardyRound).hyperClues;
+    const djSpecial = assignSpecialCells(currentGame.doubleJeopardyRound);
+    gameState.hyperClues = djSpecial.hyperClues;
+    gameState.hyperGames = djSpecial.hyperGames;
     // Real-Jeopardy rule: trailing (lowest-score) connected player picks
     // first in DJ. If everyone is tied, keep the current board controller.
     const connected = gameState.players.filter(p => p.connected);

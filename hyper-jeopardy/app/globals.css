@@ -227,32 +227,41 @@ html, body {
   100% { transform: scale(1.8); opacity: 0; }
 }
 
-/* Testing aid (?reveal): mark the hyper (mini-game) cells so they can be
-   activated in rapid succession. Magenta cast + a ⚡ badge, distinct from the
-   cyan→magenta value spectrum. */
+/* Testing aid (default on): mark hyper (mini-game) cells, color-coded by which
+   game they'll trigger — blue = Anagram, red = Rapid Fire, green = Letter
+   Reveal — with an A/R/L badge. Color rides on --hg (an r,g,b triplet). */
 .cell-hyper {
-  border-color: var(--neon-magenta) !important;
-  background: linear-gradient(160deg, rgba(60, 16, 66, 0.8), rgba(28, 10, 40, 0.8)) !important;
-  box-shadow: 0 0 18px rgba(255, 47, 214, 0.45), inset 0 0 0 1px rgba(255, 47, 214, 0.4) !important;
+  --hg: 255, 47, 214;      /* fallback: magenta */
+  --hg-text: #ff6fe4;
+  border-color: rgb(var(--hg)) !important;
+  background: linear-gradient(160deg, rgba(var(--hg), 0.18), rgba(6, 8, 26, 0.85)) !important;
+  box-shadow: 0 0 18px rgba(var(--hg), 0.45), inset 0 0 0 1px rgba(var(--hg), 0.4) !important;
   animation: cell-hyper-pulse 1.8s ease-in-out infinite;
 }
+.cell-hyper.hg-anagram { --hg: 61, 139, 255;  --hg-text: #7fb0ff; }  /* blue  */
+.cell-hyper.hg-rapid   { --hg: 255, 60, 92;   --hg-text: #ff7d92; }  /* red   */
+.cell-hyper.hg-letter  { --hg: 45, 224, 138;  --hg-text: #62e8ac; }  /* green */
 .cell-hyper .jeo-value {
   background: none !important;
-  -webkit-text-fill-color: #ff6fe4 !important;
-  color: #ff6fe4 !important;
-  text-shadow: 0 0 12px rgba(255, 47, 214, 0.75) !important;
+  -webkit-text-fill-color: var(--hg-text) !important;
+  color: var(--hg-text) !important;
+  text-shadow: 0 0 12px rgba(var(--hg), 0.75) !important;
 }
 .hyper-badge {
   position: absolute;
-  top: 4px;
+  top: 3px;
   right: 6px;
-  font-size: 12px;
+  font-family: var(--font-anton), sans-serif;
+  font-weight: 700;
+  font-size: 11px;
   line-height: 1;
-  filter: drop-shadow(0 0 4px rgba(255, 47, 214, 0.9));
+  letter-spacing: 0.04em;
+  color: rgb(var(--hg));
+  filter: drop-shadow(0 0 4px rgba(var(--hg), 0.9));
 }
 @keyframes cell-hyper-pulse {
-  0%, 100% { box-shadow: 0 0 14px rgba(255,47,214,0.4), inset 0 0 0 1px rgba(255,47,214,0.35); }
-  50%      { box-shadow: 0 0 26px rgba(255,47,214,0.7), inset 0 0 0 1px rgba(255,47,214,0.6); }
+  0%, 100% { box-shadow: 0 0 14px rgba(var(--hg),0.4), inset 0 0 0 1px rgba(var(--hg),0.35); }
+  50%      { box-shadow: 0 0 26px rgba(var(--hg),0.7), inset 0 0 0 1px rgba(var(--hg),0.6); }
 }
 
 @media (prefers-reduced-motion: reduce) {

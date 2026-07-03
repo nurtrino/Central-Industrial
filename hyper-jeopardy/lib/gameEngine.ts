@@ -61,10 +61,15 @@ export const HYPER_PER_ROUND = 8;   // mini-game cells per round
 export const DD_PER_ROUND = 2;      // Daily Doubles per round (house rule)
 
 // Randomly place this round's special cells: DD_PER_ROUND Daily Doubles + a
-// disjoint set of HYPER_PER_ROUND hyper (mini-game) cells. We control both
-// counts, so any Daily Doubles baked into the seed data are cleared first and
-// re-assigned. DD status rides on `clue.isDailyDouble`; hyper ids are returned.
-export function assignSpecialCells(board: CategoryForPlay[]): { hyperClues: number[]; ddClues: number[] } {
+// disjoint set of HYPER_PER_ROUND hyper (mini-game) cells. Each hyper cell is
+// PRE-ASSIGNED a specific mini-game (hyperGames: clueId → game key) so the
+// board can be colored per game for testing, and every game appears at least
+// once. We control both counts, so any seed Daily Doubles are cleared first.
+export function assignSpecialCells(board: CategoryForPlay[]): {
+  hyperClues: number[];
+  ddClues: number[];
+  hyperGames: Record<number, string>;
+} {
   const clues = board.flatMap(c => c.clues);
   for (const cl of clues) cl.isDailyDouble = false;
 
@@ -78,7 +83,31 @@ export function assignSpecialCells(board: CategoryForPlay[]): { hyperClues: numb
 
   const ddSet = new Set(ddClues);
   for (const cl of clues) if (ddSet.has(cl.id)) cl.isDailyDouble = true;
-  return { hyperClues, ddClues };
+
+  const hyperGames = assignHyperGames(hyperClues);
+  return { hyperClues, ddClues, hyperGames };
+}
+
+// Assign a mini-game to each hyper cell. HYPER_FORCE_GAME pins them all to one
+// game; otherwise every game is guaranteed at least once, then the rest random.
+function assignHyperGames(hyperClues: number[]): Record<number, string> {
+  const keys = MINI_GAMES.map(g => g.key);
+  const forced = typeof process !== 'undefined' ? process.env?.HYPER_FORCE_GAME : undefined;
+  const games: Record<number, string> = {};
+
+  if (forced && keys.includes(forced)) {
+    for (const id of hyperClues) games[id] = forced;
+    return games;
+  }
+
+  const list: string[] = [...keys]; // one of each guaranteed
+  while (list.length < hyperClues.length) list.push(keys[Math.floor(Math.random() * keys.length)]);
+  for (let i = list.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  hyperClues.forEach((id, i) => { games[id] = list[i]; });
+  return games;
 }
 
 export interface Player {
@@ -123,6 +152,7 @@ export interface GameState {
   usedClues: Set<number>;
   scores: Record<string, number[]>; // history for display
   hyperClues: number[];             // clue ids that trigger HYPER MODE this round
+  hyperGames: Record<number, string>; // clue id → pre-assigned mini-game key
   activeMiniGame: MiniGame | null;  // the mini-game running during a hyper cell
   miniGameTrivia: TriviaQuestion[] | null; // pre-fetched questions for the active mini-game
   miniGameData: Record<string, unknown> | null; // per-game runtime state (wireframe prototyping)
@@ -162,6 +192,7 @@ export function createGame(showNumber: number, airDate: string): GameState {
     usedClues: new Set(),
     scores: {},
     hyperClues: [],
+    hyperGames: {},
     activeMiniGame: null,
     miniGameTrivia: null,
     miniGameData: null,
@@ -206,7 +237,9 @@ export function startGame(state: GameState, game: GameForPlay): void {
   state.currentBoard = game.jeopardyRound;
   state.finalJeopardy = game.finalJeopardy;
   state.usedClues = new Set();
-  state.hyperClues = assignSpecialCells(game.jeopardyRound).hyperClues;
+  const special = assignSpecialCells(game.jeopardyRound);
+  state.hyperClues = special.hyperClues;
+  state.hyperGames = special.hyperGames;
   state.activeMiniGame = null;
   // First player to join controls board first (they're host)
   const host = state.players.find(p => p.isHost);
@@ -240,10 +273,11 @@ export function selectClue(
   state.miniGameTrivia = null;
   state.miniGameData = null;
 
-  // HYPER MODE fires first — a hyper cell is never also a Daily Double
-  // (assignHyperClues excludes DDs), so the branches don't collide.
+  // HYPER MODE fires first — a hyper cell is never also a Daily Double, so the
+  // branches don't collide. Use the game pre-assigned to this cell.
   if (state.hyperClues.includes(clue.id)) {
-    state.activeMiniGame = pickMiniGame();
+    const key = state.hyperGames[clue.id];
+    state.activeMiniGame = MINI_GAMES.find(g => g.key === key) ?? pickMiniGame();
     state.cluePhase = 'hyper_intro';
     state.timerEndsAt = Date.now() + HYPER_INTRO_MS;
   } else if (clue.isDailyDouble) {

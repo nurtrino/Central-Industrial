@@ -18,6 +18,13 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
   const isIdle = state.cluePhase === 'idle';
   const values = state.phase === 'double_jeopardy' ? VALUES_DJ : VALUES_J;
   const hyperClues = Array.isArray(state.hyperClues) ? state.hyperClues : [];
+  const hyperGames = (state.hyperGames ?? {}) as Record<number, string>;
+  // per-game reveal color: blue = Anagram, red = Rapid Fire, green = Letter Reveal
+  const HG = {
+    anagram_race: { cls: 'hg-anagram', badge: 'A' },
+    rapid_fire: { cls: 'hg-rapid', badge: 'R' },
+    letter_reveal: { cls: 'hg-letter', badge: 'L' },
+  } as const;
 
   return (
     <div className="w-full overflow-x-auto">
@@ -47,6 +54,7 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
             const value = clue?.value || values[rowIdx];
             const canClick = isController && isIdle && !used && !!clue;
             const isHyper = !!revealHyper && !used && !!clue && hyperClues.includes(clue.id);
+            const hg = isHyper ? HG[hyperGames[clue!.id] as keyof typeof HG] : undefined;
 
             return (
               <button
@@ -61,7 +69,7 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
                       ? 'jeo-tile jeo-tile-hover cursor-pointer'
                       : 'jeo-tile cursor-not-allowed opacity-80'
                   }
-                  ${isHyper ? 'cell-hyper' : ''}
+                  ${isHyper ? `cell-hyper ${hg?.cls ?? ''}` : ''}
                 `}
               >
                 {!used && (
@@ -69,7 +77,7 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
                     ${value.toLocaleString()}
                   </span>
                 )}
-                {isHyper && <span className="hyper-badge" aria-hidden>⚡</span>}
+                {isHyper && hg && <span className="hyper-badge" aria-hidden>{hg.badge}</span>}
               </button>
             );
           })
