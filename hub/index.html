@@ -259,9 +259,30 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
     } else { mark(); }
   }
 
+  // Warm up the background music on the first user gesture: a MUTED play/pause
+  // both unlocks the element for later gesture-free playback AND forces the
+  // file to buffer. The real (unmuted) play happens after the access code is
+  // entered — inside an async fetch().then() callback, i.e. outside a fresh
+  // gesture — so without this priming it can be blocked or lag while loading.
+  var primed = false;
+  function primeAudio(){
+    if(primed) return; primed = true;
+    var bgm = document.getElementById('bgm');
+    if(!bgm) return;
+    try {
+      bgm.load();
+      bgm.muted = true;
+      var p = bgm.play();
+      var reset = function(){ try { bgm.pause(); bgm.currentTime = 0; } catch(e){} bgm.muted = false; };
+      if(p && p.then){ p.then(reset).catch(function(){ bgm.muted = false; }); }
+      else { reset(); }
+    } catch(e){ try { bgm.muted = false; } catch(e2){} }
+  }
+
   // ---- boot sequence ---------------------------------------------------
   function boot(){
     if(booted) return; booted = true;
+    primeAudio();   // buffer + unlock the music now, while we have a gesture
     var bc = document.getElementById('bootcur'); if(bc) bc.remove();
     if(hint) hint.remove();
     out.appendChild(document.createTextNode('\n'));
