@@ -23,12 +23,22 @@ import {
   beginHyperActive,
   endHyper,
   assignHyperClues,
-  applyMiniGameAction,
   HYPER_INTRO_MS,
   HYPER_MAX_MS,
 } from './gameEngine';
 import { loadRandomGame, getGameCount, GameForPlay } from './games';
-import { fetchTrivia } from './opentdb';
+import { fetchTrivia, type TriviaQuestion } from './opentdb';
+import {
+  initMiniGame,
+  handleMiniGameAction,
+  revealLetter,
+  finishMiniGame,
+  ANAGRAM_MS,
+  RAPID_MS,
+  REVEAL_INTERVAL_MS,
+  LETTER_GRACE_MS,
+  RESULTS_MS,
+} from './miniGames';
 import {
   Account, awardWinToAccount, createAccount, deleteAccount,
   getAccount, getAccounts, updateAccount,
@@ -38,6 +48,9 @@ let io: SocketIOServer | null = null;
 let gameState: GameState | null = null;
 let currentGame: GameForPlay | null = null;
 const timers: Map<string, NodeJS.Timeout> = new Map();
+// Trivia for a hyper mini-game is fetched in parallel with the activation
+// splash; we await this at the intro→active transition so questions are ready.
+let hyperTriviaPromise: Promise<TriviaQuestion[] | null> = Promise.resolve(null);
 
 export function getIO() { return io; }
 export function getGameState() { return gameState; }
@@ -247,41 +260,19 @@ export function initSocketServer(httpServer: HTTPServer) {
       broadcast();
 
       if (gameState.cluePhase === 'hyper_intro') {
-        // HYPER MODE: play the activation splash, then start the mini-game.
-        // The placeholder mini-game ends when a host/controller taps
-        // "End Hyper Round" (end_hyper), with a safety cap so it can't hang.
-        // Pre-fetch trivia during the ~3.5s activation splash so it's ready
-        // when the mini-game starts. Random medium category (excluding Musicals
-        // & Theatres) unless the game forces one. Fires immediately; when it
-        // resolves we attach the questions and rebroadcast.
+        // HYPER MODE: play the activation splash (~3.5s), pre-fetching trivia in
+        // parallel so it's ready, then start the mini-game. Trivia is medium,
+        // random allowed category (excludes Musicals & Theatres) unless forced.
         const mg = gameState.activeMiniGame;
-        const gameId0 = gameState.gameId;
-        if (mg && mg.trivia !== false) {
-          fetchTrivia({
-            amount: mg.triviaCount ?? 1,
-            category: mg.trivia, // 'random' | <category id>
-            difficulty: 'medium',
-          }).then((questions) => {
-            // Only apply if the same hyper round is still active.
-            if (gameState && gameState.gameId === gameId0 &&
-                (gameState.cluePhase === 'hyper_intro' || gameState.cluePhase === 'hyper_active')) {
-              gameState.miniGameTrivia = questions;
-              broadcast();
-            }
-          }).catch(() => {});
-        }
-        setTimer('hyper_intro', HYPER_INTRO_MS, () => {
-          if (gameState && gameState.cluePhase === 'hyper_intro') {
-            beginHyperActive(gameState);
-            broadcast();
-            setTimer('hyper_cap', HYPER_MAX_MS, () => {
-              if (gameState && gameState.cluePhase === 'hyper_active') {
-                endHyper(gameState);
-                maybeAdvanceRound();
-                broadcast();
-              }
-            });
-          }
+        hyperTriviaPromise = (mg && mg.trivia !== false)
+          ? fetchTrivia({ amount: mg.triviaCount ?? 1, category: mg.trivia, difficulty: 'medium' })
+          : Promise.resolve(null);
+        setTimer('hyper_intro', HYPER_INTRO_MS, async () => {
+          if (!gameState || gameState.cluePhase !== 'hyper_intro') return;
+          const qs = await hyperTriviaPromise.catch(() => null);
+          if (!gameState || gameState.cluePhase !== 'hyper_intro') return; // round changed while awaiting
+          if (qs) gameState.miniGameTrivia = qs;
+          startMiniGame();
         });
       } else if (gameState.cluePhase === 'reading') {
         // After reading delay, open buzzing
@@ -378,20 +369,24 @@ export function initSocketServer(httpServer: HTTPServer) {
       if (gameState.cluePhase !== 'hyper_active' && gameState.cluePhase !== 'hyper_intro') return;
       const me = gameState.players.find(p => p.id === socket.id);
       if (!me || (!me.isHost && gameState.boardController !== socket.id)) return;
-      clearTimer('hyper_intro');
-      clearTimer('hyper_cap');
+      clearMiniGameTimers();
       endHyper(gameState);
       maybeAdvanceRound();
       broadcast();
     });
 
-    // Generic mini-game action channel. Wireframe games emit
-    // { type, payload } and it's recorded per player in miniGameData; real
-    // games will get dedicated per-key handling inside applyMiniGameAction.
-    socket.on('mini_game_action', (action: { type: string; payload?: unknown }) => {
-      if (!gameState) return;
-      if (!gameState.players.find(p => p.id === socket.id)) return;
-      if (applyMiniGameAction(gameState, socket.id, action || { type: '' })) broadcast();
+    // Mini-game action channel: routes a player's move to the active game's
+    // logic, acks immediate feedback (correct/wrong/points) for the phone, and
+    // finishes the round the moment every player is done.
+    socket.on('mini_game_action', (
+      action: { type: string; payload?: unknown },
+      ack?: (feedback: unknown) => void,
+    ) => {
+      if (!gameState) { ack?.({}); return; }
+      const res = handleMiniGameAction(gameState, socket.id, action || { type: '' });
+      ack?.(res.feedback);
+      if (res.changed) broadcast();
+      if (res.complete) finishMini();
     });
 
     socket.on('answer', ({ answer }: { answer: string }) => {
@@ -541,6 +536,67 @@ export function initSocketServer(httpServer: HTTPServer) {
   });
 
   return io;
+}
+
+// ── HYPER MODE mini-game orchestration ──────────────────────────────────────
+function clearMiniGameTimers() {
+  clearTimer('hyper_intro');
+  clearTimer('hyper_cap');
+  clearTimer('mg_round');
+  clearTimer('mg_reveal');
+  clearTimer('mg_grace');
+  clearTimer('mg_results');
+}
+
+// Kick off the mini-game once the activation splash ends and trivia (if any)
+// has been attached. Sets up the per-game timers.
+function startMiniGame() {
+  if (!gameState || gameState.cluePhase !== 'hyper_intro') return;
+  beginHyperActive(gameState);
+  initMiniGame(gameState);
+  broadcast();
+
+  const key = gameState.activeMiniGame?.key;
+  // safety cap so a game can never hang the board
+  setTimer('hyper_cap', HYPER_MAX_MS, () => finishMini());
+
+  if (key === 'letter_reveal') {
+    scheduleReveal();
+  } else {
+    setTimer('mg_round', key === 'rapid_fire' ? RAPID_MS : ANAGRAM_MS, () => finishMini());
+  }
+}
+
+// Letter Reveal: expose one more letter every interval; after the last, a grace
+// window, then finish.
+function scheduleReveal() {
+  setTimer('mg_reveal', REVEAL_INTERVAL_MS, () => {
+    if (!gameState || gameState.cluePhase !== 'hyper_active') return;
+    const d = gameState.miniGameData as { status?: string } | null;
+    if (!d || d.status !== 'playing') return;
+    const { fullyRevealed } = revealLetter(gameState);
+    broadcast();
+    if (fullyRevealed) setTimer('mg_grace', LETTER_GRACE_MS, () => finishMini());
+    else scheduleReveal();
+  });
+}
+
+// End the mini-game: award scores, show the results screen, then return to the
+// board after a beat. Idempotent (guards against results-phase re-entry).
+function finishMini() {
+  if (!gameState || gameState.cluePhase !== 'hyper_active') return;
+  const d = gameState.miniGameData as { status?: string } | null;
+  if (!d || d.status === 'results') return;
+  clearMiniGameTimers();
+  finishMiniGame(gameState);
+  broadcast();
+  setTimer('mg_results', RESULTS_MS, () => {
+    if (gameState && gameState.cluePhase === 'hyper_active') {
+      endHyper(gameState);
+      maybeAdvanceRound();
+      broadcast();
+    }
+  });
 }
 
 function maybeAdvanceRound() {

@@ -8,6 +8,7 @@ import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import ClueModal from '@/components/ClueModal';
 import HyperModal from '@/components/HyperModal';
+import type { MGFeedback } from '@/components/MiniGameController';
 import FinalJeopardy from '@/components/FinalJeopardy';
 import Rejoin from '@/components/Rejoin';
 import { playBoardFill, playGameStart } from '@/lib/audio';
@@ -138,6 +139,15 @@ export default function Home() {
   }, [socket]);
 
   const handleEndHyper = useCallback(() => socket?.emit('end_hyper'), [socket]);
+
+  // Emit a mini-game move and resolve with the server's ack (correct/wrong/points).
+  const handleMiniGameAction = useCallback(
+    (action: { type: string; payload?: unknown }) => new Promise<MGFeedback>(resolve => {
+      if (!socket) { resolve({}); return; }
+      socket.emit('mini_game_action', action, (feedback: MGFeedback) => resolve(feedback || {}));
+    }),
+    [socket],
+  );
 
   const handleBuzz = useCallback(() => socket?.emit('buzz'), [socket]);
 
@@ -338,7 +348,7 @@ export default function Home() {
       />
 
       {/* Hyper Mode overlay */}
-      <HyperModal state={state} playerId={playerId} onEndHyper={handleEndHyper} />
+      <HyperModal state={state} playerId={playerId} onEndHyper={handleEndHyper} onMiniGameAction={handleMiniGameAction} />
     </div>
   );
 }

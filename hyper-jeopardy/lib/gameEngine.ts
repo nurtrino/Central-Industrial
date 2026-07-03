@@ -40,36 +40,21 @@ export interface MiniGame {
   triviaCount?: number; // how many questions to pre-fetch (default 1)
 }
 
+// Phase 1 mini-games (all multiplayer). Their logic lives in lib/miniGames.ts.
 export const MINI_GAMES: MiniGame[] = [
-  { key: 'fake_it',      title: 'Fake It',         family: 'Bluff',       mode: 'multi',  trivia: 'random', blurb: 'Everyone writes a convincing fake answer. Score for spotting the truth — and for fooling the table.' },
-  { key: 'the_spectrum', title: 'The Spectrum',    family: 'Estimation',  mode: 'multi',  trivia: false,    blurb: 'One player sees the hidden target and gives a single-word clue. The rest dial it in.' },
-  { key: 'connections',  title: 'Connections',     family: 'Word Puzzle', mode: 'multi',  trivia: false,    blurb: 'Sixteen words, four secret groups. Sort them before your rivals do.' },
-  { key: 'zoom_out',     title: 'Zoom Out',        family: 'Perception',  mode: 'multi',  trivia: false,    blurb: 'An image slowly pulls back. Buzz the instant you know what it is — sooner scores more.' },
-  { key: 'most_likely',  title: 'Most Likely To…', family: 'Social',      mode: 'multi',  trivia: false,    blurb: 'Vote on who around the table best fits the prompt. Match the majority to score.' },
-  { key: 'higher_lower', title: 'Higher or Lower', family: 'Estimation',  mode: 'multi',  trivia: false,    blurb: 'Guess the number — closest without going over takes the points.' },
-  { key: 'rapid_fire',   title: 'Rapid Fire',      family: 'Speed',       mode: 'single', trivia: 'random', triviaCount: 5, blurb: 'Thirty seconds, one topic. As many as you can — wrong answers cost you.' },
+  { key: 'anagram_race',  title: 'Anagram Race',  family: 'Word Race',   mode: 'multi', trivia: false,                     blurb: 'Unscramble the word before your rivals — the faster you solve, the more you bank.' },
+  { key: 'rapid_fire',    title: 'Rapid Fire',    family: 'Speed',       mode: 'multi', trivia: 'random', triviaCount: 15, blurb: 'One category, forty-five seconds. Answer as many as you can — wrong answers cost you.' },
+  { key: 'letter_reveal', title: 'Letter Reveal', family: 'Word Reveal', mode: 'multi', trivia: false,                     blurb: 'Five hidden letters reveal one by one. Guess early — the fewer shown, the bigger the score.' },
 ];
 
 export function pickMiniGame(): MiniGame {
+  // Test/demo hook: HYPER_FORCE_GAME=<key> pins the mini-game (server-only).
+  const forced = typeof process !== 'undefined' ? process.env?.HYPER_FORCE_GAME : undefined;
+  if (forced) {
+    const m = MINI_GAMES.find(g => g.key === forced);
+    if (m) return m;
+  }
   return MINI_GAMES[Math.floor(Math.random() * MINI_GAMES.length)];
-}
-
-// Generic action channel for wireframe mini-games: records each player's latest
-// submission into miniGameData so all screens can render it. Real mini-games
-// will branch on state.activeMiniGame?.key here to implement their own rules
-// and scoring; this pass-through lets us prototype gameplay before that.
-export function applyMiniGameAction(
-  state: GameState,
-  playerId: string,
-  action: { type: string; payload?: unknown },
-): boolean {
-  if (state.cluePhase !== 'hyper_active') return false;
-  const data = (state.miniGameData ?? {}) as Record<string, unknown>;
-  const submissions = (data.submissions ?? {}) as Record<string, unknown>;
-  submissions[playerId] = { type: action.type, payload: action.payload ?? null };
-  data.submissions = submissions;
-  state.miniGameData = data;
-  return true;
 }
 
 // Choose 5–10 random non-Daily-Double clues in a round's board to become

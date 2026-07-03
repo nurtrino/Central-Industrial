@@ -7,6 +7,7 @@ import { isUnavailableClue } from '@/lib/clueSentinel';
 import { unlockAudio, preloadLasers, playRandomLaser } from '@/lib/audio';
 import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
+import MiniGameStage from '@/components/MiniGameStage';
 
 // Read-only "TV" view. Connects to the same socket room but never emits
 // `join`, so the server doesn't track it as a player. Renders the board
@@ -183,34 +184,7 @@ export default function Display() {
                 )}
               </div>
             ) : (
-              <div className="hyper-card relative w-full max-w-3xl rounded-3xl px-10 sm:px-16 py-12 sm:py-16 space-y-6">
-                <p className="jeo-headline uppercase tracking-[0.4em] text-[var(--neon-magenta)] text-lg sm:text-xl">
-                  Hyper Mode · {state.activeMiniGame?.family}
-                </p>
-                <h2 className="hyper-title text-5xl sm:text-7xl">{state.activeMiniGame?.title ?? 'Mini-Game'}</h2>
-                <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-2xl mx-auto">
-                  {state.activeMiniGame?.blurb}
-                </p>
-
-                {/* Trivia plumbing preview (OpenTDB) — real mini-game UI replaces this */}
-                {state.activeMiniGame && state.activeMiniGame.trivia !== false && state.miniGameTrivia?.[0] && (
-                  <div className="mx-auto max-w-2xl text-left rounded-2xl border border-[rgba(0,229,255,0.25)] bg-[rgba(6,8,26,0.6)] p-6 space-y-3">
-                    <p className="jeo-headline uppercase tracking-[0.22em] text-sm text-[var(--jeo-gold)]">
-                      {state.miniGameTrivia[0].category} · {state.miniGameTrivia[0].difficulty}
-                    </p>
-                    <p className="text-white text-2xl leading-snug">{state.miniGameTrivia[0].question}</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {state.miniGameTrivia[0].choices.map((c, i) => (
-                        <span key={i} className="text-blue-100/85 text-lg rounded-lg border border-white/10 px-3 py-2">{c}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <p className="jeo-headline uppercase tracking-[0.28em] text-blue-200/55 text-sm sm:text-base pt-2">
-                  Placeholder — full mini-game coming soon
-                </p>
-              </div>
+              <MiniGameStage state={state} />
             )}
           </div>
         )}

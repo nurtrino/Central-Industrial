@@ -2,20 +2,21 @@
 import { useEffect, useRef } from 'react';
 import { GameState } from '@/lib/gameEngine';
 import { playRandomLaser, preloadLasers } from '@/lib/audio';
+import MiniGameController, { type MGFeedback } from '@/components/MiniGameController';
 
 interface Props {
   state: GameState;
   playerId: string | null;
   onEndHyper: () => void;
+  onMiniGameAction: (a: { type: string; payload?: unknown }) => Promise<MGFeedback>;
 }
 
 /**
  * Phone-side overlay for HYPER MODE. Shows the activation splash, then the
- * mini-game placeholder. The board controller (or host) can end the round.
- * Real mini-games will replace the placeholder body; the surrounding
- * activation + close flow stays.
+ * live mini-game controls (MiniGameController). The board controller (or host)
+ * can end the round early.
  */
-export default function HyperModal({ state, playerId, onEndHyper }: Props) {
+export default function HyperModal({ state, playerId, onEndHyper, onMiniGameAction }: Props) {
   const { cluePhase, activeMiniGame } = state;
   const prevPhaseRef = useRef<string | null>(null);
 
@@ -34,8 +35,6 @@ export default function HyperModal({ state, playerId, onEndHyper }: Props) {
 
   const me = state.players.find(p => p.id === playerId);
   const canEnd = !!me && (me.isHost || state.boardController === playerId);
-  const controller = state.players.find(p => p.id === state.boardController);
-  const trivia = state.miniGameTrivia?.[0] ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
@@ -63,49 +62,15 @@ export default function HyperModal({ state, playerId, onEndHyper }: Props) {
             )}
           </div>
 
-          <div className="px-6 py-7 text-center space-y-4">
-            <h3 className="hyper-title text-3xl sm:text-4xl">{activeMiniGame?.title ?? 'Mini-Game'}</h3>
-            <p className="text-blue-100/85 text-sm sm:text-base leading-relaxed">
-              {activeMiniGame?.blurb}
-            </p>
-
-            {/* Trivia plumbing preview — proves OpenTDB questions are wired in.
-                Real mini-game UIs replace this block. */}
-            {activeMiniGame && activeMiniGame.trivia !== false && (
-              trivia ? (
-                <div className="text-left rounded-lg border border-[rgba(0,229,255,0.2)] bg-[rgba(6,8,26,0.6)] p-3 space-y-2">
-                  <p className="jeo-headline uppercase tracking-[0.18em] text-[10px] text-[var(--jeo-gold)]">
-                    {trivia.category} · {trivia.difficulty}
-                    {trivia.source === 'fallback' ? ' · offline' : ''}
-                  </p>
-                  <p className="text-white text-sm leading-snug">{trivia.question}</p>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {trivia.choices.map((c, i) => (
-                      <span key={i} className="text-blue-100/80 text-xs rounded border border-white/10 px-2 py-1 truncate">{c}</span>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <p className="jeo-headline uppercase tracking-[0.22em] text-[11px] text-blue-200/55 animate-pulse">
-                  Fetching trivia…
-                </p>
-              )
-            )}
-
-            <p className="jeo-headline uppercase tracking-[0.22em] text-[11px] text-blue-200/55 pt-1">
-              Placeholder — full mini-game coming soon
-            </p>
+          <div className="px-5 py-6">
+            <MiniGameController state={state} playerId={playerId} onAction={onMiniGameAction} />
           </div>
 
-          <div className="px-6 pb-6">
-            {canEnd ? (
-              <button onClick={onEndHyper} className="jeo-btn-gold w-full py-3 rounded-lg text-base">
+          <div className="px-6 pb-5">
+            {canEnd && (
+              <button onClick={onEndHyper} className="w-full py-2 rounded-lg text-xs jeo-headline uppercase tracking-[0.2em] text-blue-200/60 border border-white/10 hover:text-[var(--neon-magenta)] hover:border-[var(--neon-magenta)] transition">
                 End Hyper Round
               </button>
-            ) : (
-              <p className="text-center text-blue-200/70 jeo-headline tracking-wider uppercase text-sm">
-                {controller ? `${controller.name} is running the round…` : 'Round in progress…'}
-              </p>
             )}
           </div>
         </div>
