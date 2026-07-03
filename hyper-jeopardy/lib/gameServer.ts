@@ -23,10 +23,12 @@ import {
   beginHyperActive,
   endHyper,
   assignHyperClues,
+  applyMiniGameAction,
   HYPER_INTRO_MS,
   HYPER_MAX_MS,
 } from './gameEngine';
 import { loadRandomGame, getGameCount, GameForPlay } from './games';
+import { fetchTrivia } from './opentdb';
 import {
   Account, awardWinToAccount, createAccount, deleteAccount,
   getAccount, getAccounts, updateAccount,
@@ -248,6 +250,26 @@ export function initSocketServer(httpServer: HTTPServer) {
         // HYPER MODE: play the activation splash, then start the mini-game.
         // The placeholder mini-game ends when a host/controller taps
         // "End Hyper Round" (end_hyper), with a safety cap so it can't hang.
+        // Pre-fetch trivia during the ~3.5s activation splash so it's ready
+        // when the mini-game starts. Random medium category (excluding Musicals
+        // & Theatres) unless the game forces one. Fires immediately; when it
+        // resolves we attach the questions and rebroadcast.
+        const mg = gameState.activeMiniGame;
+        const gameId0 = gameState.gameId;
+        if (mg && mg.trivia !== false) {
+          fetchTrivia({
+            amount: mg.triviaCount ?? 1,
+            category: mg.trivia, // 'random' | <category id>
+            difficulty: 'medium',
+          }).then((questions) => {
+            // Only apply if the same hyper round is still active.
+            if (gameState && gameState.gameId === gameId0 &&
+                (gameState.cluePhase === 'hyper_intro' || gameState.cluePhase === 'hyper_active')) {
+              gameState.miniGameTrivia = questions;
+              broadcast();
+            }
+          }).catch(() => {});
+        }
         setTimer('hyper_intro', HYPER_INTRO_MS, () => {
           if (gameState && gameState.cluePhase === 'hyper_intro') {
             beginHyperActive(gameState);
@@ -361,6 +383,15 @@ export function initSocketServer(httpServer: HTTPServer) {
       endHyper(gameState);
       maybeAdvanceRound();
       broadcast();
+    });
+
+    // Generic mini-game action channel. Wireframe games emit
+    // { type, payload } and it's recorded per player in miniGameData; real
+    // games will get dedicated per-key handling inside applyMiniGameAction.
+    socket.on('mini_game_action', (action: { type: string; payload?: unknown }) => {
+      if (!gameState) return;
+      if (!gameState.players.find(p => p.id === socket.id)) return;
+      if (applyMiniGameAction(gameState, socket.id, action || { type: '' })) broadcast();
     });
 
     socket.on('answer', ({ answer }: { answer: string }) => {

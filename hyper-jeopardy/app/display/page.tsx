@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import { getSocket } from '@/lib/socket-client';
 import { GameState } from '@/lib/gameEngine';
 import { isUnavailableClue } from '@/lib/clueSentinel';
+import { unlockAudio, preloadLasers, playRandomLaser } from '@/lib/audio';
 import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 
@@ -15,6 +16,7 @@ export default function Display() {
   const [, setSocket] = useState<Socket | null>(null);
   const [state, setState] = useState<GameState | null>(null);
   const [connected, setConnected] = useState(false);
+  const prevCluePhaseRef = useRef<string | null>(null);
 
   useEffect(() => {
     const s = getSocket();
@@ -28,6 +30,28 @@ export default function Display() {
       s.off('state');
     };
   }, []);
+
+  // The shared screen is the stage — play the laser cue here on HYPER MODE
+  // activation. Browsers block audio until a gesture, so unlock on the first
+  // click/key and preload the clips so they fire instantly.
+  useEffect(() => {
+    preloadLasers();
+    const unlock = () => unlockAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  useEffect(() => {
+    const phase = state?.cluePhase ?? null;
+    if (prevCluePhaseRef.current !== 'hyper_intro' && phase === 'hyper_intro') {
+      playRandomLaser();
+    }
+    prevCluePhaseRef.current = phase;
+  }, [state?.cluePhase]);
 
   if (!connected || !state) {
     return (
@@ -167,6 +191,22 @@ export default function Display() {
                 <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-2xl mx-auto">
                   {state.activeMiniGame?.blurb}
                 </p>
+
+                {/* Trivia plumbing preview (OpenTDB) — real mini-game UI replaces this */}
+                {state.activeMiniGame && state.activeMiniGame.trivia !== false && state.miniGameTrivia?.[0] && (
+                  <div className="mx-auto max-w-2xl text-left rounded-2xl border border-[rgba(0,229,255,0.25)] bg-[rgba(6,8,26,0.6)] p-6 space-y-3">
+                    <p className="jeo-headline uppercase tracking-[0.22em] text-sm text-[var(--jeo-gold)]">
+                      {state.miniGameTrivia[0].category} · {state.miniGameTrivia[0].difficulty}
+                    </p>
+                    <p className="text-white text-2xl leading-snug">{state.miniGameTrivia[0].question}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {state.miniGameTrivia[0].choices.map((c, i) => (
+                        <span key={i} className="text-blue-100/85 text-lg rounded-lg border border-white/10 px-3 py-2">{c}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <p className="jeo-headline uppercase tracking-[0.28em] text-blue-200/55 text-sm sm:text-base pt-2">
                   Placeholder — full mini-game coming soon
                 </p>

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef } from 'react';
 import { GameState } from '@/lib/gameEngine';
-import { playHyper } from '@/lib/audio';
+import { playRandomLaser, preloadLasers } from '@/lib/audio';
 
 interface Props {
   state: GameState;
@@ -19,10 +19,13 @@ export default function HyperModal({ state, playerId, onEndHyper }: Props) {
   const { cluePhase, activeMiniGame } = state;
   const prevPhaseRef = useRef<string | null>(null);
 
-  // Zap sting the moment HYPER MODE fires.
+  // Preload the laser clips once so activation plays instantly.
+  useEffect(() => { preloadLasers(); }, []);
+
+  // Random laser clip the moment HYPER MODE fires.
   useEffect(() => {
     if (prevPhaseRef.current !== 'hyper_intro' && cluePhase === 'hyper_intro') {
-      playHyper();
+      playRandomLaser();
     }
     prevPhaseRef.current = cluePhase;
   }, [cluePhase]);
@@ -32,6 +35,7 @@ export default function HyperModal({ state, playerId, onEndHyper }: Props) {
   const me = state.players.find(p => p.id === playerId);
   const canEnd = !!me && (me.isHost || state.boardController === playerId);
   const controller = state.players.find(p => p.id === state.boardController);
+  const trivia = state.miniGameTrivia?.[0] ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
@@ -54,7 +58,7 @@ export default function HyperModal({ state, playerId, onEndHyper }: Props) {
             <span className="jeo-headline uppercase tracking-[0.3em] text-[var(--neon-magenta)] text-xs">Hyper Mode</span>
             {activeMiniGame && (
               <span className="jeo-headline uppercase tracking-[0.2em] text-blue-200/70 text-[11px]">
-                {activeMiniGame.family}
+                {activeMiniGame.mode === 'single' ? 'Solo' : 'Table'} · {activeMiniGame.family}
               </span>
             )}
           </div>
@@ -64,6 +68,30 @@ export default function HyperModal({ state, playerId, onEndHyper }: Props) {
             <p className="text-blue-100/85 text-sm sm:text-base leading-relaxed">
               {activeMiniGame?.blurb}
             </p>
+
+            {/* Trivia plumbing preview — proves OpenTDB questions are wired in.
+                Real mini-game UIs replace this block. */}
+            {activeMiniGame && activeMiniGame.trivia !== false && (
+              trivia ? (
+                <div className="text-left rounded-lg border border-[rgba(0,229,255,0.2)] bg-[rgba(6,8,26,0.6)] p-3 space-y-2">
+                  <p className="jeo-headline uppercase tracking-[0.18em] text-[10px] text-[var(--jeo-gold)]">
+                    {trivia.category} · {trivia.difficulty}
+                    {trivia.source === 'fallback' ? ' · offline' : ''}
+                  </p>
+                  <p className="text-white text-sm leading-snug">{trivia.question}</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {trivia.choices.map((c, i) => (
+                      <span key={i} className="text-blue-100/80 text-xs rounded border border-white/10 px-2 py-1 truncate">{c}</span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="jeo-headline uppercase tracking-[0.22em] text-[11px] text-blue-200/55 animate-pulse">
+                  Fetching trivia…
+                </p>
+              )
+            )}
+
             <p className="jeo-headline uppercase tracking-[0.22em] text-[11px] text-blue-200/55 pt-1">
               Placeholder — full mini-game coming soon
             </p>

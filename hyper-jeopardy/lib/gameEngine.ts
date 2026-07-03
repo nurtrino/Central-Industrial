@@ -1,4 +1,5 @@
 import { GameForPlay, CategoryForPlay, ClueForPlay } from './games';
+import type { TriviaQuestion } from './opentdb';
 import { v4 as uuidv4 } from 'uuid';
 
 export type GamePhase =
@@ -20,28 +21,55 @@ export type CluePhase =
   | 'hyper_intro'       // HYPER MODE activation splash before the mini-game
   | 'hyper_active';     // HYPER MODE mini-game running (placeholder for now)
 
-// A mini-game that can fire when a "hyper" cell is chosen. These are
-// placeholders for now — the registry names/blurbs come from the concept
-// list; each becomes a real playable round in a later phase.
+// A mini-game that can fire when a "hyper" cell is chosen.
+//   mode   — 'single' (one player's spotlight) or 'multi' (whole table competes)
+//   trivia — where its questions come from, when it uses trivia:
+//              false      → no trivia (social / estimation / puzzle games)
+//              'random'   → OpenTDB medium, random category (excludes Musicals
+//                           & Theatres) — the default rule
+//              <number>   → a forced OpenTDB category id (game rules require it)
+// These entries are still placeholders; the real list (and per-game modules)
+// arrives next, built as wireframes.
 export interface MiniGame {
   key: string;
   title: string;
   family: string;
   blurb: string;
+  mode: 'single' | 'multi';
+  trivia: false | 'random' | number;
+  triviaCount?: number; // how many questions to pre-fetch (default 1)
 }
 
 export const MINI_GAMES: MiniGame[] = [
-  { key: 'fake_it',      title: 'Fake It',         family: 'Bluff',       blurb: 'Everyone writes a convincing fake answer. Score for spotting the truth — and for fooling the table.' },
-  { key: 'the_spectrum', title: 'The Spectrum',    family: 'Estimation',  blurb: 'One player sees the hidden target and gives a single-word clue. The rest dial it in.' },
-  { key: 'connections',  title: 'Connections',     family: 'Word Puzzle', blurb: 'Sixteen words, four secret groups. Sort them before your rivals do.' },
-  { key: 'zoom_out',     title: 'Zoom Out',        family: 'Perception',  blurb: 'An image slowly pulls back. Buzz the instant you know what it is — sooner scores more.' },
-  { key: 'most_likely',  title: 'Most Likely To…', family: 'Social',      blurb: 'Vote on who around the table best fits the prompt. Match the majority to score.' },
-  { key: 'higher_lower', title: 'Higher or Lower', family: 'Estimation',  blurb: 'Guess the number — closest without going over takes the points.' },
-  { key: 'rapid_fire',   title: 'Rapid Fire',      family: 'Speed',       blurb: 'Thirty seconds, one topic. As many as you can — wrong answers cost you.' },
+  { key: 'fake_it',      title: 'Fake It',         family: 'Bluff',       mode: 'multi',  trivia: 'random', blurb: 'Everyone writes a convincing fake answer. Score for spotting the truth — and for fooling the table.' },
+  { key: 'the_spectrum', title: 'The Spectrum',    family: 'Estimation',  mode: 'multi',  trivia: false,    blurb: 'One player sees the hidden target and gives a single-word clue. The rest dial it in.' },
+  { key: 'connections',  title: 'Connections',     family: 'Word Puzzle', mode: 'multi',  trivia: false,    blurb: 'Sixteen words, four secret groups. Sort them before your rivals do.' },
+  { key: 'zoom_out',     title: 'Zoom Out',        family: 'Perception',  mode: 'multi',  trivia: false,    blurb: 'An image slowly pulls back. Buzz the instant you know what it is — sooner scores more.' },
+  { key: 'most_likely',  title: 'Most Likely To…', family: 'Social',      mode: 'multi',  trivia: false,    blurb: 'Vote on who around the table best fits the prompt. Match the majority to score.' },
+  { key: 'higher_lower', title: 'Higher or Lower', family: 'Estimation',  mode: 'multi',  trivia: false,    blurb: 'Guess the number — closest without going over takes the points.' },
+  { key: 'rapid_fire',   title: 'Rapid Fire',      family: 'Speed',       mode: 'single', trivia: 'random', triviaCount: 5, blurb: 'Thirty seconds, one topic. As many as you can — wrong answers cost you.' },
 ];
 
 export function pickMiniGame(): MiniGame {
   return MINI_GAMES[Math.floor(Math.random() * MINI_GAMES.length)];
+}
+
+// Generic action channel for wireframe mini-games: records each player's latest
+// submission into miniGameData so all screens can render it. Real mini-games
+// will branch on state.activeMiniGame?.key here to implement their own rules
+// and scoring; this pass-through lets us prototype gameplay before that.
+export function applyMiniGameAction(
+  state: GameState,
+  playerId: string,
+  action: { type: string; payload?: unknown },
+): boolean {
+  if (state.cluePhase !== 'hyper_active') return false;
+  const data = (state.miniGameData ?? {}) as Record<string, unknown>;
+  const submissions = (data.submissions ?? {}) as Record<string, unknown>;
+  submissions[playerId] = { type: action.type, payload: action.payload ?? null };
+  data.submissions = submissions;
+  state.miniGameData = data;
+  return true;
 }
 
 // Choose 5–10 random non-Daily-Double clues in a round's board to become
@@ -100,6 +128,8 @@ export interface GameState {
   scores: Record<string, number[]>; // history for display
   hyperClues: number[];             // clue ids that trigger HYPER MODE this round
   activeMiniGame: MiniGame | null;  // the mini-game running during a hyper cell
+  miniGameTrivia: TriviaQuestion[] | null; // pre-fetched questions for the active mini-game
+  miniGameData: Record<string, unknown> | null; // per-game runtime state (wireframe prototyping)
 }
 
 const BUZZ_WINDOW_MS = 10_000;
@@ -137,6 +167,8 @@ export function createGame(showNumber: number, airDate: string): GameState {
     scores: {},
     hyperClues: [],
     activeMiniGame: null,
+    miniGameTrivia: null,
+    miniGameData: null,
   };
 }
 
@@ -209,6 +241,8 @@ export function selectClue(
   state.skippedBy = [];
   state.buzzedPlayerId = null;
   state.activeMiniGame = null;
+  state.miniGameTrivia = null;
+  state.miniGameData = null;
 
   // HYPER MODE fires first — a hyper cell is never also a Daily Double
   // (assignHyperClues excludes DDs), so the branches don't collide.
@@ -245,6 +279,8 @@ export function endHyper(state: GameState): void {
   state.activeCategoryIdx = null;
   state.activeClueIdx = null;
   state.activeMiniGame = null;
+  state.miniGameTrivia = null;
+  state.miniGameData = null;
   state.timerEndsAt = null;
   state.cluePhase = 'idle';
 }

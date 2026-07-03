@@ -129,13 +129,52 @@ export function playGameStart(): void {
 }
 
 // HYPER MODE activation sting — a bright ascending zap so phones react the
-// instant a hyper cell is chosen.
+// instant a hyper cell is chosen. Used as the fallback when no laser clip
+// has loaded yet.
 export function playHyper(): void {
   scheduleNote({ freq: 440, start: 0.0, dur: 0.10, type: 'square', gain: 0.16 });
   scheduleNote({ freq: 660, start: 0.09, dur: 0.10, type: 'square', gain: 0.16 });
   scheduleNote({ freq: 990, start: 0.18, dur: 0.12, type: 'square', gain: 0.18 });
   scheduleNote({ freq: 1480, start: 0.29, dur: 0.28, type: 'triangle', gain: 0.22 });
   scheduleNote({ freq: 1976, start: 0.42, dur: 0.30, type: 'triangle', gain: 0.16 });
+}
+
+// === Laser clips (HYPER MODE activation) ====================================
+// Every clip listed in /sounds/lasers/manifest.json is preloaded so a random
+// one fires instantly when HYPER MODE activates. Regenerate the manifest with
+// scripts/build-laser-manifest.mjs after adding clips.
+let laserEls: HTMLAudioElement[] = [];
+let laserLoadStarted = false;
+
+export function preloadLasers(): void {
+  if (laserLoadStarted || typeof window === 'undefined') return;
+  laserLoadStarted = true;
+  fetch('/sounds/lasers/manifest.json', { cache: 'force-cache' })
+    .then((r) => r.json())
+    .then((m: { clips?: string[] }) => {
+      laserEls = (m.clips || []).map((name) => {
+        const a = new Audio(`/sounds/lasers/${name}`);
+        a.preload = 'auto';
+        a.load();
+        return a;
+      });
+    })
+    .catch(() => { /* fall back to the synth sting */ });
+}
+
+// Play a random preloaded laser clip. Falls back to the synth zap if none are
+// loaded yet or playback is blocked.
+export function playRandomLaser(): void {
+  if (!laserEls.length) { playHyper(); return; }
+  const a = laserEls[Math.floor(Math.random() * laserEls.length)];
+  try {
+    a.currentTime = 0;
+    a.volume = muted ? 0 : 0.85;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => playHyper());
+  } catch {
+    playHyper();
+  }
 }
 
 export function playWrong(): void {

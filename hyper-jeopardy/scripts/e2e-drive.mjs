@@ -36,8 +36,12 @@ function onState(s) {
       }
     }
   }
-  if (s.cluePhase === 'hyper_intro') log('HYPER intro splash');
-  if (s.cluePhase === 'hyper_active') log('HYPER active — mini-game:', s.activeMiniGame?.title, `(${s.activeMiniGame?.family})`);
+  if (s.cluePhase === 'hyper_intro') log('HYPER intro splash —', s.activeMiniGame?.title, `mode=${s.activeMiniGame?.mode} trivia=${s.activeMiniGame?.trivia}`);
+  if (s.cluePhase === 'hyper_active') {
+    const t = s.miniGameTrivia?.[0];
+    log('HYPER active —', s.activeMiniGame?.title,
+        t ? `| trivia: [${t.source}] ${t.category} — ${t.question}` : (s.activeMiniGame?.trivia === false ? '| no trivia (by design)' : '| trivia pending…'));
+  }
 }
 
 host.on('connect', () => {
