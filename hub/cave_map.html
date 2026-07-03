@@ -546,10 +546,9 @@ loadGeo(
 );
 
 /* ================================================================== *
- * MULTI-STATE EXPANSION — Illinois & Wisconsin
- * State frames are drawn now; the cave layers are wired up EMPTY and
- * ready to be populated later. To add a cave, push an object into
- * `expansionCaves` with the same shape as ocsCaves:
+ * MULTI-STATE EXPANSION — Indiana, Illinois & Wisconsin
+ * (State outline frames were removed 2026-07-02.) To add a cave, push
+ * an object into `expansionCaves` with the same shape as ocsCaves:
  *   { n:"Name", reg:"IL"|"WI", county:"…", lat:0, lng:0, prec:"exact", d:"notes" }
  * ================================================================== */
 const expansionRegions = {
@@ -890,21 +889,6 @@ expansionCaves.forEach(c => {
   allLatLng.push([c.lat,c.lng]);
 });
 
-/* State outline frames for IL & WI (publiclands pane, on by default) */
-const stateFrameLayer = L.layerGroup().addTo(map);
-fetch('https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json')
-  .then(r => r.json()).then(geo => {
-    (geo.features||[]).forEach(f => {
-      const nm = f.properties && f.properties.name;
-      const reg = nm==='Indiana' ? 'IN' : (nm==='Illinois' ? 'IL' : (nm==='Wisconsin' ? 'WI' : null));
-      if (!reg) return;
-      L.geoJSON(f, { pane:'publiclands', color:expansionRegions[reg].frame, weight:2.2,
-        fill:true, fillColor:expansionRegions[reg].frame, fillOpacity:0.05, dashArray:'5 4' })
-        .bindTooltip(nm+' — expansion frame (caves to be added)', {sticky:true})
-        .addTo(stateFrameLayer);
-    });
-  }).catch(()=>{});
-
 /* ---- controls ---- */
 const baseLayers = {
   "Topographic (Esri)": esriTopo,
@@ -924,7 +908,6 @@ if (karstRegions) overlays["🟦🟨 Karst geology — ODNR EG-1 (blue=carbonate
 if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
 overlays["① Top-10 longest caves (ranked)"] = top10Layer;
 overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
-overlays["◇ State frames — IL &amp; WI"] = stateFrameLayer;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
 L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
 
