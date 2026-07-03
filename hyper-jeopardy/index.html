@@ -214,14 +214,60 @@ body{
 
 .hint{z-index:2;font-size:12px;color:var(--ink-dim);letter-spacing:.08em;text-align:center;opacity:.75}
 
+/* ---------- launch / start overlay ---------- */
+@property --p{syntax:'<percentage>';initial-value:0%;inherits:false}
+#launch{
+  position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:clamp(26px,5vh,54px);
+  background:radial-gradient(ellipse 62% 62% at 50% 45%,rgba(10,14,42,.5),rgba(2,3,10,.94));
+  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+  cursor:pointer;transition:opacity .7s ease,transform .7s ease;
+}
+#launch.gone{opacity:0;transform:scale(1.05);pointer-events:none}
+#launch .launch-logo{font-size:clamp(30px,6.4vw,76px)}
+.charge-ring{position:relative;width:clamp(96px,14vw,144px);aspect-ratio:1}
+.charge-ring .core{position:absolute;inset:0;border-radius:50%;
+  border:2px solid rgba(0,229,255,.22);box-shadow:inset 0 0 26px rgba(0,229,255,.14)}
+.charge-ring .fill{position:absolute;inset:-3px;border-radius:50%;
+  background:conic-gradient(from -90deg,var(--cyan) var(--p,0%),transparent 0);
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 7px),#000 calc(100% - 6px));
+          mask:radial-gradient(farthest-side,transparent calc(100% - 7px),#000 calc(100% - 6px));
+  filter:drop-shadow(0 0 9px var(--cyan));opacity:0}
+.charge-ring .bolt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:clamp(30px,4.4vw,48px);color:var(--cyan);
+  filter:drop-shadow(0 0 10px var(--cyan));transition:transform .18s ease,color .18s ease,filter .18s ease}
+#launch.charging .fill{opacity:1;animation:chargefill 1.05s linear forwards}
+#launch.charging .bolt{animation:boltbuzz .08s steps(2,end) infinite}
+#launch.discharge .fill{opacity:0;transition:opacity .25s ease}
+#launch.discharge .bolt{animation:none;transform:scale(1.55);color:#fff;
+  filter:drop-shadow(0 0 24px var(--cyan)) drop-shadow(0 0 46px #fff)}
+@keyframes chargefill{from{--p:0%}to{--p:100%}}
+@keyframes boltbuzz{0%{transform:translate(-1px,0) scale(1)}100%{transform:translate(1px,-1px) scale(1.06)}}
+.launch-prompt{font-family:'Orbitron';font-weight:700;letter-spacing:.34em;text-indent:.34em;
+  font-size:clamp(11px,1.4vw,16px);color:var(--ink-dim);text-transform:uppercase;
+  animation:promptpulse 1.9s ease-in-out infinite}
+#launch.charging .launch-prompt,#launch.discharge .launch-prompt{animation:none;opacity:0;transition:opacity .3s}
+@keyframes promptpulse{0%,100%{opacity:.42}50%{opacity:1;color:var(--ink);text-shadow:0 0 12px rgba(0,229,255,.6)}}
+
 @media (prefers-reduced-motion:reduce){
-  .board-frame::before,.clue-card::before,.board::after,.logo{animation:none}
+  .board-frame::before,.clue-card::before,.board::after,.logo,
+  #launch.charging .fill,#launch.charging .bolt,.launch-prompt{animation:none}
 }
 </style>
 </head>
 <body>
 <canvas id="space"></canvas>
 <div class="vignette"></div>
+
+<div id="launch">
+  <div class="logo launch-logo">HYPER&nbsp;JEOPARDY</div>
+  <div class="charge-ring">
+    <div class="core"></div>
+    <div class="fill"></div>
+    <div class="bolt">&#9889;</div>
+  </div>
+  <div class="launch-prompt">Press to Launch</div>
+</div>
 
 <div class="stage">
   <header class="masthead">
@@ -255,6 +301,69 @@ body{
 
 <script>
 'use strict';
+/* ============================================================
+   AUDIO — game-start sound effect.
+   Primary: plays assets/laser-charge.mp3 (the supplied laser-
+   charge clip) in place of the traditional Jeopardy jingle.
+   Fallback: if that file isn't present (e.g. this standalone
+   preview), a Web Audio "laser charge" is synthesized so the
+   launch moment still has a voice. Drop the real mp3 in and it
+   takes over automatically — no code change needed.
+   ============================================================ */
+const AudioFX=(function(){
+  const SRC='assets/laser-charge.mp3';
+  let fileReady=false, el=null, actx=null;
+  try{
+    el=new Audio(SRC);el.preload='auto';el.volume=.9;
+    el.addEventListener('canplaythrough',()=>{fileReady=true},{once:true});
+    el.addEventListener('error',()=>{fileReady=false});
+  }catch(e){/* Audio unavailable */}
+
+  function synth(){ // synthesized laser charge-up + discharge
+    try{
+      actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+      if(actx.state==='suspended')actx.resume();
+    }catch(e){return}
+    const c=actx,t=c.currentTime;
+    const master=c.createGain();master.gain.value=.8;master.connect(c.destination);
+    // charge whine: two detuned oscillators sweeping up through a rising filter
+    const lp=c.createBiquadFilter();lp.type='lowpass';lp.Q.value=7;
+    lp.frequency.setValueAtTime(380,t);lp.frequency.exponentialRampToValueAtTime(6200,t+1.0);
+    const cg=c.createGain();cg.gain.setValueAtTime(.0001,t);
+    cg.gain.exponentialRampToValueAtTime(.34,t+.95);
+    cg.gain.exponentialRampToValueAtTime(.0001,t+1.18);
+    lp.connect(cg).connect(master);
+    [1,1.005].forEach((d,i)=>{
+      const o=c.createOscillator();o.type=i?'square':'sawtooth';
+      o.frequency.setValueAtTime(110*d,t);
+      o.frequency.exponentialRampToValueAtTime(1650*d,t+1.0);
+      o.connect(lp);o.start(t);o.stop(t+1.2);
+    });
+    // discharge zap at ~1.02s: descending tone + filtered noise burst
+    const zt=t+1.0;
+    const pew=c.createOscillator();pew.type='triangle';
+    pew.frequency.setValueAtTime(1850,zt);pew.frequency.exponentialRampToValueAtTime(170,zt+.34);
+    const pg=c.createGain();pg.gain.setValueAtTime(.42,zt);pg.gain.exponentialRampToValueAtTime(.0001,zt+.36);
+    pew.connect(pg).connect(master);pew.start(zt);pew.stop(zt+.38);
+    const nb=c.createBuffer(1,Math.floor(c.sampleRate*.4),c.sampleRate),nd=nb.getChannelData(0);
+    for(let i=0;i<nd.length;i++)nd[i]=(Math.random()*2-1)*Math.pow(1-i/nd.length,2);
+    const noise=c.createBufferSource();noise.buffer=nb;
+    const bp=c.createBiquadFilter();bp.type='bandpass';bp.Q.value=1.1;
+    bp.frequency.setValueAtTime(2600,zt);bp.frequency.exponentialRampToValueAtTime(480,zt+.34);
+    const ng=c.createGain();ng.gain.setValueAtTime(.55,zt);ng.gain.exponentialRampToValueAtTime(.0001,zt+.38);
+    noise.connect(bp).connect(ng).connect(master);noise.start(zt);
+  }
+
+  // must be called from a user gesture (browser autoplay policy)
+  function charge(){
+    if(fileReady){
+      try{el.currentTime=0;const p=el.play();if(p)p.catch(synth);return}catch(e){}
+    }
+    synth();
+  }
+  return {charge};
+})();
+
 /* ============================================================
    STARFIELD ENGINE — twinkling stars, shooting asteroids,
    drifting translucent nebulas. One canvas, one rAF loop.
@@ -530,6 +639,33 @@ body{
     d.innerHTML='<div class="pname">'+p.name+'</div>'+
       '<div class="pscore'+(p.score<0?' neg':'')+'">'+(p.score<0?'−$'+Math.abs(p.score):'$'+p.score)+'</div>';
     rail.appendChild(d);
+  });
+})();
+
+/* ============================================================
+   LAUNCH — the game-start moment. Doubles as the required
+   user gesture so the start sound is allowed to play, and
+   replaces the traditional Jeopardy opening jingle with the
+   laser-charge cue.
+   ============================================================ */
+(function(){
+  const launch=document.getElementById('launch');
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let started=false;
+  function go(){
+    if(started)return;started=true;
+    AudioFX.charge();
+    if(reduced){launch.classList.add('gone');setTimeout(()=>launch.remove(),700);return;}
+    launch.classList.add('charging');
+    setTimeout(()=>launch.classList.add('discharge'),1000); // discharge flash on the zap
+    setTimeout(()=>launch.classList.add('gone'),1260);      // wipe overlay away
+    setTimeout(()=>launch.remove(),2000);
+  }
+  launch.addEventListener('click',go);
+  launch.addEventListener('touchstart',e=>{e.preventDefault();go();},{passive:false});
+  if(location.hash.includes('auto'))setTimeout(go,250); // QA: skip straight into the board
+  document.addEventListener('keydown',e=>{
+    if(!started&&(e.key===' '||e.key==='Enter'||e.key==='Spacebar')){e.preventDefault();go();}
   });
 })();
 </script>

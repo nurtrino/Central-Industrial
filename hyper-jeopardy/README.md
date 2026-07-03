@@ -19,6 +19,13 @@ that establishes the visual identity:
 - **Clue reveal**: FLIP zoom from the clicked cell into a full-screen glass card
   with an orbiting neon border; response reveal in lime.
 - **Podium rail**: per-player neon hue, active-player glow, negative scores in red.
+- **Launch moment**: a "Press to Launch" intro overlay (charge ring + logo) that
+  doubles as the user gesture browsers require before audio can play. On press it
+  fires the game-start sound — **`assets/laser-charge.mp3`** (the supplied
+  laser-charge clip) in place of the traditional Jeopardy jingle — charges the
+  ring, flashes on discharge, then wipes away to reveal the board. If the mp3 is
+  absent (e.g. the standalone artifact preview), a Web-Audio–synthesized laser
+  charge stands in automatically. See `assets/README.md`.
 
 Demo categories/clues and players are placeholders; real game logic (ported from
 the existing jeopardy app, then extended with mini-games) arrives in Phase 2.
