@@ -49,7 +49,7 @@ services:
       - key: HUB_URL_MONKEYREADMONKEYDO
         value: https://notes.centralindustrial.ai
       - key: HUB_URL_HYPERJEOPARDY
-        value: https://jeopardy.centralindustrial.ai
+        value: https://central-industrial.onrender.com
 
   # ── Deep Research — headless browser-driven research (Docker + Chromium) ─────
   - type: web
