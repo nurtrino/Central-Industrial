@@ -872,6 +872,12 @@ const expansionCaves = [
   { n:"Harlem Cave", reg:"WI", county:"Fond du Lac", lat:43.64002, lng:-88.61179, prec:"landmark",
     d:"&#9888; <b>Location approximate.</b> Wild cave, geo-located from the NSS corpus. Sec.32, T.14N R.16E (4th PM). Src: Speleo Digest SD_1976-compressed. BLM PLSS section-centroid (~1 km)." },
 
+  // ==== WISCONSIN Niagara-Escarpment show/park caves (added 2026-07-02: OSM cave_entrance + WI Speleological Society / WGNHS) ====
+  { n:"Maribel Caves (New Hope Cave & park cluster)", reg:"WI", county:"Manitowoc", lat:44.28833, lng:-87.77411, prec:"exact",
+    d:"In <b>Cherney Maribel Caves County Park</b> (75 ac), Town of Cooperstown, Manitowoc Co — a cluster of Silurian-dolomite (Niagara Escarpment) solution caves along the West Twin River. Marquee = <b>Maribel New Hope Cave</b> (this pin): once choked with glacial till, it is being hand-excavated by the Wisconsin Speleological Society and offers guided tours the 3rd Sunday, May–Oct. The park also holds the Tartarus Cave System, Cave of Treasures, and the Cooper's, Spring, Pancake, Staircase &amp; Sinkhole caves, plus the ruined (reputedly haunted) early-1900s Maribel Caves Hotel. Public county park. Src: WI Speleological Society; WGNHS; OSM cave_entrance." },
+  { n:"Ledge View Caves (Carolyn's Caverns)", reg:"WI", county:"Calumet", lat:44.00687, lng:-88.15289, prec:"exact",
+    d:"At the <b>Ledge View Nature Center</b> (W2348 Short Rd, Chilton), Calumet Co — Silurian-dolomite solution caves in the Niagara Escarpment. Marquee = <b>Carolyn's Caverns</b> (this pin), the main guided-tour cave (ladders &amp; tight vertical passages); the site also has <b>Montgomery Cave</b> and the <b>Cavern of the Maidens</b>. County-run nature center with public tours. Src: Ledge View Nature Center; OSM cave_entrance." },
+
 ];
 expansionCaves.forEach(c => {
   const faded = (c.prec==='county' || c.prec==='undisclosed');
