@@ -11,6 +11,11 @@
       "url": "http://127.0.0.1:5005/"
     },
     {
+      "id": "hyperjeopardy",
+      "name": "Hyper Jeopardy",
+      "url": "http://127.0.0.1:3000/"
+    },
+    {
       "id": "cavemap",
       "name": "Cave Map",
       "url": "https://centralindustrial.ai/cave"

@@ -1,11 +1,14 @@
 # Central Industrial — Render Blueprint.
 #
-# Three web services under the apex domain centralindustrial.ai, behind one access
-# gate (single sign-on via a shared cookie scoped to .centralindustrial.ai):
+# Web services under the apex domain centralindustrial.ai. The first three sit behind
+# one access gate (single sign-on via a shared cookie scoped to .centralindustrial.ai):
 #   • central-industrial-hub   → centralindustrial.ai (+ www)   — C64 home / login
 #   • deep-research            → research.centralindustrial.ai
 #   • monkey-read-monkey-do    → notes.centralindustrial.ai     — hosted UI; transcription
 #                                                                  runs on a LOCAL GPU worker
+#   • hyper-jeopardy           → jeopardy.centralindustrial.ai  — multiplayer party game
+#                                                                  (PUBLIC: players join from
+#                                                                  their own phones, no gate)
 # Home Assistant was dropped (Windows/WSL2 launcher, not portable). The GPU worker
 # (mrmd-worker/) is NOT deployed here — it runs on the home machine behind a tunnel.
 #
@@ -45,6 +48,8 @@ services:
         value: https://research.centralindustrial.ai
       - key: HUB_URL_MONKEYREADMONKEYDO
         value: https://notes.centralindustrial.ai
+      - key: HUB_URL_HYPERJEOPARDY
+        value: https://jeopardy.centralindustrial.ai
 
   # ── Deep Research — headless browser-driven research (Docker + Chromium) ─────
   - type: web
@@ -99,3 +104,27 @@ services:
         sync: false                # your local GPU worker's HTTPS tunnel URL
       - key: MRMD_WORKER_TOKEN
         sync: false                # MUST match the worker's MRMD_WORKER_TOKEN
+
+  # ── Hyper Jeopardy — multiplayer party game (Next.js + socket.io, Docker) ─────
+  # PUBLIC by design: players open the controller on their phones and the shared
+  # screen (/display) on a TV — no access-code gate, so joining is one tap. The
+  # custom Node server (server.ts) runs Next + socket.io on Render's $PORT.
+  - type: web
+    name: hyper-jeopardy
+    runtime: docker
+    rootDir: hyper-jeopardy
+    dockerfilePath: ./Dockerfile
+    plan: starter               # Node + Next SSR + 5.7MB seed in memory; bump to
+                                # standard if it OOMs under real load
+    healthCheckPath: /
+    autoDeploy: true
+    domains:
+      - jeopardy.centralindustrial.ai
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOME_URL           # link back to the hub (used by the in-app menu)
+        value: https://centralindustrial.ai
+      # AUTH_SECRET is intentionally NOT wired in — this app is public. Add the
+      # `central-industrial-auth` group + a gate middleware here to put it behind
+      # the C64 access code later.
