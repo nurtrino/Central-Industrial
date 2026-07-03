@@ -1,41 +1,64 @@
 # Hyper Jeopardy
 
-A multiplayer trivia potpourri for 2–6 players — phones as controllers, one shared
-screen as the stage. Jeopardy-style board play plus a rotating cast of mini-games
-(bluffing, estimation, word puzzles, speed buzzing, wagering, survival rounds).
+A multiplayer **Hyper Jeopardy** — the real Jeopardy game engine (ported from the
+Bryndal jeopardy app) wrapped in an outer-space visual identity, plus **Hyper Mode**:
+random cells that trigger a party mini-game instead of a clue.
 
-## Status: Phase 1 — aesthetic shell
+Phones are the controllers; one shared screen (`/display`) is the stage.
 
-`index.html` is a fully self-contained page (fonts inlined, zero external requests)
-that establishes the visual identity:
+## Stack
 
-- **Starfield engine** (canvas): twinkling stars with intermittent glint flares,
-  shooting stars and tumbling asteroids every 6–14 s, translucent nebulas that
-  drift on slow lissajous paths and periodically float in and out of view.
-- **The board**: 6 × 5 glass grid over the void; dollar values sweep a neon
-  spectrum from cyan ($200) down to magenta ($1000); a neon pulse orbits the
-  board frame; a diagonal shimmer sweeps the grid every ~9.5 s; random cells
-  ping with a soft neon flash.
-- **Clue reveal**: FLIP zoom from the clicked cell into a full-screen glass card
-  with an orbiting neon border; response reveal in lime.
-- **Podium rail**: per-player neon hue, active-player glow, negative scores in red.
-- **Launch moment**: a "Press to Launch" intro overlay (charge ring + logo) that
-  doubles as the user gesture browsers require before audio can play. On press it
-  fires the game-start sound — **`assets/laser-charge.mp3`** (the supplied
-  laser-charge clip) in place of the traditional Jeopardy jingle — charges the
-  ring, flashes on discharge, then wipes away to reveal the board. If the mp3 is
-  absent (e.g. the standalone artifact preview), a Web-Audio–synthesized laser
-  charge stands in automatically. See `assets/README.md`.
+Next.js 16 (App Router, Turbopack) + React 19 + a custom Node server (`server.ts`)
+running **socket.io** for realtime multiplayer. Game data is `data/seed.json`
+(275 real games) loaded into memory at boot by `lib/games.ts`. Tailwind v4.
 
-Demo categories/clues and players are placeholders; real game logic (ported from
-the existing jeopardy app, then extended with mini-games) arrives in Phase 2.
+- `/`         — phone controller (join, buzz, answer, wager, run a hyper round)
+- `/display`  — shared "TV" screen (board, clues, hyper takeover, scoreboard)
+- `/dev`      — local multi-player simulator
+- `server.ts` — Next handler + socket.io (`lib/gameServer.ts`)
+- `lib/gameEngine.ts` — pure game state machine (rounds, buzzing, DD, final, **hyper**)
 
-QA helpers: open with `#clue` in the URL hash to auto-open a clue,
-`#clue-answer` to also reveal the response. Honors `prefers-reduced-motion`.
+## The space theme
 
-## Planned phases
+Everything re-themes through the original app's semantic classes (`jeo-tile`,
+`jeo-title`, `jeo-value`, …) — repainted in `app/globals.css` — so the game logic
+was untouched. A global `<Starfield/>` canvas (twinkling stars, shooting
+asteroids, drifting nebulas) sits behind every route; the board runs a neon value
+spectrum (cyan $200 → magenta $1000) with violet category headers. Fonts are
+self-hosted Orbitron (display) + Exo 2 (body) via `next/font/local` so the build
+never depends on Google Fonts. The game-start cue is `public/sounds/laser-charge.mp3`
+in place of the Jeopardy jingle.
 
-1. ~~Space-theme aesthetic shell~~ (this)
-2. Port real Jeopardy game logic + multiplayer (phone controllers / shared screen)
-3. Mini-game potpourri framework (pluggable rounds)
-4. Deploy as its own app under centralindustrial.ai, listed on the hub splash screen
+## Hyper Mode
+
+At the start of each round, `assignHyperClues()` marks **5–10 random non-Daily-Double
+cells** as "hyper". Selecting one — like a Daily Double, but a mini-game — fires:
+
+1. **`hyper_intro`** — a full-screen **HYPER MODE · ACTIVATED** splash naming the
+   mini-game and who triggered it (~3.5s).
+2. **`hyper_active`** — the mini-game runs. Right now every mini-game is a
+   **placeholder card** (title + blurb, drawn from `MINI_GAMES` in `lib/gameEngine.ts`
+   — Fake It, The Spectrum, Connections, Zoom Out, Most Likely To…, Higher or Lower,
+   Rapid Fire). The board controller (or host) taps **End Hyper Round** to return to
+   the board; a safety timer caps it so it can never hang.
+
+Real, playable mini-games replace the placeholders in the next phase — the
+activation + close flow around them already works. Hyper cells are hidden on the
+board (no marker) so the surprise lands, exactly like a Daily Double.
+
+## Run locally
+
+```
+npm install
+npm run build && npm run start   # production (custom socket server)
+# or: npm run dev                 # development
+# open http://localhost:3000/display on the TV, http://localhost:3000/ on phones
+```
+
+`scripts/e2e-drive.mjs` is a socket-level driver used to smoke-test the multiplayer
+flow headlessly (`node scripts/e2e-drive.mjs board|hyper`).
+
+## Data pipeline
+
+See `AGENTS.md` — the runtime never scrapes; `data/seed.json` is built offline from
+`scripts/games-data.ts` (+ optional scraped extras) via `npm run build-seed`.
