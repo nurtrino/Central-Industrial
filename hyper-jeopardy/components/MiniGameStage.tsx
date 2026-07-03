@@ -27,6 +27,16 @@ function Timer({ endsAt }: { endsAt: number | null }) {
   );
 }
 
+// signed money format: +$2,000 / $0 / −$1,000
+function fmtPts(n: number): string {
+  if (n > 0) return `+$${n.toLocaleString()}`;
+  if (n < 0) return `−$${Math.abs(n).toLocaleString()}`;
+  return '$0';
+}
+function ptsClass(n: number): string {
+  return n > 0 ? 'text-[var(--neon-lime)]' : n < 0 ? 'text-red-400' : 'text-blue-200/60';
+}
+
 export default function MiniGameStage({ state }: { state: GameState }) {
   const d = state.miniGameData as unknown as MiniGameData | null;
   const mg = state.activeMiniGame;
@@ -41,14 +51,48 @@ export default function MiniGameStage({ state }: { state: GameState }) {
           </p>
           <h2 className="hyper-title text-4xl sm:text-6xl">{mg.title}</h2>
         </div>
-        {d.status === 'playing' && <Timer endsAt={d.endsAt} />}
+        {d.status !== 'results' && <Timer endsAt={d.endsAt} />}
       </div>
 
-      {d.status === 'results'
-        ? <Results state={state} d={d} />
+      {d.status === 'results' ? <Results state={state} d={d} />
+        : d.status === 'intro' ? <IntroPanel d={d} />
         : d.key === 'anagram_race' ? <AnagramStage state={state} d={d} />
         : d.key === 'rapid_fire' ? <RapidStage state={state} d={d} />
         : <LetterStage state={state} d={d} />}
+    </div>
+  );
+}
+
+/* ── Intro (rules) — shown on all screens for ~5s before play ──────────────── */
+function IntroPanel({ d }: { d: MiniGameData }) {
+  return (
+    <div className="text-center space-y-7 py-2">
+      <p className="jeo-headline uppercase tracking-[0.4em] text-blue-200/70 text-lg">How to play</p>
+      {d.key === 'anagram_race' && (
+        <div className="space-y-6">
+          <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
+            Unscramble the word on your phone. First to solve wins big — but be slow and it&apos;ll cost you.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th+', -d.value]].map(([label, pts]) => (
+              <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
+                {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {d.key === 'rapid_fire' && (
+        <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
+          One category — <span className="text-[var(--jeo-gold)]">{d.category}</span>. Answer as many as you can in 45 seconds.
+          <br /><span className="text-[var(--neon-lime)]">+100</span> right · <span className="text-red-400">−50</span> wrong.
+        </p>
+      )}
+      {d.key === 'letter_reveal' && (
+        <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
+          A hidden 5-letter word. Letters reveal one at a time — guess it early on your phone; the fewer letters shown, the bigger the score.
+        </p>
+      )}
     </div>
   );
 }
@@ -151,7 +195,7 @@ function Results({ state, d }: { state: GameState; d: MiniGameData }) {
             <span className="w-8 jeo-headline text-blue-200/60">#{i + 1}</span>
             <span className="flex-1 text-left text-xl text-white jeo-headline uppercase tracking-wide truncate">{r.name}</span>
             <span className="text-blue-200/60 text-sm jeo-headline uppercase tracking-wider">{r.detail}</span>
-            <span className={`w-20 text-right jeo-value text-2xl ${r.points > 0 ? '' : 'opacity-40'}`}>+{r.points}</span>
+            <span className={`w-28 text-right jeo-value text-2xl ${ptsClass(r.points)}`}>{fmtPts(r.points)}</span>
           </div>
         ))}
       </div>

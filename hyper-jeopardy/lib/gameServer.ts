@@ -22,7 +22,7 @@ import {
   submitSkip,
   beginHyperActive,
   endHyper,
-  assignHyperClues,
+  assignSpecialCells,
   HYPER_INTRO_MS,
   HYPER_MAX_MS,
 } from './gameEngine';
@@ -30,9 +30,11 @@ import { loadRandomGame, getGameCount, GameForPlay } from './games';
 import { fetchTrivia, type TriviaQuestion } from './opentdb';
 import {
   initMiniGame,
+  beginMiniGamePlaying,
   handleMiniGameAction,
   revealLetter,
   finishMiniGame,
+  INTRO_MS,
   ANAGRAM_MS,
   RAPID_MS,
   REVEAL_INTERVAL_MS,
@@ -543,23 +545,34 @@ function clearMiniGameTimers() {
   clearTimer('hyper_intro');
   clearTimer('hyper_cap');
   clearTimer('mg_round');
+  clearTimer('mg_intro');
   clearTimer('mg_reveal');
   clearTimer('mg_grace');
   clearTimer('mg_results');
 }
 
 // Kick off the mini-game once the activation splash ends and trivia (if any)
-// has been attached. Sets up the per-game timers.
+// has been attached. First shows a ~5s rules screen (status 'intro') on all
+// screens, THEN reveals the game and opens input (beginPlaying).
 function startMiniGame() {
   if (!gameState || gameState.cluePhase !== 'hyper_intro') return;
   beginHyperActive(gameState);
-  initMiniGame(gameState);
+  initMiniGame(gameState); // status: 'intro'
+  broadcast();
+  // safety cap so a game can never hang the board
+  setTimer('hyper_cap', HYPER_MAX_MS, () => finishMini());
+  setTimer('mg_intro', INTRO_MS, () => beginPlaying());
+}
+
+// Rules screen over → reveal the game, open input, start the round timers.
+function beginPlaying() {
+  if (!gameState || gameState.cluePhase !== 'hyper_active') return;
+  const d = gameState.miniGameData as { status?: string } | null;
+  if (!d || d.status !== 'intro') return;
+  beginMiniGamePlaying(gameState);
   broadcast();
 
   const key = gameState.activeMiniGame?.key;
-  // safety cap so a game can never hang the board
-  setTimer('hyper_cap', HYPER_MAX_MS, () => finishMini());
-
   if (key === 'letter_reveal') {
     scheduleReveal();
   } else {
@@ -612,7 +625,7 @@ function maybeAdvanceRound() {
   if (phase === 'jeopardy') {
     advanceRound(gameState); // → 'double_jeopardy'
     gameState.currentBoard = currentGame.doubleJeopardyRound;
-    gameState.hyperClues = assignHyperClues(currentGame.doubleJeopardyRound);
+    gameState.hyperClues = assignSpecialCells(currentGame.doubleJeopardyRound).hyperClues;
     // Real-Jeopardy rule: trailing (lowest-score) connected player picks
     // first in DJ. If everyone is tied, keep the current board controller.
     const connected = gameState.players.filter(p => p.connected);

@@ -11,19 +11,22 @@ import type { GameState } from './gameEngine';
 import { ANAGRAM_WORDS, FIVE_LETTER_WORDS, randomWord, scramble } from './wordBanks';
 
 // ── timing / scoring ────────────────────────────────────────────────────────
+export const INTRO_MS = 5_000;   // rules screen shown on all screens before play
 export const ANAGRAM_MS = 45_000;
 export const RAPID_MS = 45_000;
 export const REVEAL_INTERVAL_MS = 4_500;
 export const LETTER_GRACE_MS = 6_000;
 export const RESULTS_MS = 6_500;
 
-const ANAGRAM_AWARDS = [500, 350, 250]; // by solve order; 150 thereafter
+// Anagram Race scores as a MULTIPLE of the board-space value, by solve order:
+// 1st = 2×, 2nd = 1×, 3rd = 0, 4th+ = −1×. Non-solvers get 0.
+const ANAGRAM_MULT = [2, 1, 0, -1];
 const LETTER_AWARDS = [500, 400, 300, 250, 150, 100]; // by revealCount 0..5
 const RAPID_CORRECT = 100;
 const RAPID_WRONG = -50;
 
 // ── broadcast state shapes (no secrets) ─────────────────────────────────────
-export type MiniGameStatus = 'playing' | 'results';
+export type MiniGameStatus = 'intro' | 'playing' | 'results';
 
 export interface MiniGameResultRow {
   playerId: string;
@@ -43,8 +46,9 @@ interface BaseMGData {
 
 export interface AnagramData extends BaseMGData {
   key: 'anagram_race';
-  scrambled: string;
+  scrambled: string;      // empty during the intro; set when play begins
   wordLen: number;
+  value: number;          // board-space value → scoring multiplier base
   solvedOrder: string[];
   solved: Record<string, boolean>;
 }
@@ -81,6 +85,7 @@ export interface ActionResult {
 // ── server-only secrets ─────────────────────────────────────────────────────
 interface MGSecret {
   anagramAnswer?: string;
+  anagramScrambled?: string; // withheld until play begins (hidden during intro)
   letterAnswer?: string;
   revealOrder?: number[];
   rapidCorrect?: string[]; // normalized correct answer per question index
@@ -109,18 +114,24 @@ function allSolved(state: GameState, solved: Record<string, boolean>): boolean {
 }
 
 // ── init ────────────────────────────────────────────────────────────────────
+// Games open in status 'intro' — a rules screen shown on all screens for
+// INTRO_MS before play begins (see beginMiniGamePlaying). The playable content
+// (scrambled letters, revealed letters) is withheld until then.
 export function initMiniGame(state: GameState): void {
   mgSecret = {};
   const key = state.activeMiniGame?.key;
   const now = Date.now();
+  const introEndsAt = now + INTRO_MS;
 
   if (key === 'anagram_race') {
     const word = randomWord(ANAGRAM_WORDS);
     mgSecret.anagramAnswer = normalize(word);
+    mgSecret.anagramScrambled = scramble(word).toUpperCase();
     const data: AnagramData = {
-      key: 'anagram_race', status: 'playing', endsAt: now + ANAGRAM_MS,
+      key: 'anagram_race', status: 'intro', endsAt: introEndsAt,
       roundScores: {}, results: null, answerReveal: null,
-      scrambled: scramble(word).toUpperCase(), wordLen: word.length,
+      scrambled: '', wordLen: word.length,
+      value: state.activeClue?.value ?? 200,
       solvedOrder: [], solved: {},
     };
     state.miniGameData = data as unknown as Record<string, unknown>;
@@ -129,7 +140,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.letterAnswer = normalize(word);
     mgSecret.revealOrder = shuffledIndices(word.length);
     const data: LetterData = {
-      key: 'letter_reveal', status: 'playing', endsAt: null,
+      key: 'letter_reveal', status: 'intro', endsAt: introEndsAt,
       roundScores: {}, results: null, answerReveal: null,
       wordLen: word.length, letters: Array(word.length).fill(null),
       revealCount: 0, solved: {}, solvedAtReveal: {},
@@ -139,13 +150,29 @@ export function initMiniGame(state: GameState): void {
     const qs = (state.miniGameTrivia ?? []).filter(q => q.type === 'multiple' && q.choices.length >= 2);
     mgSecret.rapidCorrect = qs.map(q => normalize(q.correct));
     const data: RapidData = {
-      key: 'rapid_fire', status: 'playing', endsAt: now + RAPID_MS,
+      key: 'rapid_fire', status: 'intro', endsAt: introEndsAt,
       roundScores: {}, results: null, answerReveal: null,
       category: qs[0]?.category ?? 'Trivia',
       questions: qs.map(q => ({ question: q.question, choices: q.choices, category: q.category })),
       total: qs.length, progress: {}, correct: {}, wrong: {}, done: {},
     };
     state.miniGameData = data as unknown as Record<string, unknown>;
+  }
+}
+
+// Rules screen over → open play: reveal the content and start the round clock.
+export function beginMiniGamePlaying(state: GameState): void {
+  const d = state.miniGameData as unknown as MiniGameData | null;
+  if (!d || d.status !== 'intro') return;
+  d.status = 'playing';
+  const now = Date.now();
+  if (d.key === 'anagram_race') {
+    d.scrambled = mgSecret.anagramScrambled ?? '';
+    d.endsAt = now + ANAGRAM_MS;
+  } else if (d.key === 'rapid_fire') {
+    d.endsAt = now + RAPID_MS;
+  } else if (d.key === 'letter_reveal') {
+    d.endsAt = null; // reveal-paced, no fixed round clock
   }
 }
 
@@ -174,7 +201,9 @@ function anagramSubmit(state: GameState, d: AnagramData, playerId: string, paylo
   if (guess === mgSecret.anagramAnswer) {
     d.solved[playerId] = true;
     d.solvedOrder.push(playerId);
-    const pts = ANAGRAM_AWARDS[d.solvedOrder.length - 1] ?? 150;
+    const place = d.solvedOrder.length - 1;              // 0-indexed placement
+    const mult = ANAGRAM_MULT[place] ?? ANAGRAM_MULT[ANAGRAM_MULT.length - 1]; // 4th+ = −1×
+    const pts = Math.round(d.value * mult);
     d.roundScores[playerId] = pts;
     return { changed: true, complete: allSolved(state, d.solved), feedback: { correct: true, points: pts } };
   }
@@ -233,7 +262,7 @@ export function finishMiniGame(state: GameState): void {
   const rows: MiniGameResultRow[] = [];
   for (const p of state.players) {
     const pts = d.roundScores[p.id] ?? 0;
-    if (pts > 0) {
+    if (pts !== 0) { // apply gains AND penalties (Anagram can go negative)
       p.score += pts;
       state.scores[p.id]?.push(p.score);
     }

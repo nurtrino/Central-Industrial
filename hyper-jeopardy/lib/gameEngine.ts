@@ -57,17 +57,28 @@ export function pickMiniGame(): MiniGame {
   return MINI_GAMES[Math.floor(Math.random() * MINI_GAMES.length)];
 }
 
-// Choose 5–10 random non-Daily-Double clues in a round's board to become
-// "hyper" cells. Selecting one fires HYPER MODE (a mini-game) instead of the
-// normal clue — like a Daily Double, but a mini-game. Returns clue ids.
-export function assignHyperClues(board: CategoryForPlay[]): number[] {
-  const ids = board.flatMap(c => c.clues).filter(cl => !cl.isDailyDouble).map(cl => cl.id);
+export const HYPER_PER_ROUND = 8;   // mini-game cells per round
+export const DD_PER_ROUND = 2;      // Daily Doubles per round (house rule)
+
+// Randomly place this round's special cells: DD_PER_ROUND Daily Doubles + a
+// disjoint set of HYPER_PER_ROUND hyper (mini-game) cells. We control both
+// counts, so any Daily Doubles baked into the seed data are cleared first and
+// re-assigned. DD status rides on `clue.isDailyDouble`; hyper ids are returned.
+export function assignSpecialCells(board: CategoryForPlay[]): { hyperClues: number[]; ddClues: number[] } {
+  const clues = board.flatMap(c => c.clues);
+  for (const cl of clues) cl.isDailyDouble = false;
+
+  const ids = clues.map(cl => cl.id);
   for (let i = ids.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [ids[i], ids[j]] = [ids[j], ids[i]];
   }
-  const count = Math.min(ids.length, 5 + Math.floor(Math.random() * 6)); // 5..10 inclusive
-  return ids.slice(0, count);
+  const ddClues = ids.slice(0, Math.min(DD_PER_ROUND, ids.length));
+  const hyperClues = ids.slice(ddClues.length, ddClues.length + HYPER_PER_ROUND);
+
+  const ddSet = new Set(ddClues);
+  for (const cl of clues) if (ddSet.has(cl.id)) cl.isDailyDouble = true;
+  return { hyperClues, ddClues };
 }
 
 export interface Player {
@@ -195,7 +206,7 @@ export function startGame(state: GameState, game: GameForPlay): void {
   state.currentBoard = game.jeopardyRound;
   state.finalJeopardy = game.finalJeopardy;
   state.usedClues = new Set();
-  state.hyperClues = assignHyperClues(game.jeopardyRound);
+  state.hyperClues = assignSpecialCells(game.jeopardyRound).hyperClues;
   state.activeMiniGame = null;
   // First player to join controls board first (they're host)
   const host = state.players.find(p => p.isHost);

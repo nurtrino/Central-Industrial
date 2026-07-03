@@ -14,15 +14,49 @@ interface Props {
 
 // Phone-side controls for the Phase 1 mini-games (wireframe). Emits
 // mini_game_action and reads back per-player state from the broadcast.
+// signed money format: +$2,000 / $0 / −$1,000
+function fmtPts(n: number): string {
+  if (n > 0) return `+$${n.toLocaleString()}`;
+  if (n < 0) return `−$${Math.abs(n).toLocaleString()}`;
+  return '$0';
+}
+
 export default function MiniGameController({ state, playerId, onAction }: Props) {
   const d = state.miniGameData as unknown as MiniGameData | null;
   if (!d || !playerId) return null;
 
   if (d.status === 'results') return <ResultsView d={d} playerId={playerId} />;
+  if (d.status === 'intro') return <IntroCtl d={d} />;
   if (d.key === 'anagram_race') return <AnagramCtl d={d} playerId={playerId} onAction={onAction} />;
   if (d.key === 'rapid_fire') return <RapidCtl d={d} playerId={playerId} onAction={onAction} />;
   if (d.key === 'letter_reveal') return <LetterCtl d={d} playerId={playerId} onAction={onAction} />;
   return null;
+}
+
+/* ── Intro (rules) — phone view while the rules show on all screens ─────────── */
+function IntroCtl({ d }: { d: MiniGameData }) {
+  return (
+    <div className="text-center space-y-3 py-3">
+      <p className="jeo-headline uppercase tracking-[0.25em] text-blue-200/70 text-xs">Get ready…</p>
+      {d.key === 'anagram_race' && (
+        <>
+          <p className="text-blue-100/90 text-base leading-snug">Unscramble the word fastest. Type it here when play opens.</p>
+          <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-red-400">· 4th+ {fmtPts(-d.value)}</span>
+          </div>
+        </>
+      )}
+      {d.key === 'rapid_fire' && (
+        <p className="text-blue-100/90 text-base leading-snug">{d.category} · 45s. Tap answers fast. <span className="text-[var(--neon-lime)]">+100</span> / <span className="text-red-400">−50</span>.</p>
+      )}
+      {d.key === 'letter_reveal' && (
+        <p className="text-blue-100/90 text-base leading-snug">Guess the hidden 5-letter word — the fewer letters shown when you solve, the more points.</p>
+      )}
+    </div>
+  );
 }
 
 /* ── Anagram Race ─────────────────────────────────────────────────────────── */
@@ -156,7 +190,7 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
 function Solved({ points, sub }: { points: number; sub: string }) {
   return (
     <div className="text-center space-y-2 py-4">
-      <p className="hyper-title text-4xl">+{points}</p>
+      <p className={`hyper-title text-4xl ${points < 0 ? 'opacity-90' : ''}`}>{fmtPts(points)}</p>
       <p className="jeo-headline uppercase tracking-[0.25em] text-[var(--neon-lime)] text-sm">Solved!</p>
       <p className="text-blue-200/60 text-sm">{sub}</p>
     </div>
@@ -172,7 +206,7 @@ function ResultsView({ d, playerId }: { d: MiniGameData; playerId: string }) {
       <p className="jeo-headline uppercase tracking-[0.3em] text-blue-200/70 text-sm">Round Over</p>
       {me && (
         <>
-          <p className="hyper-title text-5xl">+{me.points}</p>
+          <p className="hyper-title text-5xl">{fmtPts(me.points)}</p>
           <p className="jeo-headline uppercase tracking-widest text-white">#{meIdx + 1} · {me.detail}</p>
         </>
       )}
