@@ -1,0 +1,26 @@
+[
+  {
+    "id": "a_jim",
+    "name": "Brad",
+    "wins": 4,
+    "createdAt": 0
+  },
+  {
+    "id": "a_chase",
+    "name": "Chase",
+    "wins": 3,
+    "createdAt": 0
+  },
+  {
+    "id": "a_henry",
+    "name": "Henry",
+    "wins": 0,
+    "createdAt": 0
+  },
+  {
+    "id": "a_kristina",
+    "name": "Kristina",
+    "wins": 5,
+    "createdAt": 0
+  }
+]

@@ -1,0 +1,270 @@
+@import "tailwindcss";
+
+/* ============================================================
+   HYPER JEOPARDY — outer-space theme.
+   We keep the legacy `--jeo-*` variable names and `.jeo-*`
+   class names from the original app and simply repaint them,
+   so every component re-themes without touching its JSX.
+   Accent (`--jeo-gold`) is repurposed from gold → neon cyan;
+   the deep royal blues become the void + panel glass.
+   ============================================================ */
+:root {
+  /* accent ramp (was gold) — now neon cyan */
+  --jeo-gold: #00e5ff;
+  --jeo-gold-bright: #7ef0ff;
+  --jeo-gold-deep: #0091b0;
+  /* space grounds (were royal blues) */
+  --jeo-blue-deep: #05060f;
+  --jeo-blue: #0a0e2a;
+  --jeo-blue-light: #131a44;
+  --jeo-ink: #03040c;
+  /* secondary neons used by the board spectrum + hyper mode */
+  --neon-violet: #7b5cff;
+  --neon-magenta: #ff2fd6;
+  --neon-lime: #7dffb2;
+  --neon-amber: #ffc95c;
+}
+
+@theme inline {
+  --font-display: var(--font-anton);
+  --font-headline: var(--font-oswald);
+  --font-sans: var(--font-inter);
+}
+
+/* Gradient lives on <html> only. <body> stays transparent so the fixed
+   Starfield canvas (negative z-index) shows through — a body background
+   would paint over it in the root stacking context. */
+html {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 8%, #0a1030 0%, #05060f 55%, #03040c 100%);
+  background-attachment: fixed;
+}
+body { background: transparent; }
+html, body {
+  color: #eaf6ff;
+  font-family: var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Title — compressed neon spectrum wordmark */
+.jeo-title {
+  font-family: var(--font-anton), Impact, sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.10em;
+  background: linear-gradient(92deg, #00e5ff 0%, #7ee7ff 24%, #7b5cff 58%, #ff2fd6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 14px rgba(0, 229, 255, 0.4))
+          drop-shadow(0 0 34px rgba(123, 92, 255, 0.3));
+}
+
+/* Headline (category names, labels) — Exo 2 */
+.jeo-headline {
+  font-family: var(--font-oswald), sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Money-style numerals — neon cyan Orbitron */
+.jeo-value {
+  font-family: var(--font-anton), Impact, sans-serif;
+  letter-spacing: 0.03em;
+  color: var(--jeo-gold);
+  text-shadow: 0 0 10px rgba(0, 229, 255, 0.55), 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+/* Board tile — glass over the void */
+.jeo-tile {
+  background: linear-gradient(160deg, rgba(16, 22, 64, 0.72), rgba(8, 10, 34, 0.72));
+  border: 1px solid rgba(0, 229, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 4px 14px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+}
+
+/* Per-row value spectrum: cyan ($ low) → magenta ($ high).
+   Board.tsx adds v1..v5 to clue cells. */
+.jeo-tile.v1 .jeo-value { color: #00e5ff; text-shadow: 0 0 10px rgba(0,229,255,.6); }
+.jeo-tile.v2 .jeo-value { color: #4aa8ff; text-shadow: 0 0 10px rgba(70,160,255,.6); }
+.jeo-tile.v3 .jeo-value { color: #9b7bff; text-shadow: 0 0 10px rgba(123,92,255,.6); }
+.jeo-tile.v4 .jeo-value { color: #d569ff; text-shadow: 0 0 10px rgba(196,77,255,.6); }
+.jeo-tile.v5 .jeo-value { color: #ff5fe0; text-shadow: 0 0 10px rgba(255,47,214,.6); }
+
+/* Category header tile — violet cast */
+.jeo-cat {
+  background: linear-gradient(180deg, rgba(30, 22, 78, 0.82), rgba(10, 10, 40, 0.82));
+  border-color: rgba(123, 92, 255, 0.4);
+}
+
+.jeo-tile-hover:hover {
+  background: linear-gradient(160deg, rgba(24, 34, 96, 0.85), rgba(12, 16, 52, 0.85));
+  border-color: rgba(0, 229, 255, 0.75);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 229, 255, 0.4),
+    0 0 22px rgba(0, 229, 255, 0.35),
+    0 0 48px rgba(0, 229, 255, 0.18);
+  transform: translateY(-2px);
+}
+
+.jeo-tile-used {
+  background: rgba(6, 8, 20, 0.5);
+  border-color: rgba(90, 110, 160, 0.12);
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.55);
+}
+
+/* Glass card / modal surface */
+.jeo-card {
+  background: linear-gradient(165deg, rgba(14, 18, 56, 0.9) 0%, rgba(6, 8, 28, 0.94) 100%);
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.6),
+    0 0 60px rgba(0, 229, 255, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  backdrop-filter: blur(8px);
+}
+
+.jeo-input {
+  background: rgba(6, 8, 26, 0.75);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  color: #eaf6ff;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.jeo-input:focus {
+  outline: none;
+  border-color: var(--jeo-gold);
+  box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.22);
+}
+
+/* Primary action — neon cyan (kept class name jeo-btn-gold) */
+.jeo-btn-gold {
+  background: linear-gradient(180deg, rgba(0, 229, 255, 0.16), rgba(0, 145, 176, 0.16));
+  color: #dffbff;
+  font-family: var(--font-oswald), sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid rgba(0, 229, 255, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    0 0 18px rgba(0, 229, 255, 0.3);
+  transition: transform 80ms, box-shadow 120ms, background 120ms;
+}
+.jeo-btn-gold:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(0, 229, 255, 0.28), rgba(0, 145, 176, 0.24));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 0 30px rgba(0, 229, 255, 0.55);
+}
+.jeo-btn-gold:active:not(:disabled) { transform: translateY(1px); }
+.jeo-btn-gold:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Physical buzzer — neon red/magenta */
+.jeo-buzz {
+  background: radial-gradient(circle at 30% 30%, #ff77c8 0%, #ff1f6b 52%, #b3004b 100%);
+  box-shadow:
+    inset 0 4px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -6px 12px rgba(0, 0, 0, 0.4),
+    0 8px 24px rgba(204, 0, 80, 0.55),
+    0 0 60px rgba(255, 47, 150, 0.4);
+  animation: jeo-buzz-pulse 1.4s ease-in-out infinite;
+}
+.jeo-buzz:hover { background: radial-gradient(circle at 30% 30%, #ff8fd6 0%, #ff2f7f 52%, #cc0059 100%); }
+@keyframes jeo-buzz-pulse {
+  0%, 100% { box-shadow: inset 0 4px 0 rgba(255,255,255,0.35), inset 0 -6px 12px rgba(0,0,0,0.4), 0 8px 24px rgba(204,0,80,0.55), 0 0 60px rgba(255,47,150,0.4); }
+  50%      { box-shadow: inset 0 4px 0 rgba(255,255,255,0.35), inset 0 -6px 12px rgba(0,0,0,0.4), 0 8px 24px rgba(204,0,80,0.7),  0 0 90px rgba(255,47,150,0.7); }
+}
+
+.jeo-glow-gold {
+  box-shadow: 0 0 24px rgba(0, 229, 255, 0.5), 0 0 48px rgba(0, 229, 255, 0.22);
+}
+
+/* Recolor the blue logo PNG to neon cyan + glow. */
+.jeo-logo {
+  filter:
+    brightness(0) saturate(100%)
+    invert(72%) sepia(90%) saturate(1600%) hue-rotate(140deg) brightness(101%) contrast(101%)
+    drop-shadow(0 0 10px rgba(0, 0, 0, 0.55))
+    drop-shadow(0 0 28px rgba(0, 229, 255, 0.45));
+}
+
+/* ============================================================
+   HYPER MODE — the takeover that replaces a clue with a
+   mini-game. Big activation splash + running-game surface.
+   ============================================================ */
+.hyper-title {
+  font-family: var(--font-anton), Impact, sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  background: linear-gradient(92deg, #ff2fd6, #7b5cff 45%, #00e5ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 18px rgba(255, 47, 214, 0.5)) drop-shadow(0 0 40px rgba(0, 229, 255, 0.35));
+  animation: hyper-throb 1.1s ease-in-out infinite;
+}
+@keyframes hyper-throb {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 18px rgba(255,47,214,.5)) drop-shadow(0 0 40px rgba(0,229,255,.35)); }
+  50%      { transform: scale(1.04); filter: drop-shadow(0 0 30px rgba(255,47,214,.85)) drop-shadow(0 0 60px rgba(0,229,255,.6)); }
+}
+
+.hyper-card {
+  background: linear-gradient(165deg, rgba(30, 12, 54, 0.92), rgba(8, 8, 30, 0.95));
+  border: 1px solid rgba(255, 47, 214, 0.4);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.6),
+    0 0 70px rgba(255, 47, 214, 0.18),
+    0 0 120px rgba(0, 229, 255, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+/* radial burst behind the activation splash */
+.hyper-burst {
+  background: radial-gradient(circle at center, rgba(255,47,214,0.28) 0%, rgba(123,92,255,0.16) 35%, transparent 70%);
+  animation: hyper-burst 1.4s ease-out infinite;
+}
+@keyframes hyper-burst {
+  0%   { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* Testing aid (default on): mark hyper (mini-game) cells, color-coded by which
+   game they'll trigger — blue = Anagram, red = Rapid Fire, green = Letter
+   Reveal — with an A/R/L badge. Color rides on --hg (an r,g,b triplet). */
+.cell-hyper {
+  --hg: 255, 47, 214;      /* fallback: magenta */
+  --hg-text: #ff6fe4;
+  border-color: rgb(var(--hg)) !important;
+  background: linear-gradient(160deg, rgba(var(--hg), 0.18), rgba(6, 8, 26, 0.85)) !important;
+  box-shadow: 0 0 18px rgba(var(--hg), 0.45), inset 0 0 0 1px rgba(var(--hg), 0.4) !important;
+  animation: cell-hyper-pulse 1.8s ease-in-out infinite;
+}
+.cell-hyper.hg-anagram { --hg: 61, 139, 255;  --hg-text: #7fb0ff; }  /* blue  */
+.cell-hyper.hg-rapid   { --hg: 255, 60, 92;   --hg-text: #ff7d92; }  /* red   */
+.cell-hyper.hg-letter  { --hg: 45, 224, 138;  --hg-text: #62e8ac; }  /* green */
+.cell-hyper .jeo-value {
+  background: none !important;
+  -webkit-text-fill-color: var(--hg-text) !important;
+  color: var(--hg-text) !important;
+  text-shadow: 0 0 12px rgba(var(--hg), 0.75) !important;
+}
+.hyper-badge {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  font-family: var(--font-anton), sans-serif;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: rgb(var(--hg));
+  filter: drop-shadow(0 0 4px rgba(var(--hg), 0.9));
+}
+@keyframes cell-hyper-pulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(var(--hg),0.4), inset 0 0 0 1px rgba(var(--hg),0.35); }
+  50%      { box-shadow: 0 0 26px rgba(var(--hg),0.7), inset 0 0 0 1px rgba(var(--hg),0.6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jeo-buzz, .hyper-title, .hyper-burst, .cell-hyper { animation: none; }
+  .jeo-tile-hover:hover { transform: none; }
+}
