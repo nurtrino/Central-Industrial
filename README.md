@@ -6,9 +6,10 @@ Blueprint (`render.yaml`).
 
 ```
 central-industrial/
-├── render.yaml              ← Render Blueprint (2 cloud services)
+├── render.yaml              ← Render Blueprint (cloud services)
 ├── hub/                     ← C64 landing page  (Render: web service, stdlib Python)
 ├── deep-research/           ← browser-driven research  (Render: Docker + headless Chromium)
+├── trivia/                  ← WedgeQuest: 2–6 player trivia board game (Render: Python)
 └── monkey-read-monkey-do/   ← local-only transcription+notes (runs on your GPU; NOT deployed)
 ```
 
@@ -18,6 +19,7 @@ central-industrial/
 |---|---|---|
 | **Central Industrial hub** | Render (Python) | The C64 boot screen / front door. Links to each tool; shows live status. |
 | **Deep Research** | Render (Docker) | Headless Chromium via Playwright + Claude API → cited report. |
+| **WedgeQuest** | Render (Python) | Multiplayer wheel-of-wedges trivia at `trivia.centralindustrial.ai`. **Not** behind the access gate — guests join with a 4-letter room code. Questions: Open Trivia DB. See [trivia/README.md](trivia/README.md). |
 | **Monkey Read Monkey Do** | **Your local GPU box** | Whisper + pyannote need a CUDA GPU, and the design keeps **audio 100% local**. Hosting it would mean uploading confidential audio to the cloud — so it stays local. The hub shows it tagged `[ LOCAL ]`. |
 | ~~Home Assistant~~ | dropped | Was a Windows→WSL2 launcher; not portable to Render. Folder kept locally but git-ignored. |
 

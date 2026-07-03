@@ -15,7 +15,9 @@ deep-research/.drt_chrome_profile/
 deep-research/reports/
 monkey-read-monkey-do/uploads/
 monkey-read-monkey-do/work/
+trivia/qcache.json
 **/*.log
+.pytest_cache/
 
 # ── OS cruft ─────────────────────────────────────────────────────────────────
 Thumbs.db

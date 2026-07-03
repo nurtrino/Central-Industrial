@@ -74,6 +74,24 @@ services:
       - key: FIRECRAWL_API_KEY
         sync: false
 
+  # ── WedgeQuest — multiplayer wheel-of-wedges trivia (FastAPI + WebSockets) ───
+  # Deliberately NOT behind the auth gate: guests join games from their own
+  # phones with a 4-letter room code and shouldn't need the suite access code.
+  # Rooms live in process memory → keep this at a single instance.
+  - type: web
+    name: wedgequest
+    runtime: python
+    rootDir: trivia
+    plan: starter
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    domains:
+      - trivia.centralindustrial.ai
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+
   # ── Monkey Read Monkey Do — hosted UI (Python; transcription on local worker) ─
   - type: web
     name: monkey-read-monkey-do

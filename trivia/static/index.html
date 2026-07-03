@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>WedgeQuest</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%233D6DEB'/><path d='M50 50 L50 5 A45 45 0 0 1 89 27 Z' fill='%23E85B8A'/><path d='M50 50 L89 27 A45 45 0 0 1 89 73 Z' fill='%23F2C230'/><path d='M50 50 L89 73 A45 45 0 0 1 50 95 Z' fill='%239B59D0'/><path d='M50 50 L50 95 A45 45 0 0 1 11 73 Z' fill='%233FA45B'/><path d='M50 50 L11 73 A45 45 0 0 1 11 27 Z' fill='%23E87E2D'/></svg>">
+</head>
+<body>
+
+<!-- ── HOME ────────────────────────────────────────────────────────────── -->
+<div id="view-home" class="view">
+  <div class="home-inner">
+    <div class="logo-wheel" aria-hidden="true"></div>
+    <h1 class="logo">WEDGE<span>QUEST</span></h1>
+    <p class="tag">the classic wheel-of-wedges trivia game &middot; 2&ndash;6 players</p>
+    <input id="name-input" placeholder="your name" maxlength="16" autocomplete="off">
+    <button id="btn-create" class="big">CREATE GAME</button>
+    <div class="or">— or join a friend's game —</div>
+    <div class="join-row">
+      <input id="code-input" placeholder="CODE" maxlength="4" autocomplete="off"
+             autocapitalize="characters" spellcheck="false">
+      <button id="btn-join" class="big">JOIN</button>
+    </div>
+    <p id="home-err" class="err"></p>
+    <footer>questions from the <a href="https://opentdb.com" target="_blank" rel="noopener">Open Trivia Database</a> &middot; CC BY-SA 4.0</footer>
+  </div>
+</div>
+
+<!-- ── LOBBY ───────────────────────────────────────────────────────────── -->
+<div id="view-lobby" class="view hidden">
+  <div class="home-inner">
+    <p class="tag">room code</p>
+    <h1 class="room-code" id="lobby-code">----</h1>
+    <p class="hint">friends: open this page and join with the code</p>
+    <ul id="lobby-players"></ul>
+    <button id="btn-start" class="big hidden">START GAME</button>
+    <p id="lobby-wait" class="hint"></p>
+  </div>
+</div>
+
+<!-- ── GAME ────────────────────────────────────────────────────────────── -->
+<div id="view-game" class="view hidden">
+  <div id="players-bar"></div>
+  <div id="board-wrap"><svg id="board" viewBox="-300 -300 600 600"></svg></div>
+  <div id="action-bar">
+    <div id="status-line"></div>
+    <div class="action-btns">
+      <button id="btn-roll" class="big hidden">🎲 ROLL</button>
+      <button id="btn-skip" class="small hidden">skip turn ⏭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── DICE ────────────────────────────────────────────────────────────── -->
+<div id="dice-overlay" class="overlay hidden">
+  <div class="dice-label" id="dice-label"></div>
+  <div class="scene"><div class="cube" id="cube"></div></div>
+</div>
+
+<!-- ── QUESTION CARD ───────────────────────────────────────────────────── -->
+<div id="question-modal" class="overlay hidden">
+  <div class="qcard">
+    <div id="q-head"></div>
+    <div id="q-badge" class="hidden"></div>
+    <div id="q-text"></div>
+    <div id="q-opts"></div>
+    <div id="q-foot"></div>
+  </div>
+</div>
+
+<!-- ── CATEGORY PICK / FINAL VOTE ──────────────────────────────────────── -->
+<div id="cat-modal" class="overlay hidden">
+  <div class="qcard">
+    <div id="cat-title"></div>
+    <div id="cat-opts"></div>
+    <div id="cat-note" class="hint"></div>
+  </div>
+</div>
+
+<!-- ── GAME OVER ───────────────────────────────────────────────────────── -->
+<div id="gameover-modal" class="overlay hidden">
+  <div class="qcard center">
+    <div class="trophy">🏆</div>
+    <div id="win-text"></div>
+    <button id="btn-rematch" class="big hidden">PLAY AGAIN</button>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
