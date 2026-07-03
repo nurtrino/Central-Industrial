@@ -117,6 +117,52 @@ export function playBoardFill(): void {
   playSample('/sounds/board-fill.mp3', 0.55);
 }
 
+// The "Welcome to Hyper Jeopardy" voice clip — plays once when the app is
+// first opened from the Central Industrial hub. Because the hub launches the
+// tool via a full same-window navigation, the click gesture does NOT carry
+// over to this fresh document, so a browser will usually block autoplay on the
+// first visit. We therefore try to play immediately and, if that's blocked,
+// arm a one-shot listener that fires the clip on the player's first tap/keypress
+// (which on the lobby screen happens almost instantly — typing a name, tapping
+// Join). Guarded so it only ever plays once per app open.
+let welcomePlayed = false;
+
+export function playWelcome(): void {
+  if (welcomePlayed || typeof window === 'undefined') return;
+  welcomePlayed = true;
+
+  let a: HTMLAudioElement;
+  try {
+    a = sampleElemCache.get('/sounds/welcome.mp3') ?? new Audio('/sounds/welcome.mp3');
+    sampleElemCache.set('/sounds/welcome.mp3', a);
+    a.preload = 'auto';
+  } catch {
+    return;
+  }
+
+  const events: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart'];
+  const armFallback = () => {
+    const onGesture = () => {
+      events.forEach((e) => window.removeEventListener(e, onGesture));
+      try {
+        a.currentTime = 0;
+        a.volume = muted ? 0 : 0.85;
+        a.play().catch(() => {});
+      } catch {}
+    };
+    events.forEach((e) => window.addEventListener(e, onGesture, { once: true, passive: true }));
+  };
+
+  try {
+    a.currentTime = 0;
+    a.volume = muted ? 0 : 0.85;
+    const p = a.play();
+    if (p && p.catch) p.catch(armFallback);
+  } catch {
+    armFallback();
+  }
+}
+
 // The game-start cue — Brad's laser-charge clip, in place of the traditional
 // Jeopardy opening jingle. Falls back to a synthesized charge-up if the file
 // is missing.
