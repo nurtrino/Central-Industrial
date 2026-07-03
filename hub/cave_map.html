@@ -221,9 +221,7 @@ const ocsCaves = [
   {n:"Ansel's Real Cave — The West Woods", reg:"ne", county:"Geauga", lat:41.4608, lng:-81.2952, prec:"undisclosed",
    d:"&#9888; <b>Location approximate (exact site withheld).</b> The actual cave in the OCS database &mdash; distinct from the 'Ansel's Cave' rock-shelter, and in <i>another part of</i> The West Woods per OCS's 2025 relocation. A 28-ft Sharon-Conglomerate stream cave: a low entrance with constant water outflow plus two side-by-side dry entrances into a perpendicular passage; a <b>former bat hibernaculum</b> (pre-White-Nose-Syndrome &mdash; none seen 2025). OCS took a GPS reading (F. Vlchek) that matched their database, but the coordinates are unpublished and the (former-hibernaculum) entrance is protected &mdash; shown here only at park level, offset from the public Ansel's Cave. Src: OCS 'Under Ohio' v3i2, 2025."},
   {n:"Little Mountain", reg:"ne", county:"Lake / Geauga", lat:41.6326, lng:-81.2728, prec:"exact",
-   d:"Holden Arboretum ridge on the Lake/Geauga line — a Sharon-Conglomerate knob ~39 km NE of Cleveland; this marker is the <b>385 m (1,263 ft) summit</b> (DEM-confirmed; the knob rises 365–385 m). On the N/E (Geauga) flank, on Holden land: <b>Little Mountain Caverns</b> (430 ft, the early-1900s resort show cave — sinkhole 'skylight' entrances + North &amp; South cave entrances + a wading passage by the abandoned resort <b>Pump House</b> in the 'Pump House Crevice'), Devil's Kitchen, King's Cave. Its largest sinkhole entrance (the 'Study Sinkhole', east flank) is <b>the largest sandstone sinkhole in Ohio</b> — ~8 m (26 ft) deep, 6.2&times;3.8 m, narrowing to a 0.75-m crawl; the caverns are joint/slump crevice caves further opened by <b>arenization</b> (dissolution of silica cement + granular disintegration), studied via photogrammetry. On the private SW/SOUTH side (lower slope): the Log Lurker Cave system (mapped separately). Src: <b>Novello &amp; Sasowsky 2019, J. Cave &amp; Karst Studies 81(1):44–56</b> (peer-reviewed; figures from an OCS cave map); owner The Holden Arboretum."},
-  {n:"Log Lurker Cave", reg:"ne", county:"Geauga", lat:41.6296, lng:-81.2770, prec:"landmark",
-   d:"&#9888; <b>Location approximate.</b> ~544 ft — one of the longest caves in NE Ohio. A connected system of 3 Sharon-Conglomerate crevice caves (plus a 4th nearby via a large skylight) on the private SW/southern side of Little Mountain, just outside Holden Arboretum. Historic drinking-water reservoir for the Little Mountain resort: two brick dams, a pipe network + valve, and a Waterfall Room. Named for the Log Lurker millipedes found inside. OCS compass-&amp;-Disto survey Jul–Aug 2025 (F. Vlchek, M. Mooter, D. Peter). Src: OCS 'Under Ohio' v3i2. <b>Anchored to the SW plateau rim just S of Holden's Little Mountain parcel (OSM boundary), amid the large-lot private parcels along Griswold Rd (Geauga parcel GIS).</b> 3DEP LiDAR resolves the dramatic crevice/slot systems on the N &amp; E plateau edges (inside Holden = Little Mountain Caverns) but the SW flank reads subtler — an exact entrance needs Ohio OSIP LiDAR or OCS's unpublished GPS. (DEM check: this SW-slope anchor sits at ~345 m &mdash; ~40 m below the 385 m summit &mdash; consistent with the lower private SW flank.) The peer-reviewed Little Mountain study <b>Novello &amp; Sasowsky 2019 (JCKS 81(1):44–56)</b> documents the Sharon-Conglomerate crevice/arenization geology, but covers <b>Little Mountain Caverns</b> on Holden's N/E flank (incl. the 'largest sandstone sinkhole in Ohio' &amp; the Pump-House Crevice), <i>not</i> Log Lurker &mdash; geologic context, no new fix for the SW system."},
+   d:"Verified &amp; Confirmed"},
   {n:"Dart's Cave / Merkle's Caves (Sand Hill)", reg:"ne", county:"Geauga", lat:41.5375, lng:-81.2775, prec:"landmark",
    d:"&#9888; <b>Location approximate.</b> On <b>Sand Hill</b> — a Sharon-Conglomerate upland whose southern base is at <b>Fowler's Mill</b> (GNIS hamlet 41.5276,-81.2559, on the E. Branch Chagrin R.), Munson Twp. Three parallel box-canyon gorges run S&rarr;N: Fern Gorge &middot; Twin Falls &middot; <b>Dart's-Merkle's</b> (northernmost). <b>Dart's Cave</b> = the old 'Skylight Cave': a walk-in stream entrance into a large dark room with sheer walls, where a ceiling skylight drops the stream ~30 ft; Dart's sits <b>downstream of Merkle's</b> (a long box canyon holding NE-Ohio's largest natural tunnel, ~30-ft span). <b>Refined 2026-07-02</b> from a wrong flat-upland point (41.540,-81.262) to the 3DEP-identified box-canyon complex NW of Fowler's Mill (dissected gorges ~41.533-41.540, -81.274 to -81.282; ~110-140 ft relief). Exact gorge/entrance pending OCS's 2025 GPS (unpublished) or OSIP LiDAR. Src: Pholeos v9(1) (geology), v3, Speleo Digest 1974 (Luther/Cleveland Grotto survey), OCS 'Under Ohio' v3i2 (2025); older refs Lynch 1974 (Cleve-O-Grotto News) &amp; Porter 1965 (NEOG Log). <b>RECONCILED 2026-07-02:</b> this <b>is</b> the group Pholeos v3 (M&amp;O 1982) mapped as the 'Chesterland Caves area' &mdash; their main 'Chesterland Cave' = 'Skylight Cave' = <b>Dart's Cave</b>, with Leaning Cave beside it (confirmed independently by Pholeos v9 &amp; OCS 2025, and by the shared Robber's = Bat/Parker Cave). The former Sunnybrook 'Chesterland' markers were consolidated onto this Sand Hill complex; exact per-cave gorges/entrances pending OCS's unpublished 2025 GPS."},
   {n:"Card's Cave", reg:"ne", county:"Geauga", lat:41.5455, lng:-81.2900, prec:"landmark",
@@ -928,47 +926,6 @@ search.addTo(map);
   inp.addEventListener('keydown', function(e){ if (e.key === 'Enter' && current.length){ e.preventDefault(); go(current[0]); } });
 })();
 
-/* ---- legend ---- */
-const legend = L.control({ position:'bottomright' });
-legend.onAdd = function(){
-  const d = L.DomUtil.create('div','legend');
-  let html = '<b>Source: Jaeck Caves</b>'
-       + '<div class="row" style="color:#666;font-size:11px;margin:0 0 3px">Anchor points from the video series:</div>';
-  for (const key in cats){
-    const dash = (key === 'approx') ? ' dash' : '';
-    html += '<div class="row"><span class="dot'+dash+'" style="background:'+cats[key].color+'"></span>'
-         + cats[key].label.replace(/^[^ ]+ /, '') + '</div>';
-  }
-  html += '<hr><b>Caves &mdash; IN &middot; IL &middot; WI &#9642;</b>';
-  for (const r in expansionRegions){
-    html += '<div class="row"><span class="ocs-sw" style="background:'+expansionRegions[r].color+'"></span>'+expansionRegions[r].label+'</div>';
-  }
-  html += '<div class="row" style="margin-top:4px;color:#666;font-size:11px">Show caves, parks &amp; preserves + wild caves recovered from the NSS library via PLSS legal descriptions. (WI seeded, 3 so far.)</div>';
-  html += '<hr><b>Ohio Cave Survey caves &#9642;</b>';
-  for (const r in ocsRegions){
-    html += '<div class="row"><span class="ocs-sw" style="background:'+ocsRegions[r].color+'"></span>'+ocsRegions[r].label+'</div>';
-  }
-  html += '<div class="row"><span class="rank-mini">1</span>Top-10 longest OH caves (ranked)</div>'
-       + '<div class="row" style="margin-top:4px;color:#666;font-size:11px">Squares = OCS-documented caves (statewide).</div>';
-  html += '<hr><b>Karst &mdash; ODNR Map EG-1 (live)</b>'
-       + '<div class="row" style="color:#555;font-size:11px;margin-bottom:1px"><b>Geology</b> (shaded regions):</div>'
-       + '<div class="row"><span class="sw" style="background:#adceed"></span>Silurian&ndash;Devonian carbonate &mdash; main cave rock</div>'
-       + '<div class="row"><span class="sw" style="background:#e6e600"></span>Ordovician limestone &amp; shale &mdash; less soluble</div>'
-       + '<div class="row" style="color:#888;font-size:10px;margin:1px 0 3px 2px">paler = &lt;20 ft glacial cover (more karst-prone) &middot; darker = &gt;20 ft</div>'
-       + '<div class="row" style="color:#555;font-size:11px;margin-bottom:1px"><b>Known features</b> (dots), by confidence:</div>'
-       + '<div class="row"><span class="dot" style="background:#d3492b;width:9px;height:9px"></span>field-verified karst</div>'
-       + '<div class="row"><span class="dot" style="background:#e69800;width:9px;height:9px"></span>suspected &mdash; field-visited</div>'
-       + '<div class="row"><span class="dot" style="background:#e6e600;width:9px;height:9px"></span>suspected &mdash; not visited</div>'
-       + '<div class="row" style="margin-top:4px;color:#666;font-size:11px">Dots off by default &mdash; toggle in the layer menu; click one for notes.</div>';
-  html += '<hr><b>Public land (search frame)</b>'
-       + '<div class="row"><span class="sw" style="background:#2e7d32;opacity:.55;border-style:dashed"></span>Wayne National Forest</div>'
-       + '<div class="row"><span class="sw" style="background:#558b2f;opacity:.6"></span>Ohio State Forests</div>'
-       + '<div class="row"><span class="sw" style="background:#3388ff;opacity:.25"></span>13-county corridor</div>';
-  html += '<hr><div class="row" style="color:#555;font-size:11px">&#9888; <b>Location approximate</b> in a cave\'s popup = not precisely geolocated (dashed/faded marker means the same).</div>';
-  d.innerHTML = html;
-  return d;
-};
-legend.addTo(map);
 
 // Default view frames the tri-state expansion (OH · IL · WI). Ohio holds the
 // data for now; IL & WI frames are visible and ready to be populated.
