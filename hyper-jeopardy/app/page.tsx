@@ -34,9 +34,12 @@ export default function Home() {
   const [revealHyper, setRevealHyper] = useState(false);
   const lastBoardPhaseRef = useRef<string | null>(null);
 
-  // Testing aid: ?reveal marks the hyper cells on the board.
+  // Testing phase: hyper (mini-game) cells are marked on the board BY DEFAULT so
+  // they can be activated in rapid succession. Add ?reveal=off (or ?hide) to
+  // restore the hidden, surprise behavior for a real playthrough.
   useEffect(() => {
-    setRevealHyper(new URLSearchParams(window.location.search).has('reveal'));
+    const q = new URLSearchParams(window.location.search);
+    setRevealHyper(!(q.get('reveal') === 'off' || q.has('hide')));
   }, []);
 
   useEffect(() => {
