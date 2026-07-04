@@ -312,20 +312,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Scoreboard — desktop: top, full size */}
-      <div className="hidden sm:block py-4 px-4 bg-[rgba(8,10,30,0.4)] border-b border-[rgba(0,229,255,0.12)]">
-        <div className="max-w-6xl mx-auto">
-          <Scoreboard
-            players={state.players}
-            currentPlayerId={playerId}
-            buzzedPlayerId={state.buzzedPlayerId}
-            compact={false}
-            isHost={!!player?.isHost}
-            onSetScore={handleSetScore}
-          />
-        </div>
-      </div>
-
       {/* Board */}
       <div className="flex-1 p-2 sm:p-4">
         <div className="max-w-6xl mx-auto">
@@ -338,6 +324,20 @@ export default function Home() {
               revealHyper={revealHyper}
             />
           )}
+        </div>
+      </div>
+
+      {/* Scoreboard — desktop: bottom row, full size */}
+      <div className="hidden sm:block py-4 px-4 bg-[rgba(8,10,30,0.4)] border-t border-[rgba(0,229,255,0.12)]">
+        <div className="max-w-6xl mx-auto">
+          <Scoreboard
+            players={state.players}
+            currentPlayerId={playerId}
+            buzzedPlayerId={state.buzzedPlayerId}
+            compact={false}
+            isHost={!!player?.isHost}
+            onSetScore={handleSetScore}
+          />
         </div>
       </div>
 

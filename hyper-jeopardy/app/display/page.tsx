@@ -9,6 +9,13 @@ import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import MiniGameStage from '@/components/MiniGameStage';
 
+// Scale the whole shared screen down to 75% so it's readable on phones (the TV
+// layout is sized for a big screen). `zoom` reflows the layout at the smaller
+// size (no overflow/empty gutters like `transform: scale` would leave). The
+// min-height is bumped to 100/0.75 ≈ 133.333vh so that, once zoomed, the page
+// still fills the viewport and the bottom scoreboard stays pinned to the floor.
+const SCALE = { zoom: 0.75, minHeight: '133.333vh' } as React.CSSProperties;
+
 // Read-only "TV" view. Connects to the same socket room but never emits
 // `join`, so the server doesn't track it as a player. Renders the board
 // + scoreboard, swaps to a fullscreen clue when one is active, and
@@ -64,7 +71,7 @@ export default function Display() {
 
   if (!connected || !state) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={SCALE}>
         <div className="text-center space-y-6">
           <div className="w-16 h-16 border-4 border-[var(--jeo-gold)] border-t-transparent rounded-full animate-spin mx-auto" />
           <p className="jeo-headline tracking-[0.3em] uppercase text-blue-200/80 text-2xl">
@@ -77,7 +84,7 @@ export default function Display() {
 
   if (state.phase === 'lobby') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-8 gap-8">
+      <div className="min-h-screen flex flex-col items-center justify-center px-8 gap-8" style={SCALE}>
         <h1 className="jeo-title text-6xl sm:text-8xl">HYPER JEOPARDY</h1>
         <p className="jeo-headline tracking-[0.4em] uppercase text-blue-200/80 text-2xl">Waiting for players</p>
         <div className="mt-8 w-full max-w-3xl space-y-3">
@@ -106,7 +113,7 @@ export default function Display() {
   if (state.phase === 'game_over') {
     const ranked = [...state.players].sort((a, b) => b.score - a.score);
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-8 gap-10">
+      <div className="min-h-screen flex flex-col items-center justify-center px-8 gap-10" style={SCALE}>
         <h1 className="jeo-title text-6xl sm:text-8xl">GAME OVER</h1>
         <div className="w-full max-w-3xl space-y-3">
           {ranked.map((p, i) => (
@@ -149,7 +156,7 @@ export default function Display() {
     : 'Final Jeopardy!';
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col" style={SCALE}>
       {/* Header */}
       <div className="bg-[rgba(8,10,30,0.7)] border-b border-[rgba(0,229,255,0.25)] py-4 px-8">
         <div className="max-w-[1800px] mx-auto flex items-center justify-between">
