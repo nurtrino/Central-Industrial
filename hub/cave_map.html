@@ -90,14 +90,6 @@ const points = [
   { name:"Lake Katharine", lat:39.0833, lng:-82.6715, county:"Jackson", bedrock:"Sharon Formation",
     role:"Southern reach (Lake Katharine Arch, Peephole Arch).", cat:"southern" },
 
-  { name:"Irish Run Natural Bridge", lat:39.5144, lng:-81.1808, county:"Washington", bedrock:"Permian sandstone",
-    role:"STRONGEST Episode-7 candidate — arch + 'the Great Cave' on one Wayne NF (Archers Fork) trail. Matches the honeycombed-cliffside labyrinth.",
-    cat:"river", strong:true },
-  { name:"Ladd Natural Bridge", lat:39.3117, lng:-81.8196, county:"Washington", bedrock:"Permian sandstone",
-    role:"River-country arch belt (permit-only).", cat:"river" },
-  { name:"Raven Rock", lat:38.7187, lng:-83.0547, county:"Scioto", bedrock:"Mississippian sandstone",
-    role:"Alternate Episode-7 candidate (bluff 500 ft above the Ohio River).", cat:"river" },
-
   { name:"Fort Hill (Natural Y / Keyhole / Spring Creek)", lat:39.1230, lng:-83.3961, county:"Highland", bedrock:"Peebles Dolomite",
     role:"SW karst ALTERNATIVE for the wet caves (7 arches in Baker Fork gorge). Lower-probability hypothesis.", cat:"karst" },
 
@@ -112,13 +104,12 @@ const points = [
 ];
 
 // Video-series anchor points (Source: Jaeck Caves) — all one color; the layer
-// menu still lists each sub-cluster separately. Home base is drawn larger.
+// menu now lists them all under one "Jaeck's Caves" layer. Home base is drawn larger.
 const JAECK = "#1565c0";
 const cats = {
   home:    { label:"🔵 Logan home base",            color:JAECK, radius:10 },
   hocking: { label:"🔵 Hocking core cluster",       color:JAECK, radius:7 },
   southern:{ label:"🔵 Southern reach",             color:JAECK, radius:7 },
-  river:   { label:"🔵 Episode-7 river candidates", color:JAECK, radius:7 },
   karst:   { label:"🔵 Fort Hill SW-karst alt.",    color:JAECK, radius:7 },
   approx:  { label:"🔵 Approx. corridor arches",    color:JAECK, radius:6 },
   lead:    { label:"🔵 Shoemaker / Eagle-Twp lead", color:JAECK, radius:9 }
@@ -149,9 +140,10 @@ const map = L.map('map', { layers: [esriTopo] });
 map.createPane('publiclands');
 map.getPane('publiclands').style.zIndex = 350;
 
-/* ---- one layer group per category ---- */
+/* ---- all sub-clusters share ONE toggleable "Jaeck's Caves" layer ---- */
+const jaeck = L.layerGroup().addTo(map);
 const groups = {};
-for (const key in cats) groups[key] = L.layerGroup().addTo(map);
+for (const key in cats) groups[key] = jaeck;
 
 const allLatLng = [];
 const searchIndex = [];  // {name, lat, lng, marker, group, color, kind, sub, hay} — powers the search box
@@ -185,12 +177,6 @@ const eagleTwp = L.rectangle([[39.330,-82.645],[39.435,-82.515]], {
   color:"#e67e22", weight:2, dashArray:"6 5", fillColor:"#e67e22", fillOpacity:0.06
 }).bindTooltip("Eagle Township (approx) — Shoemaker search frame", {sticky:true});
 eagleTwp.addTo(groups.lead);
-
-/* ---- optional: "down toward the Ohio River" reach (Episode 7), off by default ---- */
-const reach = L.polyline(
-  [[39.5403,-82.4071],[39.5144,-81.1808]],
-  { color:"#e74c3c", weight:2.5, dashArray:"8 7", opacity:0.7 }
-);
 
 /* ============================================================ *
  * OHIO CAVE SURVEY caves (SQUARES) — a SEPARATE dataset from the
@@ -1103,8 +1089,7 @@ const baseLayers = {
   "Satellite": sat
 };
 const overlays = {};
-for (const key in cats) overlays[cats[key].label] = groups[key];
-overlays["↘ 'Toward the Ohio River' (Ep. 7)"] = reach;
+overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
 overlays["🟩 Ohio State Forests"] = stateForestLayer;
 overlays["▦ 13-county search corridor"] = corridorLayer;
