@@ -12,10 +12,11 @@ import { ANAGRAM_WORDS, FIVE_LETTER_WORDS, randomWord, scramble } from './wordBa
 
 // ── timing / scoring ────────────────────────────────────────────────────────
 export const INTRO_MS = 5_000;        // rules screen shown on all screens before play
-export const HYPER_ROUND_MS = 60_000; // hyper round cap: ends at 60s, or as soon as
-                                       // every player is resolved (solved / done / gave up)
+export const HYPER_ROUND_MS = 60_000; // Anagram / Letter Reveal round cap (also ends
+                                       // early once every player is resolved)
+export const RAPID_ROUND_MS = 30_000; // Rapid Fire: a hard 30s sprint, no give up
 export const REVEAL_INTERVAL_MS = 4_500;
-export const RESULTS_MS = 6_500;
+export const RESULTS_MS = 5_000;      // per-round standings shown before the board returns
 
 // Placement scoring shared by Anagram Race and Rapid Fire: points are a MULTIPLE
 // of the board-cell value by finish position — 1st = 2×, 2nd = 1×, 3rd = 0,
@@ -128,6 +129,7 @@ export function giveUp(state: GameState, playerId: string): ActionResult {
   const idle: ActionResult = { changed: false, complete: false, feedback: {} };
   const d = state.miniGameData as unknown as MiniGameData | null;
   if (!d || d.status !== 'playing') return idle;
+  if (d.key === 'rapid_fire') return idle; // Rapid Fire is a hard 30s sprint — no give up
   if (!state.players.find(p => p.id === playerId)) return idle;
   if (isResolved(d, playerId)) return { changed: false, complete: false, feedback: { already: true } };
   d.gaveUp[playerId] = true;
@@ -193,7 +195,7 @@ export function beginMiniGamePlaying(state: GameState): void {
     d.scrambled = mgSecret.anagramScrambled ?? '';
     d.endsAt = now + HYPER_ROUND_MS;
   } else if (d.key === 'rapid_fire') {
-    d.endsAt = now + HYPER_ROUND_MS;
+    d.endsAt = now + RAPID_ROUND_MS; // hard 30s sprint
   } else if (d.key === 'letter_reveal') {
     d.endsAt = now + HYPER_ROUND_MS; // 60s round; letters also reveal on their own cadence
   }

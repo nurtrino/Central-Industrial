@@ -37,6 +37,7 @@ import {
   finishMiniGame,
   INTRO_MS,
   HYPER_ROUND_MS,
+  RAPID_ROUND_MS,
   REVEAL_INTERVAL_MS,
   RESULTS_MS,
 } from './miniGames';
@@ -588,11 +589,12 @@ function beginPlaying() {
   beginMiniGamePlaying(gameState);
   broadcast();
 
-  // Unified 60s round cap for every game (the "…or in 60 sec" rule). The round
-  // ends earlier the moment every player is resolved (solved / done / gave up).
-  setTimer('mg_round', HYPER_ROUND_MS, () => finishMini());
+  // Round cap: Rapid Fire is a hard 30s sprint; Anagram/Letter run 60s and can
+  // end earlier once every player is resolved (solved / done / gave up).
+  const key = gameState.activeMiniGame?.key;
+  setTimer('mg_round', key === 'rapid_fire' ? RAPID_ROUND_MS : HYPER_ROUND_MS, () => finishMini());
   // Letter Reveal also paces its own letter reveals on top of the cap.
-  if (gameState.activeMiniGame?.key === 'letter_reveal') scheduleReveal();
+  if (key === 'letter_reveal') scheduleReveal();
 }
 
 // Letter Reveal: expose one more letter every interval; after the last, a grace

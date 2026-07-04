@@ -21,6 +21,9 @@ function fmtPts(n: number): string {
   if (n < 0) return `−$${Math.abs(n).toLocaleString()}`;
   return '$0';
 }
+function ptsClass(n: number): string {
+  return n > 0 ? 'text-[var(--neon-lime)]' : n < 0 ? 'text-red-400' : 'text-blue-200/60';
+}
 
 export default function MiniGameController({ state, playerId, onAction }: Props) {
   const d = state.miniGameData as unknown as MiniGameData | null;
@@ -53,7 +56,7 @@ function IntroCtl({ d }: { d: MiniGameData }) {
       )}
       {d.key === 'rapid_fire' && (
         <>
-          <p className="text-blue-100/90 text-base leading-snug">{d.category} · 60s. Answer fast — most correct wins.</p>
+          <p className="text-blue-100/90 text-base leading-snug">{d.category} · 10 questions · 30s. Most correct wins.</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
@@ -237,20 +240,29 @@ function Solved({ points, sub }: { points: number; sub: string }) {
 
 function ResultsView({ d, playerId }: { d: MiniGameData; playerId: string }) {
   const rows = d.results ?? [];
-  const meIdx = rows.findIndex(r => r.playerId === playerId);
-  const me = meIdx >= 0 ? rows[meIdx] : null;
   return (
-    <div className="text-center space-y-3 py-2">
-      <p className="jeo-headline uppercase tracking-[0.3em] text-blue-200/70 text-sm">Round Over</p>
-      {me && (
-        <>
-          <p className="hyper-title text-5xl">{fmtPts(me.points)}</p>
-          <p className="jeo-headline uppercase tracking-widest text-white">#{meIdx + 1} · {me.detail}</p>
-        </>
-      )}
+    <div className="space-y-3 py-1">
+      <p className="text-center jeo-headline uppercase tracking-[0.3em] text-blue-200/70 text-sm">Round Over</p>
       {d.answerReveal && d.key !== 'rapid_fire' && (
-        <p className="text-blue-200/70 jeo-headline uppercase tracking-widest text-sm">Answer: <span className="text-[var(--jeo-gold)]">{d.answerReveal}</span></p>
+        <p className="text-center text-blue-200/70 jeo-headline uppercase tracking-widest text-sm">
+          Answer: <span className="text-[var(--jeo-gold)]">{d.answerReveal}</span>
+        </p>
       )}
+      {/* Everyone sees the whole table's scores for the round. */}
+      <div className="space-y-1.5">
+        {rows.map((r, i) => {
+          const me = r.playerId === playerId;
+          return (
+            <div key={r.playerId} className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${me ? 'border-[var(--jeo-gold)] bg-[rgba(0,229,255,0.10)]' : 'border-white/8 bg-[rgba(6,8,26,0.5)]'}`}>
+              <span className="w-6 text-blue-200/60 jeo-headline text-sm">#{i + 1}</span>
+              <span className="flex-1 min-w-0 text-left text-white truncate jeo-headline uppercase tracking-wide text-sm">
+                {r.name}{me && <span className="text-[var(--jeo-gold)]"> (you)</span>}
+              </span>
+              <span className={`jeo-value text-lg ${ptsClass(r.points)}`}>{fmtPts(r.points)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

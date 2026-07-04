@@ -77,7 +77,8 @@ export default function HyperModal({ state, playerId, onGiveUp, onMiniGameAction
           </div>
 
           <div className="px-6 pb-5">
-            {playing && !iAmResolved && (
+            {/* Rapid Fire is a hard 30s sprint — no Give Up. */}
+            {playing && !iAmResolved && d?.key !== 'rapid_fire' && (
               <button onClick={onGiveUp} className="w-full py-2 rounded-lg text-xs jeo-headline uppercase tracking-[0.2em] text-blue-200/60 border border-white/10 hover:text-red-300 hover:border-red-400/60 transition">
                 Give Up
               </button>

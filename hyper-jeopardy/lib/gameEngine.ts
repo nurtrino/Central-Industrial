@@ -43,7 +43,7 @@ export interface MiniGame {
 // Phase 1 mini-games (all multiplayer). Their logic lives in lib/miniGames.ts.
 export const MINI_GAMES: MiniGame[] = [
   { key: 'anagram_race',  title: 'Anagram Race',  family: 'Word Race',   mode: 'multi', trivia: false,                     blurb: 'Unscramble the word before your rivals — the faster you solve, the more you bank.' },
-  { key: 'rapid_fire',    title: 'Rapid Fire',    family: 'Speed',       mode: 'multi', trivia: 'random', triviaCount: 15, blurb: 'One category, forty-five seconds. Answer as many as you can — wrong answers cost you.' },
+  { key: 'rapid_fire',    title: 'Rapid Fire',    family: 'Speed',       mode: 'multi', trivia: 'random', triviaCount: 10, blurb: 'Ten questions, one category, thirty seconds. Answer as many as you can — most correct wins.' },
   { key: 'letter_reveal', title: 'Letter Reveal', family: 'Word Reveal', mode: 'multi', trivia: false,                     blurb: 'Five hidden letters reveal one by one. Guess early — the fewer shown, the bigger the score.' },
 ];
 

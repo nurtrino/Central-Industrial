@@ -86,7 +86,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
       {d.key === 'rapid_fire' && (
         <div className="space-y-6">
           <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
-            One category — <span className="text-[var(--jeo-gold)]">{d.category}</span>. Answer as many as you can in 60 seconds — most correct wins.
+            One category — <span className="text-[var(--jeo-gold)]">{d.category}</span>. 10 questions, 30 seconds — answer as many as you can. Most correct wins.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
             {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
