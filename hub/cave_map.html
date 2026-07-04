@@ -407,12 +407,7 @@ map.getPane('karstpane').style.zIndex = 250;   // above tiles (200), below vecto
 const KARST_URL = "https://gis.ohiodnr.gov/arcgis/rest/services/DGS_Services/Karst_InteractiveMap/MapServer";
 let karstRegions = null, karstPoints = null;
 if (window.L && L.esri) {
-  // Karst GEOLOGY regions — ODNR layer 2 "Karst Geology of Ohio", drawn in ODNR's NATIVE symbology
-  //  (blue = Silurian–Devonian carbonate = the main cave-bearing rock; yellow = interbedded Ordovician
-  //   limestone & shale; paler shade = <20 ft glacial-drift cover / more karst-prone, darker = >20 ft). On by default.
-  karstRegions = L.esri.dynamicMapLayer({
-    url: KARST_URL, layers:[2], pane:'karstpane', opacity:0.55
-  }).addTo(map);
+  // (Karst GEOLOGY regions layer removed 2026-07-04 per request; karst FEATURES layer retained below.)
   // Known karst FEATURES — ODNR layer 4 "Karst Points" (all 46,789), ODNR native colors = confidence tier:
   //  reddish-orange #d3492b = field-verified · orange #e69800 = suspect/field-visited · yellow #e6e600 = suspect/not-visited.
   karstPoints = L.esri.dynamicMapLayer({ url: KARST_URL, layers:[4], pane:'karstpane', opacity:0.9 }); // off by default — toggle in the layer menu
@@ -1210,7 +1205,6 @@ overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
 overlays["🟩 Ohio State Forests"] = stateForestLayer;
 overlays["▦ 13-county search corridor"] = corridorLayer;
-if (karstRegions) overlays["🟦🟨 Karst geology — ODNR EG-1 (blue=carbonate, yellow=Ordovician)"] = karstRegions;
 if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
 overlays["① Top-10 longest caves (ranked)"] = top10Layer;
 overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
