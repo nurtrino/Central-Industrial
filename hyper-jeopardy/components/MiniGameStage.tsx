@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '@/lib/gameEngine';
 import type { AnagramData, RapidData, LetterData, MemoryData, MiniGameData, MiniGameResultRow } from '@/lib/miniGames';
 import { playMiniCelebrate } from '@/lib/audio';
+import HyperFlair from '@/components/HyperFlair';
 
 // The shared-screen ("TV") view of a HYPER MODE mini-game — a wireframe pass,
 // styled with the space theme. Renders the live board per game, then a results
@@ -44,23 +45,26 @@ export default function MiniGameStage({ state }: { state: GameState }) {
   if (!d || !mg) return null;
 
   return (
-    <div className="hyper-card relative w-full max-w-5xl rounded-3xl px-8 sm:px-14 py-10 sm:py-12">
-      <div className="flex items-center justify-between mb-8">
-        <div className="text-left">
-          <p className="jeo-headline uppercase tracking-[0.35em] text-[var(--neon-magenta)] text-sm sm:text-base">
-            Hyper Mode · {mg.family}
-          </p>
-          <h2 className="hyper-title text-4xl sm:text-6xl">{mg.title}</h2>
+    <div className="hyper-card relative overflow-hidden w-full max-w-5xl rounded-3xl px-8 sm:px-14 py-10 sm:py-12">
+      <HyperFlair density="card" />
+      <div className="relative z-[1]">
+        <div className="flex items-center justify-between mb-8">
+          <div className="text-left">
+            <p className="jeo-headline uppercase tracking-[0.35em] text-[var(--neon-magenta)] text-sm sm:text-base">
+              Hyper Mode · {mg.family}
+            </p>
+            <h2 className="hyper-title text-4xl sm:text-6xl">{mg.title}</h2>
+          </div>
+          {d.status !== 'results' && <Timer endsAt={d.endsAt} />}
         </div>
-        {d.status !== 'results' && <Timer endsAt={d.endsAt} />}
-      </div>
 
-      {d.status === 'results' ? <Results state={state} d={d} />
-        : d.status === 'intro' ? <IntroPanel d={d} />
-        : d.key === 'anagram_race' ? <AnagramStage state={state} d={d} />
-        : d.key === 'rapid_fire' ? <RapidStage state={state} d={d} />
-        : d.key === 'memory_match' ? <MemoryStage state={state} d={d} />
-        : <LetterStage state={state} d={d} />}
+        {d.status === 'results' ? <Results state={state} d={d} />
+          : d.status === 'intro' ? <IntroPanel d={d} />
+          : d.key === 'anagram_race' ? <AnagramStage state={state} d={d} />
+          : d.key === 'rapid_fire' ? <RapidStage state={state} d={d} />
+          : d.key === 'memory_match' ? <MemoryStage state={state} d={d} />
+          : <LetterStage state={state} d={d} />}
+      </div>
     </div>
   );
 }

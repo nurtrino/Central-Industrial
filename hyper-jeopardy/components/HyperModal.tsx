@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { GameState } from '@/lib/gameEngine';
 import { playHyperStart, preloadLasers } from '@/lib/audio';
 import MiniGameController, { type MGFeedback } from '@/components/MiniGameController';
+import HyperFlair from '@/components/HyperFlair';
 import type { MiniGameData } from '@/lib/miniGames';
 
 // A player is "resolved" for the round when they've solved/finished or gave up.
@@ -49,10 +50,11 @@ export default function HyperModal({ state, playerId, onGiveUp, onMiniGameAction
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
-      {/* radial burst behind the card */}
+      {/* radial burst + ambient flair behind the card */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div className="hyper-burst w-[70vmin] h-[70vmin] rounded-full" />
       </div>
+      <HyperFlair density="lite" />
 
       {cluePhase === 'hyper_intro' ? (
         <div className="relative text-center space-y-4">
