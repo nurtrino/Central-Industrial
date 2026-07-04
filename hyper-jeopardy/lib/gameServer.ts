@@ -45,6 +45,7 @@ import {
   Account, awardWinToAccount, createAccount, deleteAccount,
   getAccount, getAccounts, updateAccount,
 } from './accounts';
+import { persistGame, clearGame, loadGame, flushGameSync } from './gameStore';
 
 let io: SocketIOServer | null = null;
 let gameState: GameState | null = null;
@@ -70,6 +71,10 @@ function setTimer(name: string, ms: number, cb: () => void) {
 function broadcast() {
   if (!io || !gameState) return;
   io.emit('state', serializeState(gameState));
+  // Durability: snapshot in-progress games; drop the snapshot once we're back
+  // in the lobby (reset / new game) so a finished game isn't resurrected.
+  if (gameState.phase === 'lobby') clearGame();
+  else persistGame(gameState, currentGame);
 }
 
 function broadcastAccounts() {
@@ -114,6 +119,24 @@ export function initSocketServer(httpServer: HTTPServer) {
     cors: { origin: '*', methods: ['GET', 'POST'] },
     path: '/api/socket',
   });
+
+  // Restore a game persisted before a restart/redeploy/cold start. Clients
+  // reconnect and auto re-attach to their seats (see the socket `connect`
+  // re-join on the controller). A stale in-flight clue is reset to the board.
+  if (!gameState) {
+    const restored = loadGame();
+    if (restored) {
+      gameState = restored.gameState;
+      currentGame = restored.currentGame;
+      console.log(`[persist] restored game — phase=${gameState.phase}, players=${gameState.players.length}`);
+    }
+  }
+
+  // Flush the latest snapshot on graceful shutdown (Render sends SIGTERM on a
+  // redeploy) so the final moments of play survive, then exit normally.
+  const onSignal = () => { flushGameSync(); process.exit(0); };
+  process.once('SIGTERM', onSignal);
+  process.once('SIGINT', onSignal);
 
   io.on('connection', (socket) => {
     console.log('[socket] connected', socket.id);
