@@ -84,15 +84,32 @@ function IntroPanel({ d }: { d: MiniGameData }) {
         </div>
       )}
       {d.key === 'rapid_fire' && (
-        <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
-          One category — <span className="text-[var(--jeo-gold)]">{d.category}</span>. Answer as many as you can in 45 seconds.
-          <br /><span className="text-[var(--neon-lime)]">+100</span> right · <span className="text-red-400">−50</span> wrong.
-        </p>
+        <div className="space-y-6">
+          <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
+            One category — <span className="text-[var(--jeo-gold)]">{d.category}</span>. Answer as many as you can in 60 seconds — most correct wins.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
+              <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
+                {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
       )}
       {d.key === 'letter_reveal' && (
-        <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
-          A hidden 5-letter word. Letters reveal one at a time — guess it early on your phone; the fewer letters shown, the bigger the score.
-        </p>
+        <div className="space-y-6">
+          <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
+            A hidden 5-letter word — letters reveal one at a time. First to solve on your phone wins big.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
+              <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
+                {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -146,12 +163,12 @@ function AnagramStage({ state, d }: { state: GameState; d: AnagramData }) {
 function RapidStage({ state, d }: { state: GameState; d: RapidData }) {
   const rows = state.players
     .filter(p => p.connected || (d.progress[p.id] ?? 0) > 0)
-    .map(p => ({ id: p.id, name: p.name, score: d.roundScores[p.id] ?? 0, done: d.progress[p.id] ?? 0, over: !!d.done[p.id], quit: !!d.gaveUp?.[p.id] && !d.done[p.id] }))
-    .sort((a, b) => b.score - a.score);
+    .map(p => ({ id: p.id, name: p.name, correct: d.correct[p.id] ?? 0, done: d.progress[p.id] ?? 0, over: !!d.done[p.id], quit: !!d.gaveUp?.[p.id] && !d.done[p.id] }))
+    .sort((a, b) => b.correct - a.correct);
   return (
     <div className="space-y-8">
       <p className="text-center jeo-headline uppercase tracking-[0.28em] text-[var(--jeo-gold)] text-xl sm:text-2xl">
-        {d.category}
+        {d.category} <span className="text-blue-200/50 text-base">· most correct wins</span>
       </p>
       <div className="space-y-3 max-w-3xl mx-auto">
         {rows.map(r => (
@@ -160,7 +177,7 @@ function RapidStage({ state, d }: { state: GameState; d: RapidData }) {
             <div className="flex-1 h-6 rounded-full bg-[rgba(6,8,26,0.7)] overflow-hidden border border-white/5">
               <div className="h-full bg-gradient-to-r from-[#00e5ff] to-[#7b5cff]" style={{ width: `${Math.min(100, (r.done / Math.max(1, d.total)) * 100)}%` }} />
             </div>
-            <span className="w-24 jeo-value text-2xl">{r.score}</span>
+            <span className="w-24 jeo-value text-2xl">{r.correct}<span className="text-base text-[var(--neon-lime)] ml-1">✓</span></span>
             <span className="w-16 text-blue-200/50 text-xs jeo-headline uppercase">{r.over ? 'done' : r.quit ? 'gave up' : `${r.done}/${d.total}`}</span>
           </div>
         ))}
@@ -172,20 +189,19 @@ function RapidStage({ state, d }: { state: GameState; d: RapidData }) {
 
 /* ── Letter Reveal ────────────────────────────────────────────────────────── */
 function LetterStage({ state, d }: { state: GameState; d: LetterData }) {
-  const solvedOrder = state.players.filter(p => d.solved[p.id]).map(p => p.id);
   return (
     <div className="space-y-8 text-center">
       <div className="flex justify-center gap-3 sm:gap-4">
         {d.letters.map((ch, i) => (
-          <span key={i} className={`rounded-xl w-16 h-20 sm:w-24 sm:h-28 flex items-center justify-center jeo-value text-4xl sm:text-6xl border ${ch ? 'jeo-tile v1' : 'border-dashed border-[rgba(0,229,255,0.3)] bg-[rgba(6,8,26,0.5)]'}`}>
+          <span key={i} className={`rounded-xl w-16 h-20 sm:w-24 sm:h-28 flex items-center justify-center jeo-value text-4xl sm:text-6xl border ${ch ? 'jeo-tile v1 mg-pop' : 'border-dashed border-[rgba(0,229,255,0.3)] bg-[rgba(6,8,26,0.5)]'}`}>
             {ch ?? ''}
           </span>
         ))}
       </div>
       <p className="jeo-headline uppercase tracking-[0.28em] text-blue-200/70 text-sm">
-        {d.revealCount}/{d.wordLen} letters revealed · guess early for more points
+        {d.revealCount}/{d.wordLen} letters revealed · solve first for more points
       </p>
-      <SolveChips state={state} solvedOrder={solvedOrder} gaveUp={d.gaveUp} />
+      <SolveChips state={state} solvedOrder={d.solvedOrder} gaveUp={d.gaveUp} />
     </div>
   );
 }

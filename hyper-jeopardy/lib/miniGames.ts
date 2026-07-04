@@ -15,15 +15,12 @@ export const INTRO_MS = 5_000;        // rules screen shown on all screens befor
 export const HYPER_ROUND_MS = 60_000; // hyper round cap: ends at 60s, or as soon as
                                        // every player is resolved (solved / done / gave up)
 export const REVEAL_INTERVAL_MS = 4_500;
-export const LETTER_GRACE_MS = 6_000;
 export const RESULTS_MS = 6_500;
 
-// Anagram Race scores as a MULTIPLE of the board-space value, by solve order:
-// 1st = 2×, 2nd = 1×, 3rd = 0, 4th+ = −1×. Non-solvers get 0.
-const ANAGRAM_MULT = [2, 1, 0, -1];
-const LETTER_AWARDS = [500, 400, 300, 250, 150, 100]; // by revealCount 0..5
-const RAPID_CORRECT = 100;
-const RAPID_WRONG = -50;
+// Placement scoring shared by Anagram Race and Rapid Fire: points are a MULTIPLE
+// of the board-cell value by finish position — 1st = 2×, 2nd = 1×, 3rd = 0,
+// 4th+ = −1×. Players who didn't place (no solve / no correct answer) get 0.
+const PLACEMENT_MULT = [2, 1, 0, -1];
 
 // ── broadcast state shapes (no secrets) ─────────────────────────────────────
 export type MiniGameStatus = 'intro' | 'playing' | 'results';
@@ -58,6 +55,7 @@ export interface RapidQ { question: string; choices: string[]; category: string;
 export interface RapidData extends BaseMGData {
   key: 'rapid_fire';
   category: string;
+  value: number;          // board-cell value → placement scoring base
   questions: RapidQ[];
   total: number;
   progress: Record<string, number>;
@@ -68,9 +66,11 @@ export interface RapidData extends BaseMGData {
 
 export interface LetterData extends BaseMGData {
   key: 'letter_reveal';
+  value: number;               // board-cell value → placement scoring base
   wordLen: number;
   letters: (string | null)[];  // revealed letters; null = still hidden
   revealCount: number;
+  solvedOrder: string[];       // finish order → placement multiplier
   solved: Record<string, boolean>;
   solvedAtReveal: Record<string, number>;
 }
@@ -163,8 +163,9 @@ export function initMiniGame(state: GameState): void {
     const data: LetterData = {
       key: 'letter_reveal', status: 'intro', endsAt: introEndsAt,
       roundScores: {}, results: null, answerReveal: null, gaveUp: {},
+      value: state.activeClue?.value ?? 200,
       wordLen: word.length, letters: Array(word.length).fill(null),
-      revealCount: 0, solved: {}, solvedAtReveal: {},
+      revealCount: 0, solvedOrder: [], solved: {}, solvedAtReveal: {},
     };
     state.miniGameData = data as unknown as Record<string, unknown>;
   } else if (key === 'rapid_fire') {
@@ -174,6 +175,7 @@ export function initMiniGame(state: GameState): void {
       key: 'rapid_fire', status: 'intro', endsAt: introEndsAt,
       roundScores: {}, results: null, answerReveal: null, gaveUp: {},
       category: qs[0]?.category ?? 'Trivia',
+      value: state.activeClue?.value ?? 200,
       questions: qs.map(q => ({ question: q.question, choices: q.choices, category: q.category })),
       total: qs.length, progress: {}, correct: {}, wrong: {}, done: {},
     };
@@ -193,7 +195,7 @@ export function beginMiniGamePlaying(state: GameState): void {
   } else if (d.key === 'rapid_fire') {
     d.endsAt = now + HYPER_ROUND_MS;
   } else if (d.key === 'letter_reveal') {
-    d.endsAt = null; // reveal-paced; the 60s cap is a silent backstop
+    d.endsAt = now + HYPER_ROUND_MS; // 60s round; letters also reveal on their own cadence
   }
 }
 
@@ -224,7 +226,7 @@ function anagramSubmit(state: GameState, d: AnagramData, playerId: string, paylo
     d.solved[playerId] = true;
     d.solvedOrder.push(playerId);
     const place = d.solvedOrder.length - 1;              // 0-indexed placement
-    const mult = ANAGRAM_MULT[place] ?? ANAGRAM_MULT[ANAGRAM_MULT.length - 1]; // 4th+ = −1×
+    const mult = PLACEMENT_MULT[place] ?? PLACEMENT_MULT[PLACEMENT_MULT.length - 1]; // 4th+ = −1×
     const pts = Math.round(d.value * mult);
     d.roundScores[playerId] = pts;
     return { changed: true, complete: allResolved(state, d), feedback: { correct: true, points: pts } };
@@ -239,7 +241,10 @@ function letterSubmit(state: GameState, d: LetterData, playerId: string, payload
   if (guess === mgSecret.letterAnswer) {
     d.solved[playerId] = true;
     d.solvedAtReveal[playerId] = d.revealCount;
-    const pts = LETTER_AWARDS[Math.min(d.revealCount, LETTER_AWARDS.length - 1)];
+    d.solvedOrder.push(playerId);
+    const place = d.solvedOrder.length - 1;
+    const mult = PLACEMENT_MULT[place] ?? PLACEMENT_MULT[PLACEMENT_MULT.length - 1]; // 4th+ = −1×
+    const pts = Math.round(d.value * mult);
     d.roundScores[playerId] = pts;
     return { changed: true, complete: allResolved(state, d), feedback: { correct: true, points: pts } };
   }
@@ -252,12 +257,27 @@ function rapidSubmit(state: GameState, d: RapidData, playerId: string, payload: 
   const cur = d.progress[playerId] ?? 0;
   if (Number(p.index) !== cur) return { changed: false, complete: false, feedback: { stale: true } }; // ignore stale taps
   const isCorrect = normalize(String(p.choice ?? '')) === (mgSecret.rapidCorrect?.[cur] ?? ' ');
-  d.roundScores[playerId] = Math.max(0, (d.roundScores[playerId] ?? 0) + (isCorrect ? RAPID_CORRECT : RAPID_WRONG));
+  // Placement scoring (like Anagram): only the tallies matter during play;
+  // points are awarded by finish position at the end (scoreRapidByPlacement).
   if (isCorrect) d.correct[playerId] = (d.correct[playerId] ?? 0) + 1;
   else d.wrong[playerId] = (d.wrong[playerId] ?? 0) + 1;
   d.progress[playerId] = cur + 1;
   if (d.progress[playerId] >= d.total) d.done[playerId] = true;
-  return { changed: true, complete: allResolved(state, d), feedback: { correct: isCorrect, points: d.roundScores[playerId] } };
+  return { changed: true, complete: allResolved(state, d), feedback: { correct: isCorrect } };
+}
+
+// At round end, rank Rapid Fire players by correct answers (tie-break: fewer
+// wrong) and award the placement multiple of the cell value, mirroring Anagram.
+// Players with zero correct answers don't place → 0.
+function scoreRapidByPlacement(state: GameState, d: RapidData): void {
+  const scorers = state.players
+    .map(p => ({ id: p.id, correct: d.correct[p.id] ?? 0, wrong: d.wrong[p.id] ?? 0 }))
+    .filter(r => r.correct > 0 && !d.gaveUp[r.id]) // give up → forfeit the round, 0 points
+    .sort((a, b) => b.correct - a.correct || a.wrong - b.wrong);
+  scorers.forEach((r, i) => {
+    const mult = PLACEMENT_MULT[i] ?? PLACEMENT_MULT[PLACEMENT_MULT.length - 1]; // 4th+ = −1×
+    d.roundScores[r.id] = Math.round(d.value * mult);
+  });
 }
 
 // ── letter reveal tick ──────────────────────────────────────────────────────
@@ -278,6 +298,13 @@ export function revealLetter(state: GameState): { fullyRevealed: boolean } {
 export function finishMiniGame(state: GameState): void {
   const d = state.miniGameData as unknown as MiniGameData | null;
   if (!d || d.status === 'results') return;
+
+  // Rapid Fire settles by finish position at the end (Anagram/Letter set their
+  // roundScores as players solve).
+  if (d.key === 'rapid_fire') scoreRapidByPlacement(state, d);
+
+  // Give Up forfeits the round: a player who gave up scores 0, always.
+  for (const p of state.players) if (d.gaveUp[p.id]) d.roundScores[p.id] = 0;
 
   const rows: MiniGameResultRow[] = [];
   for (const p of state.players) {
@@ -303,15 +330,16 @@ function resultDetail(d: MiniGameData, playerId: string): string {
     return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
   }
   if (d.key === 'letter_reveal') {
-    if (d.solved[playerId]) {
+    const i = d.solvedOrder.indexOf(playerId);
+    if (i >= 0) {
       const hidden = d.wordLen - d.solvedAtReveal[playerId];
-      return `solved with ${hidden} hidden`;
+      return `#${i + 1} · ${hidden} hidden`;
     }
     return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
   }
   // rapid_fire
-  if (d.gaveUp[playerId] && !d.done[playerId]) return 'gave up';
-  return `${d.correct[playerId] ?? 0} ✓  ${d.wrong[playerId] ?? 0} ✗`;
+  const tally = `${d.correct[playerId] ?? 0} ✓  ${d.wrong[playerId] ?? 0} ✗`;
+  return d.gaveUp[playerId] && !d.done[playerId] ? `${tally} · gave up` : tally;
 }
 
 function answerReveal(d: MiniGameData): string | null {

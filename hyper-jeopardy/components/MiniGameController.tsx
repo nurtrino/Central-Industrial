@@ -52,10 +52,26 @@ function IntroCtl({ d }: { d: MiniGameData }) {
         </>
       )}
       {d.key === 'rapid_fire' && (
-        <p className="text-blue-100/90 text-base leading-snug">{d.category} · 45s. Tap answers fast. <span className="text-[var(--neon-lime)]">+100</span> / <span className="text-red-400">−50</span>.</p>
+        <>
+          <p className="text-blue-100/90 text-base leading-snug">{d.category} · 60s. Answer fast — most correct wins.</p>
+          <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
+          </div>
+        </>
       )}
       {d.key === 'letter_reveal' && (
-        <p className="text-blue-100/90 text-base leading-snug">Guess the hidden 5-letter word — the fewer letters shown when you solve, the more points.</p>
+        <>
+          <p className="text-blue-100/90 text-base leading-snug">Guess the hidden 5-letter word — first to solve wins big.</p>
+          <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
+          </div>
+        </>
       )}
     </div>
   );
@@ -108,19 +124,26 @@ function RapidCtl({ d, playerId, onAction }: { d: RapidData; playerId: string; o
     if (pending) return;
     setPending(true);
     const fb = await onAction({ type: 'answer', payload: { index: idx, choice } });
+    haptic(fb.correct ? 25 : [10, 40, 10]);
     setFlash(fb.correct ? 'correct' : 'wrong');
     setTimeout(() => setFlash(null), 450);
     setPending(false);
   }
 
   if (d.done[playerId] || !q) {
-    return <Solved points={d.roundScores[playerId] ?? 0} sub={`${d.correct[playerId] ?? 0} correct · waiting for the buzzer`} />;
+    return (
+      <div className="text-center space-y-2 py-4">
+        <p className="hyper-title text-4xl">{d.correct[playerId] ?? 0} <span className="text-2xl text-[var(--neon-lime)]">✓</span></p>
+        <p className="jeo-headline uppercase tracking-[0.25em] text-[var(--neon-lime)] text-sm">All questions done!</p>
+        <p className="text-blue-200/60 text-sm">Standings settle when the round ends</p>
+      </div>
+    );
   }
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="jeo-headline uppercase tracking-widest text-[11px] text-blue-200/60">{d.category}</span>
-        <span className="jeo-value text-lg">{d.roundScores[playerId] ?? 0}</span>
+        <span className="jeo-value text-lg">{d.correct[playerId] ?? 0} <span className="text-sm text-[var(--neon-lime)]">✓</span></span>
       </div>
       <p className="text-white text-lg leading-snug min-h-[3.5rem]">{q.question}</p>
       <div className="grid grid-cols-1 gap-2">
@@ -134,7 +157,7 @@ function RapidCtl({ d, playerId, onAction }: { d: RapidData; playerId: string; o
       </div>
       {flash && (
         <p className={`text-center jeo-headline uppercase tracking-widest text-sm ${flash === 'correct' ? 'text-[var(--neon-lime)]' : 'text-red-400'}`}>
-          {flash === 'correct' ? '+100' : '−50'}
+          {flash === 'correct' ? '✓ Correct' : '✗ Wrong'}
         </p>
       )}
     </div>
@@ -167,8 +190,9 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
   }
 
   if (solved) {
+    const place = d.solvedOrder.indexOf(playerId) + 1;
     const hidden = d.wordLen - (d.solvedAtReveal[playerId] ?? 0);
-    return <Solved points={d.roundScores[playerId] ?? 0} sub={`solved with ${hidden} still hidden`} />;
+    return <Solved points={d.roundScores[playerId] ?? 0} sub={`#${place} to solve · ${hidden} hidden`} />;
   }
   return (
     <div className="space-y-4">

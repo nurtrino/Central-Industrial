@@ -38,7 +38,6 @@ import {
   INTRO_MS,
   HYPER_ROUND_MS,
   REVEAL_INTERVAL_MS,
-  LETTER_GRACE_MS,
   RESULTS_MS,
 } from './miniGames';
 import {
@@ -565,7 +564,6 @@ function clearMiniGameTimers() {
   clearTimer('mg_round');
   clearTimer('mg_intro');
   clearTimer('mg_reveal');
-  clearTimer('mg_grace');
   clearTimer('mg_results');
 }
 
@@ -606,8 +604,9 @@ function scheduleReveal() {
     if (!d || d.status !== 'playing') return;
     const { fullyRevealed } = revealLetter(gameState);
     broadcast();
-    if (fullyRevealed) setTimer('mg_grace', LETTER_GRACE_MS, () => finishMini());
-    else scheduleReveal();
+    // After the last letter, stop revealing; the round ends on all-resolved or
+    // the 60s cap (mg_round) — same as the other games.
+    if (!fullyRevealed) scheduleReveal();
   });
 }
 
