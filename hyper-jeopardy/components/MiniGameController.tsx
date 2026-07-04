@@ -1,10 +1,14 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '@/lib/gameEngine';
-import type { AnagramData, RapidData, LetterData, MiniGameData } from '@/lib/miniGames';
+import type { AnagramData, RapidData, LetterData, MemoryData, MiniGameData } from '@/lib/miniGames';
 import { playSolve, playWrong, haptic } from '@/lib/audio';
 
-export interface MGFeedback { correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean }
+export interface MGFeedback {
+  correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean;
+  // Memory Matrix extras:
+  levelUp?: boolean; finished?: boolean; lostLife?: boolean; out?: boolean;
+}
 type Action = { type: string; payload?: unknown };
 
 interface Props {
@@ -35,6 +39,7 @@ export default function MiniGameController({ state, playerId, onAction }: Props)
   if (d.key === 'anagram_race') return <AnagramCtl d={d} playerId={playerId} onAction={onAction} />;
   if (d.key === 'rapid_fire') return <RapidCtl d={d} playerId={playerId} onAction={onAction} />;
   if (d.key === 'letter_reveal') return <LetterCtl d={d} playerId={playerId} onAction={onAction} />;
+  if (d.key === 'memory_match') return <MemoryCtl d={d} playerId={playerId} onAction={onAction} />;
   return null;
 }
 
@@ -57,6 +62,17 @@ function IntroCtl({ d }: { d: MiniGameData }) {
       {d.key === 'rapid_fire' && (
         <>
           <p className="text-blue-100/90 text-base leading-snug">{d.category} · 10 questions · 30s. Most correct wins.</p>
+          <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
+          </div>
+        </>
+      )}
+      {d.key === 'memory_match' && (
+        <>
+          <p className="text-blue-100/90 text-base leading-snug">Tiles flash, then hide — tap them all from memory. Levels grow 4×4→5×5. 3 misses = −1 life, 3 lives. Climb furthest!</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
@@ -121,6 +137,7 @@ function RapidCtl({ d, playerId, onAction }: { d: RapidData; playerId: string; o
   const idx = d.progress[playerId] ?? 0;
   const [pending, setPending] = useState(false);
   const [flash, setFlash] = useState<'correct' | 'wrong' | null>(null);
+  const [streak, setStreak] = useState(0);
   const q = d.questions[idx];
 
   async function pick(choice: string) {
@@ -128,6 +145,7 @@ function RapidCtl({ d, playerId, onAction }: { d: RapidData; playerId: string; o
     setPending(true);
     const fb = await onAction({ type: 'answer', payload: { index: idx, choice } });
     haptic(fb.correct ? 25 : [10, 40, 10]);
+    setStreak(s => (fb.correct ? s + 1 : 0));
     setFlash(fb.correct ? 'correct' : 'wrong');
     setTimeout(() => setFlash(null), 450);
     setPending(false);
@@ -146,7 +164,10 @@ function RapidCtl({ d, playerId, onAction }: { d: RapidData; playerId: string; o
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="jeo-headline uppercase tracking-widest text-[11px] text-blue-200/60">{d.category}</span>
-        <span className="jeo-value text-lg">{d.correct[playerId] ?? 0} <span className="text-sm text-[var(--neon-lime)]">✓</span></span>
+        <span className="flex items-center gap-2">
+          {streak >= 3 && <span className="text-sm mg-flash" aria-label={`${streak} in a row`}>🔥×{streak}</span>}
+          <span className="jeo-value text-lg">{d.correct[playerId] ?? 0} <span className="text-sm text-[var(--neon-lime)]">✓</span></span>
+        </span>
       </div>
       <p className="text-white text-lg leading-snug min-h-[3.5rem]">{q.question}</p>
       <div className="grid grid-cols-1 gap-2">
@@ -171,6 +192,7 @@ function RapidCtl({ d, playerId, onAction }: { d: RapidData; playerId: string; o
 function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string; onAction: Props['onAction'] }) {
   const [guess, setGuess] = useState('');
   const [cooldown, setCooldown] = useState(0);
+  const [wrong, setWrong] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const solved = !!d.solved[playerId];
 
@@ -188,8 +210,12 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
   async function submit() {
     if (cooldown > 0 || guess.trim().length !== d.wordLen) return;
     const fb = await onAction({ type: 'guess', payload: guess });
-    if (fb.correct) setGuess('');
-    else { startCooldown(); }
+    if (fb.correct) { setGuess(''); playSolve(); haptic(35); }
+    else {
+      playWrong(); haptic([15, 55, 15]);
+      setWrong(true); setTimeout(() => setWrong(false), 450);
+      startCooldown();
+    }
   }
 
   if (solved) {
@@ -205,7 +231,7 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
         ))}
       </div>
       <input
-        className="jeo-input w-full px-4 py-3 rounded-lg text-xl text-center uppercase tracking-[0.4em]"
+        className={`jeo-input w-full px-4 py-3 rounded-lg text-xl text-center uppercase tracking-[0.4em] ${wrong ? 'border-red-500 mg-shake' : ''}`}
         placeholder={'•'.repeat(d.wordLen)} value={guess} autoFocus autoCapitalize="characters" maxLength={d.wordLen}
         onChange={e => setGuess(e.target.value.replace(/[^a-zA-Z]/g, ''))}
         onKeyDown={e => e.key === 'Enter' && submit()}
@@ -214,6 +240,104 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
         className="jeo-btn-gold w-full py-3 rounded-lg text-lg disabled:opacity-40">
         {cooldown > 0 ? `Wait ${(cooldown / 1000).toFixed(1)}s` : 'Guess'}
       </button>
+    </div>
+  );
+}
+
+/* ── Memory Matrix ────────────────────────────────────────────────────────── */
+// humanbenchmark.com/tests/memory rules, run per player on their own phone:
+// the pattern flashes ~1.6s, hides, then tap every lit cell from memory. Hits
+// stay lit; 3 misses on a level costs a life and deals a fresh pattern; 3
+// lives gone → out. Clear the final 5×5/8 rung to finish the ladder.
+const MEMORY_FLASH_MS = 1600;
+
+function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string; onAction: Props['onAction'] }) {
+  const seq = d.patternSeq[playerId] ?? 0;
+  const [showing, setShowing] = useState(true);   // pattern visible (memorize) vs hidden (recall)
+  const [missAt, setMissAt] = useState<number | null>(null); // brief red flash on a missed cell
+  const pendingRef = useRef(false);
+  const solved = !!d.solved[playerId];
+  const out = !!d.out[playerId];
+
+  // Every new pattern (new level / lost life) → flash it, then hide.
+  useEffect(() => {
+    if (seq === 0) return;
+    setShowing(true);
+    setMissAt(null);
+    const t = setTimeout(() => setShowing(false), MEMORY_FLASH_MS);
+    return () => clearTimeout(t);
+  }, [seq]);
+
+  const lvl = Math.min(d.level[playerId] ?? 0, d.levels.length - 1);
+  const spec = d.levels[lvl];
+  const cols = Math.round(Math.sqrt(spec.grid));
+  const pattern = new Set(d.pattern[playerId] ?? []);
+  const found = new Set(d.found[playerId] ?? []);
+  const lives = d.lives[playerId] ?? 3;
+
+  async function tap(i: number) {
+    if (showing || pendingRef.current || found.has(i)) return;
+    pendingRef.current = true;
+    const fb = await onAction({ type: 'pick', payload: { cell: i } });
+    pendingRef.current = false;
+    if (fb.correct) {
+      haptic(18);
+      if (fb.finished) { playSolve(); haptic([40, 60, 80]); }
+      else if (fb.levelUp) { playSolve(); haptic(45); }
+    } else if (!fb.already) {
+      playWrong(); haptic([15, 55, 15]);
+      setMissAt(i); setTimeout(() => setMissAt(null), 500);
+    }
+  }
+
+  if (solved) {
+    return (
+      <div className="text-center space-y-2 py-4">
+        <p className="hyper-title text-4xl">🏆 CLEARED</p>
+        <p className="jeo-headline uppercase tracking-[0.25em] text-[var(--neon-lime)] text-sm">All {d.levels.length} levels!</p>
+        <p className="text-blue-200/60 text-sm">Standings settle when the round ends</p>
+      </div>
+    );
+  }
+  if (out) {
+    return (
+      <div className="text-center space-y-2 py-4">
+        <p className="hyper-title text-4xl opacity-80">OUT</p>
+        <p className="jeo-headline uppercase tracking-[0.25em] text-red-300/90 text-sm">Cleared {d.level[playerId] ?? 0}/{d.levels.length} levels</p>
+        <p className="text-blue-200/60 text-sm">Standings settle when the round ends</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 text-center">
+      <div className="flex items-center justify-between text-xs jeo-headline uppercase tracking-[0.2em]">
+        <span className="text-[#ffd97a]">Level {lvl + 1}/{d.levels.length}</span>
+        <span className={showing ? 'text-[#ffd97a]' : 'text-blue-200/60'}>
+          {showing ? '👀 Memorize!' : `${found.size}/${spec.lit} found`}
+        </span>
+        <span className="text-[#ff7d92]">{'♥'.repeat(lives)}<span className="text-white/15">{'♥'.repeat(Math.max(0, 3 - lives))}</span></span>
+      </div>
+      <div className="flex justify-center">
+        <div className="inline-grid gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+          {Array.from({ length: spec.grid }, (_, i) => {
+            const lit = (showing && pattern.has(i)) || found.has(i);
+            const missed = missAt === i;
+            return (
+              <button
+                key={i}
+                onClick={() => tap(i)}
+                disabled={showing}
+                className={`rounded-lg border transition-all duration-100 ${cols === 5 ? 'w-12 h-12' : 'w-14 h-14'} ${
+                  missed ? 'mg-shake border-red-500 bg-red-500/40'
+                  : lit ? 'border-[#ffc43c] bg-[rgba(255,196,60,0.32)] shadow-[0_0_12px_rgba(255,196,60,0.5)]'
+                  : 'border-[rgba(0,229,255,0.25)] bg-[rgba(6,8,26,0.55)] active:bg-[rgba(0,229,255,0.12)]'}`}
+                aria-label={`cell ${i + 1}`}
+              />
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

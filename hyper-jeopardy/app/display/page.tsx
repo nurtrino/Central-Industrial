@@ -1,10 +1,10 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import { getSocket } from '@/lib/socket-client';
 import { GameState } from '@/lib/gameEngine';
 import { isUnavailableClue } from '@/lib/clueSentinel';
-import { unlockAudio, preloadLasers, playRandomLaser } from '@/lib/audio';
+import { unlockAudio } from '@/lib/audio';
 import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import MiniGameStage from '@/components/MiniGameStage';
@@ -22,7 +22,6 @@ export default function Display() {
   const [state, setState] = useState<GameState | null>(null);
   const [connected, setConnected] = useState(false);
   const [revealHyper, setRevealHyper] = useState(false);
-  const prevCluePhaseRef = useRef<string | null>(null);
 
   // Testing phase: hyper (mini-game) cells are marked on the board BY DEFAULT.
   // Add ?reveal=off (or ?hide) to restore the hidden, surprise behavior.
@@ -44,11 +43,11 @@ export default function Display() {
     };
   }, []);
 
-  // The shared screen is the stage — play the laser cue here on HYPER MODE
-  // activation. Browsers block audio until a gesture, so unlock on the first
-  // click/key and preload the clips so they fire instantly.
+  // Unlock audio on the first gesture so the celebration stings can play.
+  // NOTE: the HYPER MODE activation laser was intentionally removed — the
+  // provided clips ran too long. Re-wire playRandomLaser() on the
+  // idle→hyper_intro transition when better clips land.
   useEffect(() => {
-    preloadLasers();
     const unlock = () => unlockAudio();
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
@@ -57,14 +56,6 @@ export default function Display() {
       window.removeEventListener('keydown', unlock);
     };
   }, []);
-
-  useEffect(() => {
-    const phase = state?.cluePhase ?? null;
-    if (prevCluePhaseRef.current !== 'hyper_intro' && phase === 'hyper_intro') {
-      playRandomLaser();
-    }
-    prevCluePhaseRef.current = phase;
-  }, [state?.cluePhase]);
 
   if (!connected || !state) {
     return (

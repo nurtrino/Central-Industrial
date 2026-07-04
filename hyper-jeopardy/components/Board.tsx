@@ -19,11 +19,13 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
   const values = state.phase === 'double_jeopardy' ? VALUES_DJ : VALUES_J;
   const hyperClues = Array.isArray(state.hyperClues) ? state.hyperClues : [];
   const hyperGames = (state.hyperGames ?? {}) as Record<number, string>;
-  // per-game reveal color: blue = Anagram, red = Rapid Fire, green = Letter Reveal
+  // per-game reveal color: blue = Anagram, red = Rapid Fire, green = Letter
+  // Reveal, amber = Memory Matrix
   const HG = {
     anagram_race: { cls: 'hg-anagram', badge: 'A' },
     rapid_fire: { cls: 'hg-rapid', badge: 'R' },
     letter_reveal: { cls: 'hg-letter', badge: 'L' },
+    memory_match: { cls: 'hg-memory', badge: 'M' },
   } as const;
 
   return (

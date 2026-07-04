@@ -45,6 +45,7 @@ export const MINI_GAMES: MiniGame[] = [
   { key: 'anagram_race',  title: 'Anagram Race',  family: 'Word Race',   mode: 'multi', trivia: false,                     blurb: 'Unscramble the word before your rivals — the faster you solve, the more you bank.' },
   { key: 'rapid_fire',    title: 'Rapid Fire',    family: 'Speed',       mode: 'multi', trivia: 'random', triviaCount: 10, blurb: 'Ten questions, one category, thirty seconds. Answer as many as you can — most correct wins.' },
   { key: 'letter_reveal', title: 'Letter Reveal', family: 'Word Reveal', mode: 'multi', trivia: false,                     blurb: 'Five hidden letters reveal one by one. Guess early — the fewer shown, the bigger the score.' },
+  { key: 'memory_match',  title: 'Memory Matrix', family: 'Memory',      mode: 'multi', trivia: false,                     blurb: 'A pattern flashes on the grid — memorize it, then rebuild it from memory. First perfect match wins.' },
 ];
 
 export function pickMiniGame(): MiniGame {

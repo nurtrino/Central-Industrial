@@ -4,8 +4,10 @@ import { useEffect, useRef } from 'react';
 /**
  * Ambient outer-space backdrop rendered on one fixed, full-screen canvas that
  * sits behind all page content. Twinkling stars with intermittent glint
- * flares, shooting stars / tumbling asteroids every 6–14s, and translucent
- * nebulas drifting on slow lissajous paths that fade in and out of view.
+ * flares, shooting stars / tumbling asteroids every 6–14s, translucent
+ * nebulas drifting on slow lissajous paths, two far-off planets (a ringed gas
+ * giant and a small ice world) wandering near the screen edges, and the
+ * occasional small spaceship cruising across with an engine trail.
  * Pauses when the tab is hidden and honors prefers-reduced-motion.
  */
 export default function Starfield() {
@@ -21,16 +23,21 @@ export default function Starfield() {
     let W = 0, H = 0, DPR = 1;
     let raf = 0;
     let nextMeteor = 0;
+    let nextShip = 0;
 
     const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
     interface Star { x: number; y: number; r: number; base: number; amp: number; spd: number; ph: number; glint: number; tint: string; }
     interface Nebula { img: HTMLCanvasElement; sc: number; ax: number; ay: number; sx: number; sy: number; px: number; breath: number; pb: number; }
     interface Meteor { x: number; y: number; vx: number; vy: number; rock: boolean; tail: number; born: number; }
+    interface Planet { img: HTMLCanvasElement; ax: number; ay: number; wx: number; wy: number; sx: number; sy: number; ph: number; size: number; alpha: number; }
+    interface Ship { x: number; y: number; vx: number; size: number; bobPh: number; born: number; }
 
     let stars: Star[] = [];
     let nebulas: Nebula[] = [];
+    let planets: Planet[] = [];
     const meteors: Meteor[] = [];
+    const ships: Ship[] = [];
 
     function makeNebulaSprite(hexA: string, hexB: string): HTMLCanvasElement {
       const s = 512;
@@ -44,6 +51,114 @@ export default function Starfield() {
       gr.addColorStop(0, hexB); gr.addColorStop(1, 'rgba(0,0,0,0)');
       g.globalCompositeOperation = 'screen'; g.fillStyle = gr; g.fillRect(0, 0, s, s);
       return c;
+    }
+
+    // Pre-render a planet sprite: lit sphere (light from upper-left), optional
+    // cloud bands, terminator shading, and an optional tilted ring drawn in two
+    // passes (back half behind the sphere, front half over it).
+    function makePlanetSprite(colA: string, colB: string, ringed: boolean, banded: boolean): HTMLCanvasElement {
+      const s = 360;
+      const c = document.createElement('canvas');
+      c.width = c.height = s;
+      const g = c.getContext('2d')!;
+      const cx = s / 2, cy = s / 2;
+      const r = ringed ? s * 0.21 : s * 0.3;
+
+      const ring = (from: number, to: number) => {
+        g.save();
+        g.translate(cx, cy); g.rotate(-0.42); g.scale(1, 0.30);
+        for (let i = 0; i < 3; i++) {
+          const rr = r * (1.55 + i * 0.22);
+          g.globalAlpha = 0.5 - i * 0.13;
+          g.strokeStyle = i === 1 ? 'rgba(210,190,255,0.9)' : 'rgba(150,170,230,0.8)';
+          g.lineWidth = 7 - i * 1.6;
+          g.beginPath(); g.arc(0, 0, rr, from, to); g.stroke();
+        }
+        g.restore();
+        g.globalAlpha = 1;
+      };
+
+      if (ringed) ring(Math.PI, Math.PI * 2); // back half first
+
+      // sphere
+      let gr = g.createRadialGradient(cx - r * 0.4, cy - r * 0.4, r * 0.1, cx, cy, r * 1.05);
+      gr.addColorStop(0, colA); gr.addColorStop(0.72, colB); gr.addColorStop(1, 'rgba(4,6,20,0.95)');
+      g.fillStyle = gr;
+      g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+
+      if (banded) {
+        g.save();
+        g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.clip();
+        for (let i = 0; i < 5; i++) {
+          const by = cy - r + (i + 0.7) * (r * 2 / 6) + Math.sin(i * 2.3) * 4;
+          g.globalAlpha = 0.10 + (i % 2) * 0.07;
+          g.fillStyle = i % 2 ? 'rgba(255,255,255,0.7)' : 'rgba(20,10,60,0.8)';
+          g.beginPath(); g.ellipse(cx, by, r * 1.04, r * 0.10 + (i % 3) * 2, -0.06, 0, Math.PI * 2); g.fill();
+        }
+        g.restore();
+        g.globalAlpha = 1;
+      }
+
+      // terminator (night side) from lower-right
+      gr = g.createRadialGradient(cx + r * 0.55, cy + r * 0.55, r * 0.2, cx + r * 0.2, cy + r * 0.2, r * 1.35);
+      gr.addColorStop(0, 'rgba(3,4,16,0.85)'); gr.addColorStop(0.55, 'rgba(3,4,16,0.25)'); gr.addColorStop(1, 'rgba(3,4,16,0)');
+      g.save();
+      g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.clip();
+      g.fillStyle = gr; g.fillRect(0, 0, s, s);
+      g.restore();
+
+      if (ringed) ring(0, Math.PI); // front half over the sphere
+      return c;
+    }
+
+    // A small neon dart cruising by, with a cyan engine trail and a flickering
+    // exhaust. Rare 2-ship formations. Drawn pointing toward +x, then mirrored
+    // for right-to-left runs.
+    function drawShip(sp: Ship, t: number) {
+      const bob = Math.sin(t * 1.8 + sp.bobPh) * 5;
+      const y = sp.y + bob;
+      const dir = sp.vx >= 0 ? 1 : -1;
+      const sSize = sp.size;
+
+      ctx!.save();
+      ctx!.translate(sp.x, y);
+      ctx!.scale(dir, 1);
+
+      // engine trail
+      const trailLen = sSize * (3.2 + Math.sin(t * 22 + sp.bobPh) * 0.35);
+      const tg = ctx!.createLinearGradient(-sSize * 0.8, 0, -sSize * 0.8 - trailLen, 0);
+      tg.addColorStop(0, 'rgba(0,229,255,0.55)');
+      tg.addColorStop(1, 'rgba(0,229,255,0)');
+      ctx!.strokeStyle = tg; ctx!.lineWidth = 2.2; ctx!.lineCap = 'round';
+      ctx!.globalAlpha = 0.85;
+      ctx!.beginPath(); ctx!.moveTo(-sSize * 0.8, 0); ctx!.lineTo(-sSize * 0.8 - trailLen, 0); ctx!.stroke();
+
+      // exhaust flicker
+      const er = sSize * 0.26 + Math.sin(t * 30 + sp.born) * sSize * 0.07;
+      const eg = ctx!.createRadialGradient(-sSize * 0.78, 0, 0, -sSize * 0.78, 0, er * 2.4);
+      eg.addColorStop(0, 'rgba(190,250,255,0.95)'); eg.addColorStop(1, 'rgba(0,229,255,0)');
+      ctx!.fillStyle = eg;
+      ctx!.beginPath(); ctx!.arc(-sSize * 0.78, 0, er * 2.4, 0, Math.PI * 2); ctx!.fill();
+
+      // hull
+      ctx!.globalAlpha = 0.95;
+      ctx!.fillStyle = '#8fa8cc';
+      ctx!.strokeStyle = 'rgba(0,229,255,0.85)';
+      ctx!.lineWidth = 1;
+      ctx!.beginPath();
+      ctx!.moveTo(sSize, 0);
+      ctx!.lineTo(-sSize * 0.7, -sSize * 0.46);
+      ctx!.lineTo(-sSize * 0.45, 0);
+      ctx!.lineTo(-sSize * 0.7, sSize * 0.46);
+      ctx!.closePath();
+      ctx!.fill(); ctx!.stroke();
+
+      // cockpit dome
+      ctx!.fillStyle = 'rgba(191,244,255,0.95)';
+      ctx!.beginPath(); ctx!.arc(sSize * 0.22, -sSize * 0.06, sSize * 0.16, 0, Math.PI * 2); ctx!.fill();
+
+      ctx!.restore();
+      ctx!.globalAlpha = 1;
     }
 
     function init() {
@@ -65,6 +180,26 @@ export default function Starfield() {
         { img: makeNebulaSprite('rgba(255,47,214,0.45)', 'rgba(123,92,255,0.35)'), sc: rand(1.2, 1.7), ax: W * 0.36, ay: H * 0.26, sx: 0.016, sy: 0.023, px: 2.2, breath: 0.013, pb: 2.0 },
         { img: makeNebulaSprite('rgba(0,229,255,0.4)', 'rgba(60,255,190,0.22)'), sc: rand(1.0, 1.5), ax: W * 0.4, ay: H * 0.3, sx: 0.012, sy: 0.018, px: 4.1, breath: 0.010, pb: 4.6 },
       ];
+      // Two far-off planets, kept near the edges (away from the board) and
+      // wandering slowly around their anchor so they never crowd the content.
+      planets = [
+        { img: makePlanetSprite('#b58bff', '#3a2a86', true,  true),  ax: W * 0.86, ay: H * 0.16, wx: 26, wy: 18, sx: 0.007, sy: 0.005, ph: 0.8, size: Math.min(W, H) * 0.34, alpha: 0.5 },
+        { img: makePlanetSprite('#9fe8ff', '#1f4e78', false, false), ax: W * 0.09, ay: H * 0.74, wx: 20, wy: 24, sx: 0.005, sy: 0.008, ph: 3.1, size: Math.min(W, H) * 0.16, alpha: 0.42 },
+      ];
+    }
+
+    function spawnShip(t: number) {
+      const fromLeft = Math.random() < 0.5;
+      const size = rand(10, 15);
+      const speed = rand(65, 130) * (fromLeft ? 1 : -1);
+      const y = rand(H * 0.08, H * 0.85);
+      const mk = (dy: number, dx: number) => ships.push({
+        x: (fromLeft ? -60 : W + 60) + dx, y: y + dy,
+        vx: speed, size, bobPh: rand(0, Math.PI * 2), born: t,
+      });
+      mk(0, 0);
+      if (Math.random() < 0.25) mk(rand(18, 30), fromLeft ? -34 : 34); // wingman
+      nextShip = t + rand(16, 36);
     }
 
     function spawnMeteor(t: number) {
@@ -113,6 +248,14 @@ export default function Starfield() {
           ctx!.stroke();
         }
       }
+      // planets — above the stars (they're closer), below meteors/ships
+      for (const pl of planets) {
+        const px = pl.ax + pl.wx * Math.sin(t * pl.sx + pl.ph);
+        const py = pl.ay + pl.wy * Math.sin(t * pl.sy + pl.ph * 1.7);
+        ctx!.globalAlpha = pl.alpha;
+        ctx!.drawImage(pl.img, px - pl.size / 2, py - pl.size / 2, pl.size, pl.size);
+      }
+      ctx!.globalAlpha = 1;
       // meteors / asteroids
       if (!reduced && t > nextMeteor) spawnMeteor(t);
       for (let i = meteors.length - 1; i >= 0; i--) {
@@ -137,6 +280,14 @@ export default function Starfield() {
           ctx!.beginPath(); ctx!.moveTo(3, 0); ctx!.lineTo(1.4, 2.6); ctx!.lineTo(-2.4, 1.8);
           ctx!.lineTo(-3, -1.2); ctx!.lineTo(0.6, -2.8); ctx!.closePath(); ctx!.fill(); ctx!.restore();
         }
+      }
+      // spaceships — the occasional cruiser, front-most layer
+      if (!reduced && t > nextShip) spawnShip(t);
+      for (let i = ships.length - 1; i >= 0; i--) {
+        const sp = ships[i];
+        sp.x += sp.vx / 60;
+        if (sp.x < -140 || sp.x > W + 140) { ships.splice(i, 1); continue; }
+        drawShip(sp, t);
       }
       ctx!.globalAlpha = 1;
     }

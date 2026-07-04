@@ -241,6 +241,7 @@ html, body {
 .cell-hyper.hg-anagram { --hg: 61, 139, 255;  --hg-text: #7fb0ff; }  /* blue  */
 .cell-hyper.hg-rapid   { --hg: 255, 60, 92;   --hg-text: #ff7d92; }  /* red   */
 .cell-hyper.hg-letter  { --hg: 45, 224, 138;  --hg-text: #62e8ac; }  /* green */
+.cell-hyper.hg-memory  { --hg: 255, 196, 60;  --hg-text: #ffd97a; }  /* amber */
 .cell-hyper .jeo-value {
   background: none !important;
   -webkit-text-fill-color: var(--hg-text) !important;
@@ -288,6 +289,13 @@ html, body {
   to   { opacity: 1; transform: none; }
 }
 .mg-flash { animation: mg-flash-in 0.3s ease both; }
+
+/* Final-seconds urgency pulse on the round timer. */
+@keyframes mg-urgent {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.14); }
+}
+.mg-urgent { display: inline-block; animation: mg-urgent 0.9s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .jeo-buzz, .hyper-title, .hyper-burst, .cell-hyper { animation: none; }

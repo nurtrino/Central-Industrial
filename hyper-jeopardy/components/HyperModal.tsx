@@ -1,7 +1,5 @@
 'use client';
-import { useEffect, useRef } from 'react';
 import { GameState } from '@/lib/gameEngine';
-import { playRandomLaser, preloadLasers } from '@/lib/audio';
 import MiniGameController, { type MGFeedback } from '@/components/MiniGameController';
 import type { MiniGameData } from '@/lib/miniGames';
 
@@ -27,18 +25,9 @@ interface Props {
  */
 export default function HyperModal({ state, playerId, onGiveUp, onMiniGameAction }: Props) {
   const { cluePhase, activeMiniGame } = state;
-  const prevPhaseRef = useRef<string | null>(null);
 
-  // Preload the laser clips once so activation plays instantly.
-  useEffect(() => { preloadLasers(); }, []);
-
-  // Random laser clip the moment HYPER MODE fires.
-  useEffect(() => {
-    if (prevPhaseRef.current !== 'hyper_intro' && cluePhase === 'hyper_intro') {
-      playRandomLaser();
-    }
-    prevPhaseRef.current = cluePhase;
-  }, [cluePhase]);
+  // NOTE: activation sound intentionally removed for now — the provided laser
+  // clips ran too long. Re-wire playRandomLaser() here when better clips land.
 
   if (cluePhase !== 'hyper_intro' && cluePhase !== 'hyper_active') return null;
 

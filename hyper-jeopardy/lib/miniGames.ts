@@ -18,6 +18,21 @@ export const RAPID_ROUND_MS = 30_000; // Rapid Fire: a hard 30s sprint, no give 
 export const REVEAL_INTERVAL_MS = 4_500;
 export const RESULTS_MS = 5_000;      // per-round standings shown before the board returns
 
+// Memory Matrix — humanbenchmark.com/tests/memory rules, starting at their
+// level 3 (4×4 grid, 5 lit) and topping out at 5×5 with 8 lit. Each player
+// runs their OWN ladder on their phone: the pattern flashes, hides, and they
+// tap every lit cell from memory. 3 misses on a level costs a life (fresh
+// pattern, same level); 3 lives and you're out. Furthest-fastest wins.
+export interface MemoryLevelSpec { grid: number; lit: number; }
+export const MEMORY_LEVELS: MemoryLevelSpec[] = [
+  { grid: 16, lit: 5 },  // 4×4 — humanbenchmark level 3
+  { grid: 16, lit: 6 },
+  { grid: 25, lit: 7 },  // grid grows to 5×5
+  { grid: 25, lit: 8 },  // final rung
+];
+export const MEMORY_LIVES = 3;
+export const MEMORY_MISSES_PER_LIFE = 3;
+
 // Placement scoring shared by Anagram Race and Rapid Fire: points are a MULTIPLE
 // of the board-cell value by finish position — 1st = 2×, 2nd = 1×, 3rd = 0,
 // 4th+ = −1×. Players who didn't place (no solve / no correct answer) get 0.
@@ -76,12 +91,33 @@ export interface LetterData extends BaseMGData {
   solvedAtReveal: Record<string, number>;
 }
 
-export type MiniGameData = AnagramData | RapidData | LetterData;
+export interface MemoryData extends BaseMGData {
+  key: 'memory_match';
+  value: number;                       // board-cell value → placement scoring base
+  levels: MemoryLevelSpec[];           // the ladder (broadcast so clients can size grids)
+  level: Record<string, number>;       // per-player rung (0-based); === levels.length → cleared it all
+  pattern: Record<string, number[]>;   // per-player CURRENT pattern (their phone flashes it)
+  patternSeq: Record<string, number>;  // bumps on every new pattern → phone re-flashes
+  found: Record<string, number[]>;     // correct cells found so far this level
+  misses: Record<string, number>;      // wrong picks this level (3 → lose a life)
+  lives: Record<string, number>;       // 3 to start; 0 → out
+  wrongTotal: Record<string, number>;
+  out: Record<string, boolean>;
+  doneAt: Record<string, number>;      // finished-or-eliminated timestamp (ranking tie-break)
+  solvedOrder: string[];               // cleared-the-whole-ladder order
+  solved: Record<string, boolean>;
+}
+
+export type MiniGameData = AnagramData | RapidData | LetterData | MemoryData;
 
 export interface ActionResult {
   changed: boolean;   // did broadcast-worthy state change
   complete: boolean;  // did the round just finish (every player resolved)
-  feedback: { correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean };
+  feedback: {
+    correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean;
+    // Memory Matrix extras:
+    levelUp?: boolean; finished?: boolean; lostLife?: boolean; out?: boolean;
+  };
 }
 
 // ── server-only secrets ─────────────────────────────────────────────────────
@@ -116,6 +152,7 @@ function connected(state: GameState) {
 function isResolved(d: MiniGameData, id: string): boolean {
   if (d.gaveUp[id]) return true;
   if (d.key === 'rapid_fire') return !!d.done[id];
+  if (d.key === 'memory_match') return !!d.solved[id] || !!d.out[id]; // cleared the ladder or out of lives
   return !!d.solved[id]; // anagram_race, letter_reveal
 }
 function allResolved(state: GameState, d: MiniGameData): boolean {
@@ -182,7 +219,38 @@ export function initMiniGame(state: GameState): void {
       total: qs.length, progress: {}, correct: {}, wrong: {}, done: {},
     };
     state.miniGameData = data as unknown as Record<string, unknown>;
+  } else if (key === 'memory_match') {
+    const data: MemoryData = {
+      key: 'memory_match', status: 'intro', endsAt: introEndsAt,
+      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
+      value: state.activeClue?.value ?? 200,
+      levels: MEMORY_LEVELS,
+      level: {}, pattern: {}, patternSeq: {}, found: {}, misses: {}, lives: {},
+      wrongTotal: {}, out: {}, doneAt: {}, solvedOrder: [], solved: {},
+    };
+    state.miniGameData = data as unknown as Record<string, unknown>;
   }
+}
+
+// Start (or lazily join) a player's Memory Matrix run at rung 0 with 3 lives.
+function ensureMemoryPlayer(d: MemoryData, id: string): void {
+  if (d.level[id] !== undefined) return;
+  d.level[id] = 0;
+  d.lives[id] = MEMORY_LIVES;
+  d.misses[id] = 0;
+  d.wrongTotal[id] = 0;
+  d.found[id] = [];
+  dealMemoryPattern(d, id);
+}
+
+// Deal a fresh pattern for the player's current rung and bump the sequence so
+// their phone knows to flash it.
+function dealMemoryPattern(d: MemoryData, id: string): void {
+  const spec = d.levels[Math.min(d.level[id] ?? 0, d.levels.length - 1)];
+  d.pattern[id] = shuffledIndices(spec.grid).slice(0, spec.lit).sort((a, b) => a - b);
+  d.patternSeq[id] = (d.patternSeq[id] ?? 0) + 1;
+  d.found[id] = [];
+  d.misses[id] = 0;
 }
 
 // Rules screen over → open play: reveal the content and start the round clock.
@@ -198,6 +266,10 @@ export function beginMiniGamePlaying(state: GameState): void {
     d.endsAt = now + RAPID_ROUND_MS; // hard 30s sprint
   } else if (d.key === 'letter_reveal') {
     d.endsAt = now + HYPER_ROUND_MS; // 60s round; letters also reveal on their own cadence
+  } else if (d.key === 'memory_match') {
+    // Everyone's ladder starts now — patterns deal per player, phones flash them.
+    for (const p of state.players.filter(pl => pl.connected)) ensureMemoryPlayer(d, p.id);
+    d.endsAt = now + HYPER_ROUND_MS;
   }
 }
 
@@ -217,7 +289,76 @@ export function handleMiniGameAction(
   if (d.key === 'anagram_race') return anagramSubmit(state, d, playerId, action.payload);
   if (d.key === 'letter_reveal') return letterSubmit(state, d, playerId, action.payload);
   if (d.key === 'rapid_fire') return rapidSubmit(state, d, playerId, action.payload);
+  if (d.key === 'memory_match') return memoryPick(state, d, playerId, action.payload);
   return NONE;
+}
+
+// Memory Matrix, humanbenchmark rules: one tap at a time. Hits light the cell;
+// find every lit cell to climb a rung (grid grows). 3 misses on a level costs a
+// life and deals a FRESH pattern on the same rung; 3 lives gone → out. Clearing
+// the final rung finishes the ladder. Points settle by placement at round end.
+function memoryPick(state: GameState, d: MemoryData, playerId: string, payload: unknown): ActionResult {
+  ensureMemoryPlayer(d, playerId); // late joiners start at rung 0
+  if (d.solved[playerId] || d.out[playerId]) return { changed: false, complete: false, feedback: { already: true } };
+
+  const spec = d.levels[Math.min(d.level[playerId], d.levels.length - 1)];
+  const cell = Number((payload as { cell?: unknown } | null)?.cell);
+  if (!Number.isInteger(cell) || cell < 0 || cell >= spec.grid) return NONE;
+
+  const pattern = d.pattern[playerId] ?? [];
+  const found = d.found[playerId] ?? (d.found[playerId] = []);
+  if (found.includes(cell)) return { changed: false, complete: false, feedback: { already: true } };
+
+  if (pattern.includes(cell)) {
+    found.push(cell);
+    if (found.length === pattern.length) {
+      // rung cleared → climb (or finish the ladder)
+      d.level[playerId] += 1;
+      if (d.level[playerId] >= d.levels.length) {
+        d.solved[playerId] = true;
+        d.solvedOrder.push(playerId);
+        d.doneAt[playerId] = Date.now();
+        return { changed: true, complete: allResolved(state, d), feedback: { correct: true, finished: true } };
+      }
+      dealMemoryPattern(d, playerId);
+      return { changed: true, complete: false, feedback: { correct: true, levelUp: true } };
+    }
+    return { changed: true, complete: false, feedback: { correct: true } };
+  }
+
+  // miss
+  d.misses[playerId] = (d.misses[playerId] ?? 0) + 1;
+  d.wrongTotal[playerId] = (d.wrongTotal[playerId] ?? 0) + 1;
+  if (d.misses[playerId] >= MEMORY_MISSES_PER_LIFE) {
+    d.lives[playerId] = (d.lives[playerId] ?? MEMORY_LIVES) - 1;
+    if (d.lives[playerId] <= 0) {
+      d.out[playerId] = true;
+      d.doneAt[playerId] = Date.now();
+      return { changed: true, complete: allResolved(state, d), feedback: { correct: false, out: true } };
+    }
+    dealMemoryPattern(d, playerId); // same rung, fresh pattern
+    return { changed: true, complete: false, feedback: { correct: false, lostLife: true } };
+  }
+  return { changed: true, complete: false, feedback: { correct: false } };
+}
+
+// Round over → rank the runs: most rungs cleared, then earliest finish, then
+// fewest total misses. Placement pays the usual 2×/1×/0/−1× of the cell value;
+// clearing nothing (or giving up) scores 0.
+function scoreMemoryByPlacement(state: GameState, d: MemoryData): void {
+  const runners = state.players
+    .map(p => ({
+      id: p.id,
+      cleared: d.solved[p.id] ? d.levels.length : (d.level[p.id] ?? 0),
+      doneAt: d.doneAt[p.id] ?? Number.MAX_SAFE_INTEGER,
+      wrong: d.wrongTotal[p.id] ?? 0,
+    }))
+    .filter(r => r.cleared > 0 && !d.gaveUp[r.id])
+    .sort((a, b) => b.cleared - a.cleared || a.doneAt - b.doneAt || a.wrong - b.wrong);
+  runners.forEach((r, i) => {
+    const mult = PLACEMENT_MULT[i] ?? PLACEMENT_MULT[PLACEMENT_MULT.length - 1]; // 4th+ = −1×
+    d.roundScores[r.id] = Math.round(d.value * mult);
+  });
 }
 
 function anagramSubmit(state: GameState, d: AnagramData, playerId: string, payload: unknown): ActionResult {
@@ -301,9 +442,10 @@ export function finishMiniGame(state: GameState): void {
   const d = state.miniGameData as unknown as MiniGameData | null;
   if (!d || d.status === 'results') return;
 
-  // Rapid Fire settles by finish position at the end (Anagram/Letter set their
-  // roundScores as players solve).
+  // Rapid Fire and Memory Matrix settle by finish position at the end
+  // (Anagram/Letter set their roundScores as players solve).
   if (d.key === 'rapid_fire') scoreRapidByPlacement(state, d);
+  if (d.key === 'memory_match') scoreMemoryByPlacement(state, d);
 
   // Give Up forfeits the round: a player who gave up scores 0, always.
   for (const p of state.players) if (d.gaveUp[p.id]) d.roundScores[p.id] = 0;
@@ -330,6 +472,12 @@ function resultDetail(d: MiniGameData, playerId: string): string {
     const i = d.solvedOrder.indexOf(playerId);
     if (i >= 0) return `#${i + 1} to solve`;
     return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
+  }
+  if (d.key === 'memory_match') {
+    if (d.gaveUp[playerId]) return 'gave up';
+    const cleared = d.solved[playerId] ? d.levels.length : (d.level[playerId] ?? 0);
+    if (d.solved[playerId]) return `cleared all ${d.levels.length} levels`;
+    return `cleared ${cleared}/${d.levels.length}${d.out[playerId] ? ' · out of lives' : ''}`;
   }
   if (d.key === 'letter_reveal') {
     const i = d.solvedOrder.indexOf(playerId);

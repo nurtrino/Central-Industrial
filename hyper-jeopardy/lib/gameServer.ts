@@ -589,8 +589,9 @@ function beginPlaying() {
   beginMiniGamePlaying(gameState);
   broadcast();
 
-  // Round cap: Rapid Fire is a hard 30s sprint; Anagram/Letter run 60s and can
-  // end earlier once every player is resolved (solved / done / gave up).
+  // Round cap: Rapid Fire is a hard 30s sprint; the others run 60s and can end
+  // earlier once every player is resolved (solved / done / out / gave up).
+  // Memory Matrix paces itself per player (patterns flash on each phone).
   const key = gameState.activeMiniGame?.key;
   setTimer('mg_round', key === 'rapid_fire' ? RAPID_ROUND_MS : HYPER_ROUND_MS, () => finishMini());
   // Letter Reveal also paces its own letter reveals on top of the cap.
