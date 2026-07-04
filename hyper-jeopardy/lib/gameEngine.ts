@@ -154,6 +154,8 @@ export interface GameState {
   scores: Record<string, number[]>; // history for display
   hyperClues: number[];             // clue ids that trigger HYPER MODE this round
   hyperGames: Record<number, string>; // clue id → pre-assigned mini-game key
+  hyperSeed: number;                // rolled on each hyper activation — every client
+                                    // plays the SAME start clip (seed % clip count)
   activeMiniGame: MiniGame | null;  // the mini-game running during a hyper cell
   miniGameTrivia: TriviaQuestion[] | null; // pre-fetched questions for the active mini-game
   miniGameData: Record<string, unknown> | null; // per-game runtime state (wireframe prototyping)
@@ -194,6 +196,7 @@ export function createGame(showNumber: number, airDate: string): GameState {
     scores: {},
     hyperClues: [],
     hyperGames: {},
+    hyperSeed: 0,
     activeMiniGame: null,
     miniGameTrivia: null,
     miniGameData: null,
@@ -279,6 +282,7 @@ export function selectClue(
   if (state.hyperClues.includes(clue.id)) {
     const key = state.hyperGames[clue.id];
     state.activeMiniGame = MINI_GAMES.find(g => g.key === key) ?? pickMiniGame();
+    state.hyperSeed = Math.floor(Math.random() * 1_000_000); // same start clip on every screen
     state.cluePhase = 'hyper_intro';
     state.timerEndsAt = Date.now() + HYPER_INTRO_MS;
   } else if (clue.isDailyDouble) {

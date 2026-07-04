@@ -255,11 +255,13 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
   const seq = d.patternSeq[playerId] ?? 0;
   const [showing, setShowing] = useState(true);   // pattern visible (memorize) vs hidden (recall)
   const [missAt, setMissAt] = useState<number | null>(null); // brief red flash on a missed cell
+  const [banner, setBanner] = useState<string | null>(null); // "⚡ LEVEL UP" flash in the HUD
+  const [strikeShake, setStrikeShake] = useState(false);     // hearts shake on a miss
   const pendingRef = useRef(false);
   const solved = !!d.solved[playerId];
   const out = !!d.out[playerId];
 
-  // Every new pattern (new level / lost life) → flash it, then hide.
+  // Every new pattern (new level) → flash it, then hide.
   useEffect(() => {
     if (seq === 0) return;
     setShowing(true);
@@ -283,10 +285,15 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
     if (fb.correct) {
       haptic(18);
       if (fb.finished) { playSolve(); haptic([40, 60, 80]); }
-      else if (fb.levelUp) { playSolve(); haptic(45); }
+      else if (fb.levelUp) {
+        playSolve(); haptic(45);
+        setBanner('⚡ LEVEL UP');
+        setTimeout(() => setBanner(null), 1100);
+      }
     } else if (!fb.already) {
       playWrong(); haptic([15, 55, 15]);
       setMissAt(i); setTimeout(() => setMissAt(null), 500);
+      setStrikeShake(true); setTimeout(() => setStrikeShake(false), 500);
     }
   }
 
@@ -313,13 +320,16 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
     <div className="space-y-3 text-center">
       <div className="flex items-center justify-between text-xs jeo-headline uppercase tracking-[0.2em]">
         <span className="text-[#ffd97a]">Level {lvl + 1}/{d.levels.length}</span>
-        <span className={showing ? 'text-[#ffd97a]' : 'text-blue-200/60'}>
-          {showing ? '👀 Memorize!' : `${found.size}/${spec.lit} found`}
+        <span className={banner ? 'mg-flash text-[var(--neon-lime)]' : showing ? 'text-[#ffd97a]' : 'text-blue-200/60'}>
+          {banner ?? (showing ? '👀 Memorize!' : `${found.size}/${spec.lit} found`)}
         </span>
-        <span className="text-[#ff7d92]">{'♥'.repeat(strikesLeft)}<span className="text-white/15">{'♥'.repeat(3 - strikesLeft)}</span></span>
+        <span className={`text-[#ff7d92] ${strikeShake ? 'mg-shake inline-block' : ''}`}>
+          {'♥'.repeat(strikesLeft)}<span className="text-white/15">{'♥'.repeat(3 - strikesLeft)}</span>
+        </span>
       </div>
       <div className="flex justify-center">
-        <div className="inline-grid gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {/* key={seq}: every new pattern remounts the grid so the pop-in replays */}
+        <div key={seq} className="inline-grid gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
           {Array.from({ length: spec.grid }, (_, i) => {
             const lit = (showing && pattern.has(i)) || found.has(i);
             const missed = missAt === i;
@@ -328,9 +338,10 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
                 key={i}
                 onClick={() => tap(i)}
                 disabled={showing}
+                style={lit && showing ? { animationDelay: `${(i % cols) * 40 + Math.floor(i / cols) * 30}ms` } : undefined}
                 className={`rounded-lg border transition-all duration-100 ${cols === 5 ? 'w-12 h-12' : 'w-14 h-14'} ${
                   missed ? 'mg-shake border-red-500 bg-red-500/40'
-                  : lit ? 'border-[#ffc43c] bg-[rgba(255,196,60,0.32)] shadow-[0_0_12px_rgba(255,196,60,0.5)]'
+                  : lit ? 'mg-pop border-[#ffc43c] bg-[rgba(255,196,60,0.32)] shadow-[0_0_12px_rgba(255,196,60,0.5)]'
                   : 'border-[rgba(0,229,255,0.25)] bg-[rgba(6,8,26,0.55)] active:bg-[rgba(0,229,255,0.12)]'}`}
                 aria-label={`cell ${i + 1}`}
               />

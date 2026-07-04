@@ -11,7 +11,7 @@ import HyperModal from '@/components/HyperModal';
 import type { MGFeedback } from '@/components/MiniGameController';
 import FinalJeopardy from '@/components/FinalJeopardy';
 import Rejoin from '@/components/Rejoin';
-import { playBoardFill, playGameStart, playWelcome } from '@/lib/audio';
+import { playBoardFill, playGameStart, playWelcome, preloadLasers } from '@/lib/audio';
 
 interface AnswerResult {
   playerId: string;
@@ -49,8 +49,10 @@ export default function Home() {
   // "Welcome to Hyper Jeopardy" voice cue — fires once when the app is opened
   // from the Central Industrial hub. Autoplay may be blocked on this fresh page
   // load, so playWelcome() falls back to the player's first tap/keypress.
+  // Also preload the hyper-start clips so activation fires with zero delay.
   useEffect(() => {
     playWelcome();
+    preloadLasers();
   }, []);
 
   useEffect(() => {

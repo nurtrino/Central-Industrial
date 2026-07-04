@@ -269,7 +269,7 @@ function MemoryStage({ state, d }: { state: GameState; d: MemoryData }) {
             <div className="flex-1 h-6 rounded-full bg-[rgba(6,8,26,0.7)] overflow-hidden border border-white/5">
               <div className="h-full bg-gradient-to-r from-[#ffc43c] to-[#ff7ad9] transition-all duration-300" style={{ width: `${Math.min(100, (r.cleared / totalLevels) * 100)}%` }} />
             </div>
-            <span className="w-24 jeo-value text-xl">{r.done ? 'DONE' : `L${Math.min(r.cleared + 1, totalLevels)}·${r.found}/${r.lit}`}</span>
+            <span key={r.cleared} className="w-24 jeo-value text-xl mg-pop">{r.done ? 'DONE' : `L${Math.min(r.cleared + 1, totalLevels)}·${r.found}/${r.lit}`}</span>
             <span className="w-20 text-left text-sm">
               {r.out ? <span className="text-red-300/80 jeo-headline uppercase text-xs">out</span>
                 : r.quit ? <span className="text-red-300/60 jeo-headline uppercase text-xs">gave up</span>

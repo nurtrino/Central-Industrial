@@ -236,8 +236,19 @@ export function preloadLasers(): void {
 // Play a random preloaded laser clip. Falls back to the synth zap if none are
 // loaded yet or playback is blocked.
 export function playRandomLaser(): void {
+  playLaserAt(Math.floor(Math.random() * Math.max(1, laserEls.length)));
+}
+
+// SYNCED hyper-start clip: the server rolls one seed per activation and every
+// client picks the same clip from the (sorted) manifest — so all phones and
+// the shared screen fire the identical sound together.
+export function playHyperStart(seed: number): void {
+  playLaserAt(Math.abs(Math.floor(seed)));
+}
+
+function playLaserAt(idx: number): void {
   if (!laserEls.length) { playHyper(); return; }
-  const a = laserEls[Math.floor(Math.random() * laserEls.length)];
+  const a = laserEls[idx % laserEls.length];
   try {
     a.currentTime = 0;
     a.volume = muted ? 0 : 0.85;

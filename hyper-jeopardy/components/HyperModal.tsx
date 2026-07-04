@@ -1,5 +1,7 @@
 'use client';
+import { useEffect, useRef } from 'react';
 import { GameState } from '@/lib/gameEngine';
+import { playHyperStart, preloadLasers } from '@/lib/audio';
 import MiniGameController, { type MGFeedback } from '@/components/MiniGameController';
 import type { MiniGameData } from '@/lib/miniGames';
 
@@ -25,9 +27,19 @@ interface Props {
  */
 export default function HyperModal({ state, playerId, onGiveUp, onMiniGameAction }: Props) {
   const { cluePhase, activeMiniGame } = state;
+  const prevPhaseRef = useRef<string | null>(null);
 
-  // NOTE: activation sound intentionally removed for now — the provided laser
-  // clips ran too long. Re-wire playRandomLaser() here when better clips land.
+  // Preload the hyper-start clips once so activation fires instantly.
+  useEffect(() => { preloadLasers(); }, []);
+
+  // HYPER MODE activation: play the server-seeded clip — the SAME sound as
+  // every other phone and the shared screen, in sync.
+  useEffect(() => {
+    if (prevPhaseRef.current !== 'hyper_intro' && cluePhase === 'hyper_intro') {
+      playHyperStart(state.hyperSeed ?? 0);
+    }
+    prevPhaseRef.current = cluePhase;
+  }, [cluePhase, state.hyperSeed]);
 
   if (cluePhase !== 'hyper_intro' && cluePhase !== 'hyper_active') return null;
 
