@@ -54,7 +54,6 @@ interface BaseMGData {
   roundScores: Record<string, number>; // points earned THIS round
   results: MiniGameResultRow[] | null;
   answerReveal: string | null;         // shown on the results screen
-  gaveUp: Record<string, boolean>;     // players who tapped "Give Up" this round
 }
 
 export interface AnagramData extends BaseMGData {
@@ -144,30 +143,16 @@ function connected(state: GameState) {
 }
 
 // A player is "resolved" for the round when they've finished it their game's
-// way (solved / done) OR tapped Give Up. The round ends once every connected
-// player is resolved (or the 60s cap fires — see the server orchestration).
+// way (solved / done / out). The round ends once every connected player is
+// resolved — or when the round clock runs out (see the server orchestration).
 function isResolved(d: MiniGameData, id: string): boolean {
-  if (d.gaveUp[id]) return true;
   if (d.key === 'rapid_fire') return !!d.done[id];
-  if (d.key === 'memory_match') return !!d.solved[id] || !!d.out[id]; // cleared the ladder or out of lives
+  if (d.key === 'memory_match') return !!d.solved[id] || !!d.out[id]; // cleared the ladder or struck out
   return !!d.solved[id]; // anagram_race, letter_reveal
 }
 function allResolved(state: GameState, d: MiniGameData): boolean {
   const c = connected(state);
   return c.length > 0 && c.every(p => isResolved(d, p.id));
-}
-
-// Give Up: mark this player done-with-no-score for the round. Returns whether
-// that was the last holdout (round now complete).
-export function giveUp(state: GameState, playerId: string): ActionResult {
-  const idle: ActionResult = { changed: false, complete: false, feedback: {} };
-  const d = state.miniGameData as unknown as MiniGameData | null;
-  if (!d || d.status !== 'playing') return idle;
-  if (d.key === 'rapid_fire') return idle; // Rapid Fire is a hard 30s sprint — no give up
-  if (!state.players.find(p => p.id === playerId)) return idle;
-  if (isResolved(d, playerId)) return { changed: false, complete: false, feedback: { already: true } };
-  d.gaveUp[playerId] = true;
-  return { changed: true, complete: allResolved(state, d), feedback: {} };
 }
 
 // ── init ────────────────────────────────────────────────────────────────────
@@ -186,7 +171,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.anagramScrambled = scramble(word).toUpperCase();
     const data: AnagramData = {
       key: 'anagram_race', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
+      roundScores: {}, results: null, answerReveal: null,
       scrambled: '', wordLen: word.length,
       value: state.activeClue?.value ?? 200,
       solvedOrder: [], solved: {},
@@ -198,7 +183,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.revealOrder = shuffledIndices(word.length);
     const data: LetterData = {
       key: 'letter_reveal', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
+      roundScores: {}, results: null, answerReveal: null,
       value: state.activeClue?.value ?? 200,
       wordLen: word.length, letters: Array(word.length).fill(null),
       revealCount: 0, solvedOrder: [], solved: {}, solvedAtReveal: {},
@@ -209,7 +194,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.rapidCorrect = qs.map(q => normalize(q.correct));
     const data: RapidData = {
       key: 'rapid_fire', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
+      roundScores: {}, results: null, answerReveal: null,
       category: qs[0]?.category ?? 'Trivia',
       value: state.activeClue?.value ?? 200,
       questions: qs.map(q => ({ question: q.question, choices: q.choices, category: q.category })),
@@ -219,7 +204,7 @@ export function initMiniGame(state: GameState): void {
   } else if (key === 'memory_match') {
     const data: MemoryData = {
       key: 'memory_match', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
+      roundScores: {}, results: null, answerReveal: null,
       value: state.activeClue?.value ?? 200,
       levels: MEMORY_LEVELS,
       level: {}, pattern: {}, patternSeq: {}, found: {},
@@ -278,7 +263,6 @@ export function handleMiniGameAction(
   const d = state.miniGameData as unknown as MiniGameData | null;
   if (!d || d.status !== 'playing') return NONE;
   if (!state.players.find(p => p.id === playerId)) return NONE;
-  if (d.gaveUp[playerId]) return NONE; // gave up — no more submissions this round
 
   if (d.key === 'anagram_race') return anagramSubmit(state, d, playerId, action.payload);
   if (d.key === 'letter_reveal') return letterSubmit(state, d, playerId, action.payload);
@@ -341,7 +325,7 @@ function scoreMemoryByPlacement(state: GameState, d: MemoryData): void {
       doneAt: d.doneAt[p.id] ?? Number.MAX_SAFE_INTEGER,
       wrong: d.wrongTotal[p.id] ?? 0,
     }))
-    .filter(r => r.cleared > 0 && !d.gaveUp[r.id])
+    .filter(r => r.cleared > 0)
     .sort((a, b) => b.cleared - a.cleared || a.doneAt - b.doneAt || a.wrong - b.wrong);
   runners.forEach((r, i) => {
     const mult = PLACEMENT_MULT[i] ?? PLACEMENT_MULT[PLACEMENT_MULT.length - 1]; // 4th+ = −1×
@@ -387,7 +371,7 @@ function rapidSubmit(state: GameState, d: RapidData, playerId: string, payload: 
   if (d.done[playerId]) return NONE;
   const cur = d.progress[playerId] ?? 0;
   if (Number(p.index) !== cur) return { changed: false, complete: false, feedback: { stale: true } }; // ignore stale taps
-  const isCorrect = normalize(String(p.choice ?? '')) === (mgSecret.rapidCorrect?.[cur] ?? ' ');
+  const isCorrect = normalize(String(p.choice ?? '')) === (mgSecret.rapidCorrect?.[cur] ?? '\u0000');
   // Placement scoring (like Anagram): only the tallies matter during play;
   // points are awarded by finish position at the end (scoreRapidByPlacement).
   if (isCorrect) d.correct[playerId] = (d.correct[playerId] ?? 0) + 1;
@@ -403,7 +387,7 @@ function rapidSubmit(state: GameState, d: RapidData, playerId: string, payload: 
 function scoreRapidByPlacement(state: GameState, d: RapidData): void {
   const scorers = state.players
     .map(p => ({ id: p.id, correct: d.correct[p.id] ?? 0, wrong: d.wrong[p.id] ?? 0 }))
-    .filter(r => r.correct > 0 && !d.gaveUp[r.id]) // give up → forfeit the round, 0 points
+    .filter(r => r.correct > 0)
     .sort((a, b) => b.correct - a.correct || a.wrong - b.wrong);
   scorers.forEach((r, i) => {
     const mult = PLACEMENT_MULT[i] ?? PLACEMENT_MULT[PLACEMENT_MULT.length - 1]; // 4th+ = −1×
@@ -435,9 +419,6 @@ export function finishMiniGame(state: GameState): void {
   if (d.key === 'rapid_fire') scoreRapidByPlacement(state, d);
   if (d.key === 'memory_match') scoreMemoryByPlacement(state, d);
 
-  // Give Up forfeits the round: a player who gave up scores 0, always.
-  for (const p of state.players) if (d.gaveUp[p.id]) d.roundScores[p.id] = 0;
-
   const rows: MiniGameResultRow[] = [];
   for (const p of state.players) {
     const pts = d.roundScores[p.id] ?? 0;
@@ -458,11 +439,9 @@ export function finishMiniGame(state: GameState): void {
 function resultDetail(d: MiniGameData, playerId: string): string {
   if (d.key === 'anagram_race') {
     const i = d.solvedOrder.indexOf(playerId);
-    if (i >= 0) return `#${i + 1} to solve`;
-    return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
+    return i >= 0 ? `#${i + 1} to solve` : 'did not solve';
   }
   if (d.key === 'memory_match') {
-    if (d.gaveUp[playerId]) return 'gave up';
     const cleared = d.solved[playerId] ? d.levels.length : (d.level[playerId] ?? 0);
     if (d.solved[playerId]) return `cleared all ${d.levels.length} levels`;
     return `cleared ${cleared}/${d.levels.length}${d.out[playerId] ? ' · struck out' : ''}`;
@@ -473,11 +452,10 @@ function resultDetail(d: MiniGameData, playerId: string): string {
       const hidden = d.wordLen - d.solvedAtReveal[playerId];
       return `#${i + 1} · ${hidden} hidden`;
     }
-    return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
+    return 'did not solve';
   }
   // rapid_fire
-  const tally = `${d.correct[playerId] ?? 0} ✓  ${d.wrong[playerId] ?? 0} ✗`;
-  return d.gaveUp[playerId] && !d.done[playerId] ? `${tally} · gave up` : tally;
+  return `${d.correct[playerId] ?? 0} ✓  ${d.wrong[playerId] ?? 0} ✗`;
 }
 
 function answerReveal(d: MiniGameData): string | null {

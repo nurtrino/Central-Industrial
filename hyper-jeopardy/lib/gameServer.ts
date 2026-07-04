@@ -32,7 +32,6 @@ import {
   initMiniGame,
   beginMiniGamePlaying,
   handleMiniGameAction,
-  giveUp,
   revealLetter,
   finishMiniGame,
   INTRO_MS,
@@ -386,15 +385,6 @@ export function initSocketServer(httpServer: HTTPServer) {
       }
     });
 
-    // HYPER MODE: any player can tap "Give Up". The round ends as soon as every
-    // connected player is resolved (solved / done / gave up) — or at the 60s cap.
-    socket.on('give_up', () => {
-      if (!gameState) return;
-      const res = giveUp(gameState, socket.id);
-      if (res.changed) broadcast();
-      if (res.complete) finishMini();
-    });
-
     // Mini-game action channel: routes a player's move to the active game's
     // logic, acks immediate feedback (correct/wrong/points) for the phone, and
     // finishes the round the moment every player is done.
@@ -590,7 +580,7 @@ function beginPlaying() {
   broadcast();
 
   // Round cap: Rapid Fire is a hard 30s sprint; the others run 60s and can end
-  // earlier once every player is resolved (solved / done / out / gave up).
+  // earlier once every player is resolved (solved / done / out).
   // Memory Matrix paces itself per player (patterns flash on each phone).
   const key = gameState.activeMiniGame?.key;
   setTimer('mg_round', key === 'rapid_fire' ? RAPID_ROUND_MS : HYPER_ROUND_MS, () => finishMini());

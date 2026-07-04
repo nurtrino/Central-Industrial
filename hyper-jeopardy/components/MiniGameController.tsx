@@ -35,7 +35,6 @@ export default function MiniGameController({ state, playerId, onAction }: Props)
 
   if (d.status === 'results') return <ResultsView d={d} playerId={playerId} />;
   if (d.status === 'intro') return <IntroCtl d={d} />;
-  if (d.gaveUp?.[playerId]) return <GaveUp />;
   if (d.key === 'anagram_race') return <AnagramCtl d={d} playerId={playerId} onAction={onAction} />;
   if (d.key === 'rapid_fire') return <RapidCtl d={d} playerId={playerId} onAction={onAction} />;
   if (d.key === 'letter_reveal') return <LetterCtl d={d} playerId={playerId} onAction={onAction} />;
@@ -354,15 +353,6 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
 }
 
 /* ── shared bits ──────────────────────────────────────────────────────────── */
-function GaveUp() {
-  return (
-    <div className="text-center space-y-2 py-6">
-      <p className="hyper-title text-3xl opacity-80">Gave up</p>
-      <p className="text-blue-200/60 text-sm jeo-headline uppercase tracking-[0.2em]">Waiting for the round…</p>
-    </div>
-  );
-}
-
 function Solved({ points, sub }: { points: number; sub: string }) {
   return (
     <div className="text-center space-y-2 py-4">
