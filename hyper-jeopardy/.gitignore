@@ -44,6 +44,8 @@ next-env.d.ts
 /data/*.db
 /data/*.db-shm
 /data/*.db-wal
+# runtime in-progress game snapshot (persistence) — never commit
+/data/game-state.json
 # seed.json is committed intentionally — do NOT add data/seed.json here
 *.rar
 

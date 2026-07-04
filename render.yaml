@@ -122,9 +122,20 @@ services:
     autoDeploy: true
     domains:
       - jeopardy.centralindustrial.ai
+    # Persistent disk for durable state: the accounts/leaderboard store and the
+    # in-progress game snapshot both write under DATA_DIR (=/var/data). It
+    # survives restarts, redeploys, and cold starts, so a game in progress and
+    # the leaderboard aren't lost when the service bounces. Mounted at its own
+    # path — NOT over the image's data/ dir — so it never shadows data/seed.json.
+    disk:
+      name: hyper-jeopardy-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - fromGroup: central-industrial-auth   # shared AUTH_SECRET → turns the gate on
       - key: NODE_ENV
         value: production
       - key: HOME_URL           # where the gate bounces unauthenticated visitors
         value: https://centralindustrial.ai
+      - key: DATA_DIR           # writable state → the persistent disk (above)
+        value: /var/data

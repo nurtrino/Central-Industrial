@@ -14,12 +14,14 @@
 // This boundary is what stops a one-off lobby rename or guest join from
 // spawning a duplicate/phantom account.
 //
-// File-backed at data/accounts.json with a one-time migration from the older
-// leaderboard.json shape. Render's free tier has an ephemeral disk, so cold
-// restarts revert to the seed — move to a real store when that matters.
+// File-backed at DATA_DIR/accounts.json with a one-time migration from the older
+// leaderboard.json shape. DATA_DIR is a persistent disk on Render (see
+// lib/dataDir.ts), so wins now survive restarts/redeploys; on an empty disk the
+// SEED below bootstraps it.
 
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR, ensureDataDir } from './dataDir';
 
 export interface Account {
   id: string;
@@ -29,8 +31,8 @@ export interface Account {
   createdAt: number;
 }
 
-const ACCOUNTS_FILE = path.join(process.cwd(), 'data', 'accounts.json');
-const LEGACY_LEADERBOARD_FILE = path.join(process.cwd(), 'data', 'leaderboard.json');
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
+const LEGACY_LEADERBOARD_FILE = path.join(DATA_DIR, 'leaderboard.json');
 
 // Seeded with the user's regulars. Stable ids so refs survive renames.
 // These account NAMES are authoritative: reconcileSeedNames() re-applies
@@ -55,13 +57,8 @@ function reconcileSeedNames(accounts: Account[]): boolean {
   return changed;
 }
 
-function ensureDir(): void {
-  const dir = path.dirname(ACCOUNTS_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function loadRaw(): Account[] {
-  ensureDir();
+  ensureDataDir();
   if (fs.existsSync(ACCOUNTS_FILE)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8')) as Account[];
@@ -104,7 +101,7 @@ function loadRaw(): Account[] {
 }
 
 function save(accounts: Account[]): void {
-  ensureDir();
+  ensureDataDir();
   fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2));
 }
 

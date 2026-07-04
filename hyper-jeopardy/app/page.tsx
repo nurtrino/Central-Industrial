@@ -11,7 +11,7 @@ import HyperModal from '@/components/HyperModal';
 import type { MGFeedback } from '@/components/MiniGameController';
 import FinalJeopardy from '@/components/FinalJeopardy';
 import Rejoin from '@/components/Rejoin';
-import { playBoardFill, playGameStart } from '@/lib/audio';
+import { playBoardFill, playGameStart, playWelcome } from '@/lib/audio';
 
 interface AnswerResult {
   playerId: string;
@@ -33,6 +33,10 @@ export default function Home() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [revealHyper, setRevealHyper] = useState(false);
   const lastBoardPhaseRef = useRef<string | null>(null);
+  // Remembers how we joined so we can silently re-join after a socket reconnect
+  // (socket.io hands us a NEW socket.id, but the server still has our player
+  // record under the OLD id until we re-emit `join`).
+  const joinParamsRef = useRef<{ name: string; avatar?: string; accountId?: string } | null>(null);
 
   // Testing phase: hyper (mini-game) cells are marked on the board BY DEFAULT so
   // they can be activated in rapid succession. Add ?reveal=off (or ?hide) to
@@ -42,11 +46,28 @@ export default function Home() {
     setRevealHyper(!(q.get('reveal') === 'off' || q.has('hide')));
   }, []);
 
+  // "Welcome to Hyper Jeopardy" voice cue — fires once when the app is opened
+  // from the Central Industrial hub. Autoplay may be blocked on this fresh page
+  // load, so playWelcome() falls back to the player's first tap/keypress.
+  useEffect(() => {
+    playWelcome();
+  }, []);
+
   useEffect(() => {
     const s = getSocket();
     setSocket(s);
 
-    s.on('connect', () => setConnected(true));
+    s.on('connect', () => {
+      setConnected(true);
+      // Reconnect recovery: after a dropped connection socket.io reconnects with
+      // a NEW socket.id. Re-emit `join` so the server re-attaches our player
+      // record (by accountId/name) to the new id — otherwise host-only actions
+      // like Start Game, plus buzzing and clue selection, silently no-op because
+      // the server matches every action by socket.id. (No-op on the first
+      // connect: joinParamsRef is null until the user actually joins.)
+      const jp = joinParamsRef.current;
+      if (jp) s.emit('join', { name: jp.name, avatar: jp.avatar, accountId: jp.accountId });
+    });
     s.on('disconnect', () => setConnected(false));
     s.on('state', (newState: GameState) => setState(newState));
     s.on('joined', ({ playerId: pid, player: p }: { playerId: string; player: Player }) => {
@@ -96,6 +117,7 @@ export default function Home() {
   }, [state, playerId]);
 
   const handleJoin = useCallback((name: string, avatar?: string, accountId?: string) => {
+    joinParamsRef.current = { name, avatar, accountId };
     socket?.emit('join', { name, isHost: !state?.players?.length, avatar, accountId });
   }, [socket, state]);
 
@@ -305,20 +327,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Scoreboard — desktop: top, full size */}
-      <div className="hidden sm:block py-4 px-4 bg-[rgba(8,10,30,0.4)] border-b border-[rgba(0,229,255,0.12)]">
-        <div className="max-w-6xl mx-auto">
-          <Scoreboard
-            players={state.players}
-            currentPlayerId={playerId}
-            buzzedPlayerId={state.buzzedPlayerId}
-            compact={false}
-            isHost={!!player?.isHost}
-            onSetScore={handleSetScore}
-          />
-        </div>
-      </div>
-
       {/* Board */}
       <div className="flex-1 p-2 sm:p-4">
         <div className="max-w-6xl mx-auto">
@@ -331,6 +339,20 @@ export default function Home() {
               revealHyper={revealHyper}
             />
           )}
+        </div>
+      </div>
+
+      {/* Scoreboard — desktop: bottom row, full size */}
+      <div className="hidden sm:block py-4 px-4 bg-[rgba(8,10,30,0.4)] border-t border-[rgba(0,229,255,0.12)]">
+        <div className="max-w-6xl mx-auto">
+          <Scoreboard
+            players={state.players}
+            currentPlayerId={playerId}
+            buzzedPlayerId={state.buzzedPlayerId}
+            compact={false}
+            isHost={!!player?.isHost}
+            onSetScore={handleSetScore}
+          />
         </div>
       </div>
 
