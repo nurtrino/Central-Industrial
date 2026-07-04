@@ -7,7 +7,7 @@ import { playSolve, playWrong, haptic } from '@/lib/audio';
 export interface MGFeedback {
   correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean;
   // Memory Matrix extras:
-  levelUp?: boolean; finished?: boolean; lostLife?: boolean; out?: boolean;
+  levelUp?: boolean; finished?: boolean; out?: boolean;
 }
 type Action = { type: string; payload?: unknown };
 
@@ -72,7 +72,7 @@ function IntroCtl({ d }: { d: MiniGameData }) {
       )}
       {d.key === 'memory_match' && (
         <>
-          <p className="text-blue-100/90 text-base leading-snug">Tiles flash, then hide — tap them all from memory. Levels grow 4×4→5×5. 3 misses = −1 life, 3 lives. Climb furthest!</p>
+          <p className="text-blue-100/90 text-base leading-snug">Tiles flash, then hide — tap them all from memory. Levels grow 4×4→5×5. 3 wrong guesses and you&apos;re out. Climb furthest!</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
@@ -245,10 +245,10 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
 }
 
 /* ── Memory Matrix ────────────────────────────────────────────────────────── */
-// humanbenchmark.com/tests/memory rules, run per player on their own phone:
+// humanbenchmark.com/tests/memory style, run per player on their own phone:
 // the pattern flashes ~1.6s, hides, then tap every lit cell from memory. Hits
-// stay lit; 3 misses on a level costs a life and deals a fresh pattern; 3
-// lives gone → out. Clear the final 5×5/8 rung to finish the ladder.
+// stay lit; 3 wrong guesses at ANY time across the run → out. Clear the final
+// 5×5/8 rung to finish the ladder.
 const MEMORY_FLASH_MS = 1600;
 
 function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string; onAction: Props['onAction'] }) {
@@ -273,7 +273,7 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
   const cols = Math.round(Math.sqrt(spec.grid));
   const pattern = new Set(d.pattern[playerId] ?? []);
   const found = new Set(d.found[playerId] ?? []);
-  const lives = d.lives[playerId] ?? 3;
+  const strikesLeft = Math.max(0, 3 - (d.wrongTotal[playerId] ?? 0));
 
   async function tap(i: number) {
     if (showing || pendingRef.current || found.has(i)) return;
@@ -316,7 +316,7 @@ function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string;
         <span className={showing ? 'text-[#ffd97a]' : 'text-blue-200/60'}>
           {showing ? '👀 Memorize!' : `${found.size}/${spec.lit} found`}
         </span>
-        <span className="text-[#ff7d92]">{'♥'.repeat(lives)}<span className="text-white/15">{'♥'.repeat(Math.max(0, 3 - lives))}</span></span>
+        <span className="text-[#ff7d92]">{'♥'.repeat(strikesLeft)}<span className="text-white/15">{'♥'.repeat(3 - strikesLeft)}</span></span>
       </div>
       <div className="flex justify-center">
         <div className="inline-grid gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>

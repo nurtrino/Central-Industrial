@@ -101,7 +101,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
       {d.key === 'memory_match' && (
         <div className="space-y-6">
           <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
-            Tiles flash on your phone — find them all from memory. Clear a level and it grows: 4×4 with 5 lit up to 5×5 with 8. Three misses costs a life, three lives and you&apos;re out. Climb furthest, fastest.
+            Tiles flash on your phone — find them all from memory. Clear a level and it grows: 4×4 with 5 lit up to 5×5 with 8. Three wrong guesses and you&apos;re out. Climb furthest, fastest.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
             {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
@@ -248,7 +248,7 @@ function MemoryStage({ state, d }: { state: GameState; d: MemoryData }) {
       return {
         id: p.id, name: p.name, cleared,
         found: (d.found[p.id] ?? []).length, lit: spec.lit,
-        lives: d.lives[p.id] ?? 3,
+        strikesLeft: Math.max(0, 3 - (d.wrongTotal[p.id] ?? 0)),
         done: !!d.solved[p.id], out: !!d.out[p.id],
         quit: !!d.gaveUp?.[p.id] && !d.solved[p.id],
       };
@@ -273,7 +273,7 @@ function MemoryStage({ state, d }: { state: GameState; d: MemoryData }) {
             <span className="w-20 text-left text-sm">
               {r.out ? <span className="text-red-300/80 jeo-headline uppercase text-xs">out</span>
                 : r.quit ? <span className="text-red-300/60 jeo-headline uppercase text-xs">gave up</span>
-                : <span className="text-[#ff7d92]">{'♥'.repeat(Math.max(0, r.lives))}<span className="text-white/15">{'♥'.repeat(Math.max(0, 3 - r.lives))}</span></span>}
+                : <span className="text-[#ff7d92]">{'♥'.repeat(r.strikesLeft)}<span className="text-white/15">{'♥'.repeat(3 - r.strikesLeft)}</span></span>}
             </span>
           </div>
         ))}
