@@ -12,7 +12,8 @@ import { ANAGRAM_WORDS, FIVE_LETTER_WORDS, randomWord, scramble } from './wordBa
 
 // ── timing / scoring ────────────────────────────────────────────────────────
 export const INTRO_MS = 5_000;   // rules screen shown on all screens before play
-export const ANAGRAM_MS = 45_000;
+export const ANAGRAM_MS = 40_000;        // max round length if nobody solves
+export const ANAGRAM_LASTCALL_MS = 10_000; // once the 1st player solves, collapse to this
 export const RAPID_MS = 45_000;
 export const REVEAL_INTERVAL_MS = 4_500;
 export const LETTER_GRACE_MS = 6_000;
@@ -79,7 +80,8 @@ export type MiniGameData = AnagramData | RapidData | LetterData;
 export interface ActionResult {
   changed: boolean;   // did broadcast-worthy state change
   complete: boolean;  // did the round just finish (all players done)
-  feedback: { correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean };
+  feedback: { correct?: boolean; points?: number; place?: number; invalid?: boolean; already?: boolean; stale?: boolean };
+  rescheduleRoundMs?: number; // ask the server to re-arm the round timer (Anagram first-solve collapse)
 }
 
 // ── server-only secrets ─────────────────────────────────────────────────────
@@ -205,7 +207,19 @@ function anagramSubmit(state: GameState, d: AnagramData, playerId: string, paylo
     const mult = ANAGRAM_MULT[place] ?? ANAGRAM_MULT[ANAGRAM_MULT.length - 1]; // 4th+ = −1×
     const pts = Math.round(d.value * mult);
     d.roundScores[playerId] = pts;
-    return { changed: true, complete: allSolved(state, d.solved), feedback: { correct: true, points: pts } };
+    const complete = allSolved(state, d.solved);
+
+    // Snappiness: the moment the FIRST player solves, collapse the round to a
+    // short last-call window so it doesn't drag while others are still typing.
+    let rescheduleRoundMs: number | undefined;
+    if (!complete && d.solvedOrder.length === 1) {
+      const collapsed = Date.now() + ANAGRAM_LASTCALL_MS;
+      if (d.endsAt == null || collapsed < d.endsAt) {
+        d.endsAt = collapsed;
+        rescheduleRoundMs = ANAGRAM_LASTCALL_MS;
+      }
+    }
+    return { changed: true, complete, feedback: { correct: true, points: pts, place: place + 1 }, rescheduleRoundMs };
   }
   return { changed: false, complete: false, feedback: { correct: false } };
 }

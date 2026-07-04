@@ -117,6 +117,31 @@ export function playBoardFill(): void {
   playSample('/sounds/board-fill.mp3', 0.55);
 }
 
+// === Mini-game juice =========================================================
+
+// A bright ascending chime — plays on the solver's phone when they nail it.
+export function playSolve(): void {
+  scheduleNote({ freq: 784,  start: 0.0,  dur: 0.10, type: 'triangle', gain: 0.22 });
+  scheduleNote({ freq: 1047, start: 0.09, dur: 0.10, type: 'triangle', gain: 0.22 });
+  scheduleNote({ freq: 1568, start: 0.18, dur: 0.22, type: 'triangle', gain: 0.24 });
+}
+
+// A short fanfare for the shared screen when the FIRST player solves.
+export function playMiniCelebrate(): void {
+  scheduleNote({ freq: 523,  start: 0.00, dur: 0.09, type: 'square',   gain: 0.16 });
+  scheduleNote({ freq: 784,  start: 0.08, dur: 0.09, type: 'square',   gain: 0.16 });
+  scheduleNote({ freq: 1047, start: 0.16, dur: 0.10, type: 'square',   gain: 0.18 });
+  scheduleNote({ freq: 1319, start: 0.26, dur: 0.30, type: 'triangle', gain: 0.22 });
+  scheduleNote({ freq: 1976, start: 0.30, dur: 0.26, type: 'triangle', gain: 0.14 });
+}
+
+// Phone haptic feedback (no-op where unsupported, e.g. desktop / iOS Safari).
+export function haptic(pattern: number | number[]): void {
+  if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    try { navigator.vibrate(pattern); } catch { /* ignore */ }
+  }
+}
+
 // The "Welcome to Hyper Jeopardy" voice clip — plays once when the app is
 // first opened from the Central Industrial hub. Because the hub launches the
 // tool via a full same-window navigation, the click gesture does NOT carry

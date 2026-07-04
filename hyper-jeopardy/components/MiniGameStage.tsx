@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '@/lib/gameEngine';
 import type { AnagramData, RapidData, LetterData, MiniGameData, MiniGameResultRow } from '@/lib/miniGames';
+import { playMiniCelebrate } from '@/lib/audio';
 
 // The shared-screen ("TV") view of a HYPER MODE mini-game — a wireframe pass,
 // styled with the space theme. Renders the live board per game, then a results
@@ -99,11 +100,38 @@ function IntroPanel({ d }: { d: MiniGameData }) {
 
 /* ── Anagram Race ─────────────────────────────────────────────────────────── */
 function AnagramStage({ state, d }: { state: GameState; d: AnagramData }) {
+  const [flash, setFlash] = useState<{ name: string; pts: number } | null>(null);
+  const seen = useRef(0);
+  useEffect(() => {
+    const n = d.solvedOrder.length;
+    if (n > seen.current) {
+      if (seen.current === 0) {
+        // first solver → celebrate loudly on the shared screen
+        const id = d.solvedOrder[0];
+        const p = state.players.find(x => x.id === id);
+        playMiniCelebrate();
+        setFlash({ name: p?.name ?? 'Someone', pts: d.roundScores[id] ?? 0 });
+        setTimeout(() => setFlash(null), 2200);
+      }
+      seen.current = n;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.solvedOrder.length]);
+
   return (
-    <div className="space-y-8 text-center">
+    <div className="space-y-6 text-center">
+      {/* reserved slot so the celebration banner never overlaps the tiles or shifts layout */}
+      <div className="min-h-[3.25rem] flex items-center justify-center">
+        {flash && (
+          <div className="mg-flash flex items-center gap-3 whitespace-nowrap px-6 py-2.5 rounded-2xl border border-[var(--neon-lime)] bg-[rgba(125,255,178,0.12)] shadow-[0_0_34px_rgba(125,255,178,0.35)]">
+            <span className="jeo-headline uppercase tracking-widest text-[var(--neon-lime)] text-lg sm:text-2xl">🏆 {flash.name} solved first!</span>
+            <span className="jeo-value text-xl sm:text-3xl text-[var(--neon-lime)]">{fmtPts(flash.pts)}</span>
+          </div>
+        )}
+      </div>
       <div className="flex justify-center gap-2 sm:gap-3 flex-wrap">
         {d.scrambled.split('').map((ch, i) => (
-          <span key={i} className="jeo-tile v3 rounded-xl w-14 h-16 sm:w-20 sm:h-24 flex items-center justify-center jeo-value text-3xl sm:text-5xl">
+          <span key={i} className="jeo-tile v3 mg-pop rounded-xl w-14 h-16 sm:w-20 sm:h-24 flex items-center justify-center jeo-value text-3xl sm:text-5xl" style={{ animationDelay: `${i * 55}ms` }}>
             {ch}
           </span>
         ))}

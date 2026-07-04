@@ -411,6 +411,9 @@ export function initSocketServer(httpServer: HTTPServer) {
       const res = handleMiniGameAction(gameState, socket.id, action || { type: '' });
       ack?.(res.feedback);
       if (res.changed) broadcast();
+      // A game can collapse its own round clock (e.g. Anagram's first-solve
+      // last-call) — re-arm the round timer to match the new endsAt.
+      if (res.rescheduleRoundMs != null) setTimer('mg_round', res.rescheduleRoundMs, () => finishMini());
       if (res.complete) finishMini();
     });
 

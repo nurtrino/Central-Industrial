@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '@/lib/gameEngine';
 import type { AnagramData, RapidData, LetterData, MiniGameData } from '@/lib/miniGames';
+import { playSolve, playWrong, haptic } from '@/lib/audio';
 
 export interface MGFeedback { correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean }
 type Action = { type: string; payload?: unknown };
@@ -63,13 +64,16 @@ function IntroCtl({ d }: { d: MiniGameData }) {
 function AnagramCtl({ d, playerId, onAction }: { d: AnagramData; playerId: string; onAction: Props['onAction'] }) {
   const [guess, setGuess] = useState('');
   const [wrong, setWrong] = useState(false);
+  const [pending, setPending] = useState(false);
   const solved = !!d.solved[playerId];
 
   async function submit() {
-    if (!guess.trim()) return;
+    if (pending || !guess.trim()) return;
+    setPending(true);
     const fb = await onAction({ type: 'guess', payload: guess });
-    if (fb.correct) setGuess('');
-    else { setWrong(true); setTimeout(() => setWrong(false), 500); }
+    setPending(false);
+    if (fb.correct) { setGuess(''); playSolve(); haptic(35); }
+    else { setWrong(true); playWrong(); haptic([15, 55, 15]); setTimeout(() => setWrong(false), 450); }
   }
 
   if (solved) return <Solved points={d.roundScores[playerId] ?? 0} sub={`#${d.solvedOrder.indexOf(playerId) + 1} to solve`} />;
@@ -77,16 +81,16 @@ function AnagramCtl({ d, playerId, onAction }: { d: AnagramData; playerId: strin
     <div className="space-y-4">
       <div className="flex justify-center gap-1.5 flex-wrap">
         {d.scrambled.split('').map((c, i) => (
-          <span key={i} className="jeo-tile v3 rounded-md w-9 h-11 flex items-center justify-center jeo-value text-xl">{c}</span>
+          <span key={i} className="jeo-tile v3 mg-pop rounded-md w-9 h-11 flex items-center justify-center jeo-value text-xl" style={{ animationDelay: `${i * 45}ms` }}>{c}</span>
         ))}
       </div>
       <input
-        className={`jeo-input w-full px-4 py-3 rounded-lg text-xl text-center uppercase tracking-widest ${wrong ? 'border-red-500' : ''}`}
+        className={`jeo-input w-full px-4 py-3 rounded-lg text-xl text-center uppercase tracking-widest ${wrong ? 'border-red-500 mg-shake' : ''}`}
         placeholder="Your answer" value={guess} autoFocus autoCapitalize="characters"
         onChange={e => setGuess(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && submit()}
       />
-      <button onClick={submit} className="jeo-btn-gold w-full py-3 rounded-lg text-lg">Solve</button>
+      <button onClick={submit} disabled={pending} className="jeo-btn-gold w-full py-3 rounded-lg text-lg disabled:opacity-60">Solve</button>
       {wrong && <p className="text-center text-red-400 jeo-headline uppercase tracking-widest text-sm">Not it — keep trying</p>}
     </div>
   );
