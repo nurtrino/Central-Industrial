@@ -11,10 +11,9 @@ import type { GameState } from './gameEngine';
 import { ANAGRAM_WORDS, FIVE_LETTER_WORDS, randomWord, scramble } from './wordBanks';
 
 // ── timing / scoring ────────────────────────────────────────────────────────
-export const INTRO_MS = 5_000;   // rules screen shown on all screens before play
-export const ANAGRAM_MS = 40_000;        // max round length if nobody solves
-export const ANAGRAM_LASTCALL_MS = 10_000; // once the 1st player solves, collapse to this
-export const RAPID_MS = 45_000;
+export const INTRO_MS = 5_000;        // rules screen shown on all screens before play
+export const HYPER_ROUND_MS = 60_000; // hyper round cap: ends at 60s, or as soon as
+                                       // every player is resolved (solved / done / gave up)
 export const REVEAL_INTERVAL_MS = 4_500;
 export const LETTER_GRACE_MS = 6_000;
 export const RESULTS_MS = 6_500;
@@ -43,6 +42,7 @@ interface BaseMGData {
   roundScores: Record<string, number>; // points earned THIS round
   results: MiniGameResultRow[] | null;
   answerReveal: string | null;         // shown on the results screen
+  gaveUp: Record<string, boolean>;     // players who tapped "Give Up" this round
 }
 
 export interface AnagramData extends BaseMGData {
@@ -79,9 +79,8 @@ export type MiniGameData = AnagramData | RapidData | LetterData;
 
 export interface ActionResult {
   changed: boolean;   // did broadcast-worthy state change
-  complete: boolean;  // did the round just finish (all players done)
-  feedback: { correct?: boolean; points?: number; place?: number; invalid?: boolean; already?: boolean; stale?: boolean };
-  rescheduleRoundMs?: number; // ask the server to re-arm the round timer (Anagram first-solve collapse)
+  complete: boolean;  // did the round just finish (every player resolved)
+  feedback: { correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean };
 }
 
 // ── server-only secrets ─────────────────────────────────────────────────────
@@ -110,9 +109,29 @@ function connected(state: GameState) {
   return state.players.filter(p => p.connected);
 }
 
-function allSolved(state: GameState, solved: Record<string, boolean>): boolean {
+// A player is "resolved" for the round when they've finished it their game's
+// way (solved / done) OR tapped Give Up. The round ends once every connected
+// player is resolved (or the 60s cap fires — see the server orchestration).
+function isResolved(d: MiniGameData, id: string): boolean {
+  if (d.gaveUp[id]) return true;
+  if (d.key === 'rapid_fire') return !!d.done[id];
+  return !!d.solved[id]; // anagram_race, letter_reveal
+}
+function allResolved(state: GameState, d: MiniGameData): boolean {
   const c = connected(state);
-  return c.length > 0 && c.every(p => solved[p.id]);
+  return c.length > 0 && c.every(p => isResolved(d, p.id));
+}
+
+// Give Up: mark this player done-with-no-score for the round. Returns whether
+// that was the last holdout (round now complete).
+export function giveUp(state: GameState, playerId: string): ActionResult {
+  const idle: ActionResult = { changed: false, complete: false, feedback: {} };
+  const d = state.miniGameData as unknown as MiniGameData | null;
+  if (!d || d.status !== 'playing') return idle;
+  if (!state.players.find(p => p.id === playerId)) return idle;
+  if (isResolved(d, playerId)) return { changed: false, complete: false, feedback: { already: true } };
+  d.gaveUp[playerId] = true;
+  return { changed: true, complete: allResolved(state, d), feedback: {} };
 }
 
 // ── init ────────────────────────────────────────────────────────────────────
@@ -131,7 +150,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.anagramScrambled = scramble(word).toUpperCase();
     const data: AnagramData = {
       key: 'anagram_race', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null,
+      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
       scrambled: '', wordLen: word.length,
       value: state.activeClue?.value ?? 200,
       solvedOrder: [], solved: {},
@@ -143,7 +162,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.revealOrder = shuffledIndices(word.length);
     const data: LetterData = {
       key: 'letter_reveal', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null,
+      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
       wordLen: word.length, letters: Array(word.length).fill(null),
       revealCount: 0, solved: {}, solvedAtReveal: {},
     };
@@ -153,7 +172,7 @@ export function initMiniGame(state: GameState): void {
     mgSecret.rapidCorrect = qs.map(q => normalize(q.correct));
     const data: RapidData = {
       key: 'rapid_fire', status: 'intro', endsAt: introEndsAt,
-      roundScores: {}, results: null, answerReveal: null,
+      roundScores: {}, results: null, answerReveal: null, gaveUp: {},
       category: qs[0]?.category ?? 'Trivia',
       questions: qs.map(q => ({ question: q.question, choices: q.choices, category: q.category })),
       total: qs.length, progress: {}, correct: {}, wrong: {}, done: {},
@@ -170,11 +189,11 @@ export function beginMiniGamePlaying(state: GameState): void {
   const now = Date.now();
   if (d.key === 'anagram_race') {
     d.scrambled = mgSecret.anagramScrambled ?? '';
-    d.endsAt = now + ANAGRAM_MS;
+    d.endsAt = now + HYPER_ROUND_MS;
   } else if (d.key === 'rapid_fire') {
-    d.endsAt = now + RAPID_MS;
+    d.endsAt = now + HYPER_ROUND_MS;
   } else if (d.key === 'letter_reveal') {
-    d.endsAt = null; // reveal-paced, no fixed round clock
+    d.endsAt = null; // reveal-paced; the 60s cap is a silent backstop
   }
 }
 
@@ -189,6 +208,7 @@ export function handleMiniGameAction(
   const d = state.miniGameData as unknown as MiniGameData | null;
   if (!d || d.status !== 'playing') return NONE;
   if (!state.players.find(p => p.id === playerId)) return NONE;
+  if (d.gaveUp[playerId]) return NONE; // gave up — no more submissions this round
 
   if (d.key === 'anagram_race') return anagramSubmit(state, d, playerId, action.payload);
   if (d.key === 'letter_reveal') return letterSubmit(state, d, playerId, action.payload);
@@ -207,19 +227,7 @@ function anagramSubmit(state: GameState, d: AnagramData, playerId: string, paylo
     const mult = ANAGRAM_MULT[place] ?? ANAGRAM_MULT[ANAGRAM_MULT.length - 1]; // 4th+ = −1×
     const pts = Math.round(d.value * mult);
     d.roundScores[playerId] = pts;
-    const complete = allSolved(state, d.solved);
-
-    // Snappiness: the moment the FIRST player solves, collapse the round to a
-    // short last-call window so it doesn't drag while others are still typing.
-    let rescheduleRoundMs: number | undefined;
-    if (!complete && d.solvedOrder.length === 1) {
-      const collapsed = Date.now() + ANAGRAM_LASTCALL_MS;
-      if (d.endsAt == null || collapsed < d.endsAt) {
-        d.endsAt = collapsed;
-        rescheduleRoundMs = ANAGRAM_LASTCALL_MS;
-      }
-    }
-    return { changed: true, complete, feedback: { correct: true, points: pts, place: place + 1 }, rescheduleRoundMs };
+    return { changed: true, complete: allResolved(state, d), feedback: { correct: true, points: pts } };
   }
   return { changed: false, complete: false, feedback: { correct: false } };
 }
@@ -233,7 +241,7 @@ function letterSubmit(state: GameState, d: LetterData, playerId: string, payload
     d.solvedAtReveal[playerId] = d.revealCount;
     const pts = LETTER_AWARDS[Math.min(d.revealCount, LETTER_AWARDS.length - 1)];
     d.roundScores[playerId] = pts;
-    return { changed: true, complete: allSolved(state, d.solved), feedback: { correct: true, points: pts } };
+    return { changed: true, complete: allResolved(state, d), feedback: { correct: true, points: pts } };
   }
   return { changed: false, complete: false, feedback: { correct: false } };
 }
@@ -249,9 +257,7 @@ function rapidSubmit(state: GameState, d: RapidData, playerId: string, payload: 
   else d.wrong[playerId] = (d.wrong[playerId] ?? 0) + 1;
   d.progress[playerId] = cur + 1;
   if (d.progress[playerId] >= d.total) d.done[playerId] = true;
-  const c = connected(state);
-  const complete = c.length > 0 && c.every(pl => d.done[pl.id]);
-  return { changed: true, complete, feedback: { correct: isCorrect, points: d.roundScores[playerId] } };
+  return { changed: true, complete: allResolved(state, d), feedback: { correct: isCorrect, points: d.roundScores[playerId] } };
 }
 
 // ── letter reveal tick ──────────────────────────────────────────────────────
@@ -293,14 +299,18 @@ export function finishMiniGame(state: GameState): void {
 function resultDetail(d: MiniGameData, playerId: string): string {
   if (d.key === 'anagram_race') {
     const i = d.solvedOrder.indexOf(playerId);
-    return i >= 0 ? `#${i + 1} to solve` : 'did not solve';
+    if (i >= 0) return `#${i + 1} to solve`;
+    return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
   }
   if (d.key === 'letter_reveal') {
-    if (!d.solved[playerId]) return 'did not solve';
-    const hidden = d.wordLen - d.solvedAtReveal[playerId];
-    return `solved with ${hidden} hidden`;
+    if (d.solved[playerId]) {
+      const hidden = d.wordLen - d.solvedAtReveal[playerId];
+      return `solved with ${hidden} hidden`;
+    }
+    return d.gaveUp[playerId] ? 'gave up' : 'did not solve';
   }
   // rapid_fire
+  if (d.gaveUp[playerId] && !d.done[playerId]) return 'gave up';
   return `${d.correct[playerId] ?? 0} ✓  ${d.wrong[playerId] ?? 0} ✗`;
 }
 

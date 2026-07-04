@@ -164,7 +164,7 @@ const READING_DELAY_MS = 6_000;
 const REVEAL_PAUSE_MS = 3_000;
 const DD_ANSWER_MS = 30_000;
 export const HYPER_INTRO_MS = 3_500;   // activation splash duration
-export const HYPER_MAX_MS = 120_000;   // safety cap so a placeholder can't hang the board
+export const HYPER_MAX_MS = 75_000;    // absolute safety cap (5s rules + 60s round + buffer)
 
 export function createGame(showNumber: number, airDate: string): GameState {
   return {

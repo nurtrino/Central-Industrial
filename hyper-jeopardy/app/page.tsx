@@ -169,7 +169,7 @@ export default function Home() {
     socket?.emit('select_clue', { catIdx, clueIdx });
   }, [socket]);
 
-  const handleEndHyper = useCallback(() => socket?.emit('end_hyper'), [socket]);
+  const handleGiveUp = useCallback(() => socket?.emit('give_up'), [socket]);
 
   // Emit a mini-game move and resolve with the server's ack (correct/wrong/points).
   const handleMiniGameAction = useCallback(
@@ -380,7 +380,7 @@ export default function Home() {
       />
 
       {/* Hyper Mode overlay */}
-      <HyperModal state={state} playerId={playerId} onEndHyper={handleEndHyper} onMiniGameAction={handleMiniGameAction} />
+      <HyperModal state={state} playerId={playerId} onGiveUp={handleGiveUp} onMiniGameAction={handleMiniGameAction} />
     </div>
   );
 }

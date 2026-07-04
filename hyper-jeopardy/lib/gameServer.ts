@@ -32,11 +32,11 @@ import {
   initMiniGame,
   beginMiniGamePlaying,
   handleMiniGameAction,
+  giveUp,
   revealLetter,
   finishMiniGame,
   INTRO_MS,
-  ANAGRAM_MS,
-  RAPID_MS,
+  HYPER_ROUND_MS,
   REVEAL_INTERVAL_MS,
   LETTER_GRACE_MS,
   RESULTS_MS,
@@ -386,18 +386,13 @@ export function initSocketServer(httpServer: HTTPServer) {
       }
     });
 
-    // HYPER MODE: the board controller (or host) ends the placeholder
-    // mini-game and returns to the board. Real mini-games will resolve
-    // themselves; this is the manual close for the placeholder stage.
-    socket.on('end_hyper', () => {
+    // HYPER MODE: any player can tap "Give Up". The round ends as soon as every
+    // connected player is resolved (solved / done / gave up) — or at the 60s cap.
+    socket.on('give_up', () => {
       if (!gameState) return;
-      if (gameState.cluePhase !== 'hyper_active' && gameState.cluePhase !== 'hyper_intro') return;
-      const me = gameState.players.find(p => p.id === socket.id);
-      if (!me || (!me.isHost && gameState.boardController !== socket.id)) return;
-      clearMiniGameTimers();
-      endHyper(gameState);
-      maybeAdvanceRound();
-      broadcast();
+      const res = giveUp(gameState, socket.id);
+      if (res.changed) broadcast();
+      if (res.complete) finishMini();
     });
 
     // Mini-game action channel: routes a player's move to the active game's
@@ -411,9 +406,6 @@ export function initSocketServer(httpServer: HTTPServer) {
       const res = handleMiniGameAction(gameState, socket.id, action || { type: '' });
       ack?.(res.feedback);
       if (res.changed) broadcast();
-      // A game can collapse its own round clock (e.g. Anagram's first-solve
-      // last-call) — re-arm the round timer to match the new endsAt.
-      if (res.rescheduleRoundMs != null) setTimer('mg_round', res.rescheduleRoundMs, () => finishMini());
       if (res.complete) finishMini();
     });
 
@@ -598,12 +590,11 @@ function beginPlaying() {
   beginMiniGamePlaying(gameState);
   broadcast();
 
-  const key = gameState.activeMiniGame?.key;
-  if (key === 'letter_reveal') {
-    scheduleReveal();
-  } else {
-    setTimer('mg_round', key === 'rapid_fire' ? RAPID_MS : ANAGRAM_MS, () => finishMini());
-  }
+  // Unified 60s round cap for every game (the "…or in 60 sec" rule). The round
+  // ends earlier the moment every player is resolved (solved / done / gave up).
+  setTimer('mg_round', HYPER_ROUND_MS, () => finishMini());
+  // Letter Reveal also paces its own letter reveals on top of the cap.
+  if (gameState.activeMiniGame?.key === 'letter_reveal') scheduleReveal();
 }
 
 // Letter Reveal: expose one more letter every interval; after the last, a grace

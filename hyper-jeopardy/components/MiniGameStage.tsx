@@ -137,7 +137,7 @@ function AnagramStage({ state, d }: { state: GameState; d: AnagramData }) {
         ))}
       </div>
       <p className="jeo-headline uppercase tracking-[0.3em] text-blue-200/70 text-sm">Unscramble it on your phone</p>
-      <SolveChips state={state} solvedOrder={d.solvedOrder} />
+      <SolveChips state={state} solvedOrder={d.solvedOrder} gaveUp={d.gaveUp} />
     </div>
   );
 }
@@ -146,7 +146,7 @@ function AnagramStage({ state, d }: { state: GameState; d: AnagramData }) {
 function RapidStage({ state, d }: { state: GameState; d: RapidData }) {
   const rows = state.players
     .filter(p => p.connected || (d.progress[p.id] ?? 0) > 0)
-    .map(p => ({ id: p.id, name: p.name, score: d.roundScores[p.id] ?? 0, done: d.progress[p.id] ?? 0, over: !!d.done[p.id] }))
+    .map(p => ({ id: p.id, name: p.name, score: d.roundScores[p.id] ?? 0, done: d.progress[p.id] ?? 0, over: !!d.done[p.id], quit: !!d.gaveUp?.[p.id] && !d.done[p.id] }))
     .sort((a, b) => b.score - a.score);
   return (
     <div className="space-y-8">
@@ -161,7 +161,7 @@ function RapidStage({ state, d }: { state: GameState; d: RapidData }) {
               <div className="h-full bg-gradient-to-r from-[#00e5ff] to-[#7b5cff]" style={{ width: `${Math.min(100, (r.done / Math.max(1, d.total)) * 100)}%` }} />
             </div>
             <span className="w-24 jeo-value text-2xl">{r.score}</span>
-            <span className="w-16 text-blue-200/50 text-xs jeo-headline uppercase">{r.over ? 'done' : `${r.done}/${d.total}`}</span>
+            <span className="w-16 text-blue-200/50 text-xs jeo-headline uppercase">{r.over ? 'done' : r.quit ? 'gave up' : `${r.done}/${d.total}`}</span>
           </div>
         ))}
         {rows.length === 0 && <p className="text-center text-blue-200/60 jeo-headline tracking-widest uppercase">Waiting for answers…</p>}
@@ -185,13 +185,13 @@ function LetterStage({ state, d }: { state: GameState; d: LetterData }) {
       <p className="jeo-headline uppercase tracking-[0.28em] text-blue-200/70 text-sm">
         {d.revealCount}/{d.wordLen} letters revealed · guess early for more points
       </p>
-      <SolveChips state={state} solvedOrder={solvedOrder} />
+      <SolveChips state={state} solvedOrder={solvedOrder} gaveUp={d.gaveUp} />
     </div>
   );
 }
 
 /* ── shared bits ──────────────────────────────────────────────────────────── */
-function SolveChips({ state, solvedOrder }: { state: GameState; solvedOrder: string[] }) {
+function SolveChips({ state, solvedOrder, gaveUp = {} }: { state: GameState; solvedOrder: string[]; gaveUp?: Record<string, boolean> }) {
   const active = state.players.filter(p => p.connected);
   if (!active.length) return null;
   return (
@@ -199,9 +199,15 @@ function SolveChips({ state, solvedOrder }: { state: GameState; solvedOrder: str
       {active.map(p => {
         const rank = solvedOrder.indexOf(p.id);
         const solved = rank >= 0;
+        const quit = !solved && !!gaveUp[p.id];
+        const cls = solved
+          ? 'border-[var(--neon-lime)] text-[var(--neon-lime)] bg-[rgba(125,255,178,0.08)]'
+          : quit
+            ? 'border-red-400/40 text-red-300/70'
+            : 'border-white/10 text-blue-200/60';
         return (
-          <span key={p.id} className={`jeo-headline uppercase tracking-widest text-sm px-4 py-2 rounded-full border ${solved ? 'border-[var(--neon-lime)] text-[var(--neon-lime)] bg-[rgba(125,255,178,0.08)]' : 'border-white/10 text-blue-200/60'}`}>
-            {p.name}{solved ? ` ✓ #${rank + 1}` : ''}
+          <span key={p.id} className={`jeo-headline uppercase tracking-widest text-sm px-4 py-2 rounded-full border ${cls}`}>
+            {p.name}{solved ? ` ✓ #${rank + 1}` : quit ? ' · gave up' : ''}
           </span>
         );
       })}

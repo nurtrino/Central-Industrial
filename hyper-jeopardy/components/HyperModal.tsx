@@ -3,20 +3,29 @@ import { useEffect, useRef } from 'react';
 import { GameState } from '@/lib/gameEngine';
 import { playRandomLaser, preloadLasers } from '@/lib/audio';
 import MiniGameController, { type MGFeedback } from '@/components/MiniGameController';
+import type { MiniGameData } from '@/lib/miniGames';
+
+// A player is "resolved" for the round when they've solved/finished or gave up.
+function isResolved(d: MiniGameData | null, id: string | null): boolean {
+  if (!d || !id) return false;
+  if (d.gaveUp?.[id]) return true;
+  if (d.key === 'rapid_fire') return !!d.done?.[id];
+  return !!d.solved?.[id];
+}
 
 interface Props {
   state: GameState;
   playerId: string | null;
-  onEndHyper: () => void;
+  onGiveUp: () => void;
   onMiniGameAction: (a: { type: string; payload?: unknown }) => Promise<MGFeedback>;
 }
 
 /**
  * Phone-side overlay for HYPER MODE. Shows the activation splash, then the
- * live mini-game controls (MiniGameController). The board controller (or host)
- * can end the round early.
+ * live mini-game controls (MiniGameController). Any player can tap "Give Up";
+ * the round ends once everyone is resolved (solved / done / gave up) or at 60s.
  */
-export default function HyperModal({ state, playerId, onEndHyper, onMiniGameAction }: Props) {
+export default function HyperModal({ state, playerId, onGiveUp, onMiniGameAction }: Props) {
   const { cluePhase, activeMiniGame } = state;
   const prevPhaseRef = useRef<string | null>(null);
 
@@ -33,8 +42,9 @@ export default function HyperModal({ state, playerId, onEndHyper, onMiniGameActi
 
   if (cluePhase !== 'hyper_intro' && cluePhase !== 'hyper_active') return null;
 
-  const me = state.players.find(p => p.id === playerId);
-  const canEnd = !!me && (me.isHost || state.boardController === playerId);
+  const d = state.miniGameData as unknown as MiniGameData | null;
+  const playing = d?.status === 'playing';
+  const iAmResolved = isResolved(d, playerId);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
@@ -67,9 +77,9 @@ export default function HyperModal({ state, playerId, onEndHyper, onMiniGameActi
           </div>
 
           <div className="px-6 pb-5">
-            {canEnd && (
-              <button onClick={onEndHyper} className="w-full py-2 rounded-lg text-xs jeo-headline uppercase tracking-[0.2em] text-blue-200/60 border border-white/10 hover:text-[var(--neon-magenta)] hover:border-[var(--neon-magenta)] transition">
-                End Hyper Round
+            {playing && !iAmResolved && (
+              <button onClick={onGiveUp} className="w-full py-2 rounded-lg text-xs jeo-headline uppercase tracking-[0.2em] text-blue-200/60 border border-white/10 hover:text-red-300 hover:border-red-400/60 transition">
+                Give Up
               </button>
             )}
           </div>
