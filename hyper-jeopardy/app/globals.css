@@ -268,3 +268,16 @@ html, body {
   .jeo-buzz, .hyper-title, .hyper-burst, .cell-hyper { animation: none; }
   .jeo-tile-hover:hover { transform: none; }
 }
+
+/* Shared screen (/display): full size on TV/desktop, shrink to ~75% on phones
+   so the whole board + scoreboard fit on a small viewport. `zoom` reflows the
+   layout at the smaller size (no overflow/empty gutters like `transform: scale`
+   would leave); the min-height is bumped to 100/0.75 ≈ 133.333vh so that, once
+   zoomed, the page still fills the viewport and the bottom scoreboard stays
+   pinned to the floor. Big screens are untouched (100%). */
+@media (max-width: 640px) {
+  .display-scale {
+    zoom: 0.75;
+    min-height: 133.333vh;
+  }
+}

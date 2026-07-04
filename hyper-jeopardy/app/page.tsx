@@ -33,6 +33,10 @@ export default function Home() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [revealHyper, setRevealHyper] = useState(false);
   const lastBoardPhaseRef = useRef<string | null>(null);
+  // Remembers how we joined so we can silently re-join after a socket reconnect
+  // (socket.io hands us a NEW socket.id, but the server still has our player
+  // record under the OLD id until we re-emit `join`).
+  const joinParamsRef = useRef<{ name: string; avatar?: string; accountId?: string } | null>(null);
 
   // Testing phase: hyper (mini-game) cells are marked on the board BY DEFAULT so
   // they can be activated in rapid succession. Add ?reveal=off (or ?hide) to
@@ -53,7 +57,17 @@ export default function Home() {
     const s = getSocket();
     setSocket(s);
 
-    s.on('connect', () => setConnected(true));
+    s.on('connect', () => {
+      setConnected(true);
+      // Reconnect recovery: after a dropped connection socket.io reconnects with
+      // a NEW socket.id. Re-emit `join` so the server re-attaches our player
+      // record (by accountId/name) to the new id — otherwise host-only actions
+      // like Start Game, plus buzzing and clue selection, silently no-op because
+      // the server matches every action by socket.id. (No-op on the first
+      // connect: joinParamsRef is null until the user actually joins.)
+      const jp = joinParamsRef.current;
+      if (jp) s.emit('join', { name: jp.name, avatar: jp.avatar, accountId: jp.accountId });
+    });
     s.on('disconnect', () => setConnected(false));
     s.on('state', (newState: GameState) => setState(newState));
     s.on('joined', ({ playerId: pid, player: p }: { playerId: string; player: Player }) => {
@@ -103,6 +117,7 @@ export default function Home() {
   }, [state, playerId]);
 
   const handleJoin = useCallback((name: string, avatar?: string, accountId?: string) => {
+    joinParamsRef.current = { name, avatar, accountId };
     socket?.emit('join', { name, isHost: !state?.players?.length, avatar, accountId });
   }, [socket, state]);
 
