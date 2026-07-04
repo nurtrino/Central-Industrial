@@ -344,8 +344,10 @@ const ocsCaves = [
   {n:"Gallia shelter cave (unnamed)", reg:"se", county:"Gallia", lat:38.8200, lng:-82.3200, prec:"undisclosed",
    d:"&#9888; <b>Location approximate.</b> ODNR botanists found a sandstone shelter cave with rare carbonate speleothems (Conemaugh Group), summer 2025. Gallia County — exact site not yet pinned. NOTE: this sits inside the original Caves-of-Ohio SE corridor."}
 ];
+/* all OCS sub-regions share ONE toggleable "Ohio caves" layer (markers keep their per-region colors) */
+const ohio = L.layerGroup().addTo(map);
 const ocsGroups = {};
-for (const r in ocsRegions) ocsGroups[r] = L.layerGroup().addTo(map);
+for (const r in ocsRegions) ocsGroups[r] = ohio;
 function ocsIcon(reg, faded){
   const c = ocsRegions[reg].color;
   return L.divIcon({ className:'ocs-icon',
@@ -1093,11 +1095,12 @@ overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
 overlays["🟩 Ohio State Forests"] = stateForestLayer;
 overlays["▦ 13-county search corridor"] = corridorLayer;
-for (const r in ocsRegions) overlays["■ OCS · " + ocsRegions[r].label] = ocsGroups[r];
 if (karstRegions) overlays["🟦🟨 Karst geology — ODNR EG-1 (blue=carbonate, yellow=Ordovician)"] = karstRegions;
 if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
 overlays["① Top-10 longest caves (ranked)"] = top10Layer;
 overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
+/* ---- one master toggle per state, grouped at the bottom of the panel ---- */
+overlays["■ Ohio caves"] = ohio;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
 L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
 
