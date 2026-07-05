@@ -29,11 +29,11 @@ export default function Display() {
   const [revealHyper, setRevealHyper] = useState(false);
   const prevCluePhaseRef = useRef<string | null>(null);
 
-  // Testing phase: hyper (mini-game) cells are marked on the board BY DEFAULT.
-  // Add ?reveal=off (or ?hide) to restore the hidden, surprise behavior.
+  // Hyper (mini-game) cells are hidden on the board so they stay a surprise.
+  // Add ?reveal=on (or ?reveal) to color-code them again for testing.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    setRevealHyper(!(q.get('reveal') === 'off' || q.has('hide')));
+    setRevealHyper(q.get('reveal') === 'on' || (q.has('reveal') && q.get('reveal') !== 'off'));
   }, []);
 
   useEffect(() => {

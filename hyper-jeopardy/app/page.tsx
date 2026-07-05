@@ -39,12 +39,11 @@ export default function Home() {
   // record under the OLD id until we re-emit `join`).
   const joinParamsRef = useRef<{ name: string; avatar?: string; accountId?: string } | null>(null);
 
-  // Testing phase: hyper (mini-game) cells are marked on the board BY DEFAULT so
-  // they can be activated in rapid succession. Add ?reveal=off (or ?hide) to
-  // restore the hidden, surprise behavior for a real playthrough.
+  // Hyper (mini-game) cells are hidden on the board so they stay a surprise.
+  // Add ?reveal=on (or ?reveal) to color-code them again for testing.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    setRevealHyper(!(q.get('reveal') === 'off' || q.has('hide')));
+    setRevealHyper(q.get('reveal') === 'on' || (q.has('reveal') && q.get('reveal') !== 'off'));
   }, []);
 
   // "Welcome to Hyper Jeopardy" voice cue — fires once when the app is opened
