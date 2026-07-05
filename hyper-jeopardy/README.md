@@ -35,16 +35,26 @@ At the start of each round, `assignHyperClues()` marks **5–10 random non-Daily
 cells** as "hyper". Selecting one — like a Daily Double, but a mini-game — fires:
 
 1. **`hyper_intro`** — a full-screen **HYPER MODE · ACTIVATED** splash naming the
-   mini-game and who triggered it (~3.5s).
-2. **`hyper_active`** — the mini-game runs. Right now every mini-game is a
-   **placeholder card** (title + blurb, drawn from `MINI_GAMES` in `lib/gameEngine.ts`
-   — Fake It, The Spectrum, Connections, Zoom Out, Most Likely To…, Higher or Lower,
-   Rapid Fire). The board controller (or host) taps **End Hyper Round** to return to
-   the board; a safety timer caps it so it can never hang.
+   mini-game and who triggered it, then a ~5s rules screen.
+2. **`hyper_active`** — the mini-game runs. There are **four real, playable
+   mini-games** (`MINI_GAMES` in `lib/gameEngine.ts`, logic in `lib/miniGames.ts`,
+   UI in `MiniGameStage`/`MiniGameController`):
+   - **Anagram Race** — unscramble the word before rivals; faster solve banks more.
+   - **Rapid Fire** — 10 OpenTDB questions, one category, a hard 30s sprint; most correct wins.
+   - **Letter Reveal** — five hidden letters reveal one by one; guess early for a bigger score.
+   - **Memory Matrix** — a pattern flashes on a grid, rebuild it from memory; 3 wrong guesses → out.
 
-Real, playable mini-games replace the placeholders in the next phase — the
-activation + close flow around them already works. Hyper cells are hidden on the
-board (no marker) so the surprise lands, exactly like a Daily Double.
+   Shared rules: a **60s round cap**, no "Give Up" (rounds are purely time-limited),
+   and a 5s standings screen before the board returns. A safety timer guarantees a
+   round can never hang. Hyper cells are hidden on the board (no marker) so the
+   surprise lands, exactly like a Daily Double.
+
+Beyond the hyper cells, **Space Invaders Ambush** fires at a random point mid-Double-
+Jeopardy: the board is ambushed and the whole table fights an invader grid co-op
+(`lib/invaders.ts`, `InvadersStage`/`InvadersController`). The host has a test button
+to trigger it on demand.
+
+See `HYPER_JEOPARDY_HANDOFF.md` for the full architecture + current state.
 
 ## Run locally
 
