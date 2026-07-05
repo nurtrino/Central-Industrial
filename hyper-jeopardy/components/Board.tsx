@@ -75,7 +75,7 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
                 `}
               >
                 {!used && (
-                  <span className="jeo-value text-2xl sm:text-4xl">
+                  <span className="jeo-value text-xl sm:text-4xl">
                     {value}
                   </span>
                 )}
