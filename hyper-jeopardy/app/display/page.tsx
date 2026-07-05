@@ -9,6 +9,7 @@ import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import MiniGameStage from '@/components/MiniGameStage';
 import HyperFlair from '@/components/HyperFlair';
+import InvadersStage from '@/components/InvadersStage';
 
 // The shared screen is sized for a TV. On phones (<=640px) the `display-scale`
 // class (globals.css) zooms it to 75% so the whole board + scoreboard fit;
@@ -137,6 +138,7 @@ export default function Display() {
 
   const activeClue = state.activeClue;
   const isHyper = state.cluePhase === 'hyper_intro' || state.cluePhase === 'hyper_active';
+  const isInvaders = state.cluePhase === 'invaders';
   const hyperController = state.players.find(p => p.id === state.boardController);
   const showFullscreenClue = !!activeClue && state.cluePhase !== 'idle' && !isHyper;
   const buzzedPlayer = state.players.find(p => p.id === state.buzzedPlayerId);
@@ -260,18 +262,24 @@ export default function Display() {
         )}
       </div>
 
-      {/* Scoreboard pinned at bottom, TV-sized */}
-      <div className="bg-[rgba(8,10,30,0.92)] border-t-2 border-[rgba(0,229,255,0.4)] p-6">
-        <div className="max-w-[1800px] mx-auto">
-          <Scoreboard
-            players={state.players}
-            currentPlayerId={null}
-            buzzedPlayerId={state.buzzedPlayerId}
-            compact={false}
-            isHost={false}
-          />
+      {/* Scoreboard pinned at bottom, TV-sized. During the SPACE INVADERS
+          ambush it hides — the panels have "become" the ships on screen. */}
+      {!isInvaders && (
+        <div className="bg-[rgba(8,10,30,0.92)] border-t-2 border-[rgba(0,229,255,0.4)] p-6">
+          <div className="max-w-[1800px] mx-auto">
+            <Scoreboard
+              players={state.players}
+              currentPlayerId={null}
+              buzzedPlayerId={state.buzzedPlayerId}
+              compact={false}
+              isHost={false}
+            />
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* SPACE INVADERS AMBUSH — full-screen battle over the dimmed board */}
+      {isInvaders && <InvadersStage state={state} />}
     </div>
   );
 }

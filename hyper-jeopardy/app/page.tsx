@@ -8,6 +8,7 @@ import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import ClueModal from '@/components/ClueModal';
 import HyperModal from '@/components/HyperModal';
+import InvadersController from '@/components/InvadersController';
 import type { MGFeedback } from '@/components/MiniGameController';
 import FinalJeopardy from '@/components/FinalJeopardy';
 import Rejoin from '@/components/Rejoin';
@@ -181,6 +182,11 @@ export default function Home() {
     [socket],
   );
 
+  // SPACE INVADERS AMBUSH controls (hold-to-move + fire).
+  const handleInvaderCtl = useCallback((a: 'L' | 'R' | 'S' | 'F') => {
+    socket?.emit('invader_ctl', { a });
+  }, [socket]);
+
   const handleBuzz = useCallback(() => socket?.emit('buzz'), [socket]);
 
   const handleSkip = useCallback(() => socket?.emit('skip_clue'), [socket]);
@@ -262,6 +268,10 @@ export default function Home() {
   }
 
   if (state.phase === 'final_jeopardy' || state.phase === 'game_over') {
+    // Game over WITHOUT Final Jeopardy = the SPACE INVADERS ambush was lost:
+    // the fleet fell and the game ended at current scores.
+    const invasionLoss = state.phase === 'game_over' && !state.finalRevealed;
+    const ranked = [...state.players].sort((a, b) => b.score - a.score);
     return (
       <>
         {error && (
@@ -279,13 +289,35 @@ export default function Home() {
             </button>
           </div>
         )}
-        <FinalJeopardy
-          state={state}
-          playerId={playerId}
-          onWager={handleFinalWager}
-          onAnswer={handleFinalAnswer}
-          onReveal={handleRevealFinal}
-        />
+        {invasionLoss ? (
+          <div className="min-h-screen flex items-center justify-center px-4">
+            <div className="jeo-card rounded-3xl p-8 w-full max-w-md space-y-4 text-center">
+              <p className="jeo-headline uppercase tracking-[0.35em] text-[#ff5c8a] text-xs">Space Invaders Ambush</p>
+              <h1 className="hyper-title text-4xl">THE FLEET HAS FALLEN</h1>
+              <p className="text-blue-200/70 text-sm jeo-headline uppercase tracking-[0.2em]">Game over — final scores</p>
+              <div className="space-y-2 pt-2">
+                {ranked.map((p, i) => (
+                  <div key={p.id} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl border ${i === 0 ? 'border-[var(--jeo-gold)] bg-[rgba(0,229,255,0.08)]' : 'border-white/10 bg-[rgba(6,8,26,0.5)]'}`}>
+                    <span className="jeo-headline text-blue-200/60 text-sm">#{i + 1}</span>
+                    <span className="flex-1 text-left text-white jeo-headline uppercase tracking-wide truncate">{p.name}{p.id === playerId ? ' (you)' : ''}</span>
+                    <span className={`jeo-value text-lg ${p.score < 0 ? 'text-red-300' : ''}`}>
+                      {p.score < 0 ? `-$${Math.abs(p.score).toLocaleString()}` : `$${p.score.toLocaleString()}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {ranked[0] && <p className="jeo-title text-2xl pt-1">Winner: {ranked[0].name}!</p>}
+            </div>
+          </div>
+        ) : (
+          <FinalJeopardy
+            state={state}
+            playerId={playerId}
+            onWager={handleFinalWager}
+            onAnswer={handleFinalAnswer}
+            onReveal={handleRevealFinal}
+          />
+        )}
       </>
     );
   }
@@ -382,6 +414,11 @@ export default function Home() {
 
       {/* Hyper Mode overlay */}
       <HyperModal state={state} playerId={playerId} onMiniGameAction={handleMiniGameAction} />
+
+      {/* SPACE INVADERS AMBUSH — phone battle station */}
+      {state.cluePhase === 'invaders' && (
+        <InvadersController state={state} playerId={playerId} onCtl={handleInvaderCtl} />
+      )}
     </div>
   );
 }

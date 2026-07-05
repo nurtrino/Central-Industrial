@@ -19,7 +19,8 @@ export type CluePhase =
   | 'daily_double_wager'// DD: player wagering
   | 'daily_double_answer'// DD: player answering
   | 'hyper_intro'       // HYPER MODE activation splash before the mini-game
-  | 'hyper_active';     // HYPER MODE mini-game running (placeholder for now)
+  | 'hyper_active'      // HYPER MODE mini-game running
+  | 'invaders';         // SPACE INVADERS AMBUSH takeover (mid-Double-Jeopardy)
 
 // A mini-game that can fire when a "hyper" cell is chosen.
 //   mode   — 'single' (one player's spotlight) or 'multi' (whole table competes)
@@ -128,6 +129,14 @@ export interface FinalJeopardyEntry {
   correct: boolean | null;
 }
 
+// Broadcast-facing summary of the SPACE INVADERS AMBUSH. The high-rate battle
+// telemetry travels on its own socket event ('invaders'); this summary rides
+// the normal state broadcast so late joiners/refreshes know who's flying what.
+export interface InvadersSummary {
+  status: 'intro' | 'playing' | 'won' | 'lost';
+  roster: { id: string; name: string; color: string }[];
+}
+
 export interface GameState {
   gameId: string;
   phase: GamePhase;
@@ -156,6 +165,10 @@ export interface GameState {
   hyperGames: Record<number, string>; // clue id → pre-assigned mini-game key
   hyperSeed: number;                // rolled on each hyper activation — every client
                                     // plays the SAME start clip (seed % clip count)
+  // SPACE INVADERS AMBUSH — fires once, at a random point in Double Jeopardy.
+  invaders: InvadersSummary | null; // roster + status while the battle runs
+  invadersDone: boolean;            // one ambush per game
+  invadersTriggerAt: number;        // usedClues.size threshold that springs it
   activeMiniGame: MiniGame | null;  // the mini-game running during a hyper cell
   miniGameTrivia: TriviaQuestion[] | null; // pre-fetched questions for the active mini-game
   miniGameData: Record<string, unknown> | null; // per-game runtime state (wireframe prototyping)
@@ -197,6 +210,9 @@ export function createGame(showNumber: number, airDate: string): GameState {
     hyperClues: [],
     hyperGames: {},
     hyperSeed: 0,
+    invaders: null,
+    invadersDone: false,
+    invadersTriggerAt: 0,
     activeMiniGame: null,
     miniGameTrivia: null,
     miniGameData: null,

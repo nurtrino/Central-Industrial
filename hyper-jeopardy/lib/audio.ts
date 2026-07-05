@@ -142,6 +142,92 @@ export function haptic(pattern: number | number[]): void {
   }
 }
 
+// === SPACE INVADERS AMBUSH — retro arcade synth kit =========================
+// Original WebAudio recreations in the classic idiom: a descending zap for
+// shots, noise-burst explosions, and the four-note bass march that speeds up
+// as the wave thins out.
+
+// Laser shot: fast downward frequency sweep.
+export function playSIShot(volume = 0.16): void {
+  const c = ensureCtx();
+  if (!c || !masterGain) return;
+  const t0 = c.currentTime;
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(1500, t0);
+  osc.frequency.exponentialRampToValueAtTime(90, t0 + 0.16);
+  g.gain.setValueAtTime(volume, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.17);
+  osc.connect(g).connect(masterGain);
+  osc.start(t0); osc.stop(t0 + 0.18);
+}
+
+function noiseBurst(dur: number, filterHz: number, gain: number, type: BiquadFilterType = 'bandpass'): void {
+  const c = ensureCtx();
+  if (!c || !masterGain) return;
+  const t0 = c.currentTime;
+  const buf = c.createBuffer(1, Math.floor(c.sampleRate * dur), c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 1.6);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const f = c.createBiquadFilter();
+  f.type = type; f.frequency.value = filterHz; f.Q.value = 0.9;
+  const g = c.createGain();
+  g.gain.setValueAtTime(gain, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  src.connect(f).connect(g).connect(masterGain);
+  src.start(t0);
+}
+
+// Invader destroyed: short mid crunch.
+export function playSIBoom(): void {
+  noiseBurst(0.18, 700, 0.3);
+}
+
+// A ship goes down: longer, deeper blast + low thump.
+export function playSIShipBoom(): void {
+  noiseBurst(0.5, 220, 0.4, 'lowpass');
+  const c = ensureCtx();
+  if (!c || !masterGain) return;
+  const t0 = c.currentTime;
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(90, t0);
+  osc.frequency.exponentialRampToValueAtTime(28, t0 + 0.45);
+  g.gain.setValueAtTime(0.35, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.5);
+  osc.connect(g).connect(masterGain);
+  osc.start(t0); osc.stop(t0 + 0.55);
+}
+
+// The march: one low square-wave thud per invader step, cycling four
+// descending notes. Tempo comes free — the server marches faster as invaders
+// die, and we play one note per step.
+const SI_MARCH_HZ = [96, 90, 84, 79];
+export function playSIMarch(stepIdx: number): void {
+  const c = ensureCtx();
+  if (!c || !masterGain) return;
+  const t0 = c.currentTime;
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = 'square';
+  osc.frequency.value = SI_MARCH_HZ[((stepIdx % 4) + 4) % 4];
+  g.gain.setValueAtTime(0.22, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.09);
+  osc.connect(g).connect(masterGain);
+  osc.start(t0); osc.stop(t0 + 0.1);
+}
+
+// Fleet destroyed: a grim descending dirge.
+export function playSILose(): void {
+  const seq = [392, 311, 247, 185];
+  seq.forEach((f, i) => scheduleNote({ freq: f, start: i * 0.22, dur: 0.24, type: 'sawtooth', gain: 0.16 }));
+  scheduleNote({ freq: 92, start: 0.9, dur: 0.8, type: 'sawtooth', gain: 0.2 });
+}
+
 // The "Welcome to Hyper Jeopardy" voice clip — plays once when the app is
 // first opened from the Central Industrial hub. Because the hub launches the
 // tool via a full same-window navigation, the click gesture does NOT carry
