@@ -34,6 +34,7 @@
   .rank-badge.il-rank { width:22px; height:22px; background:#e3f2fd; border-color:#1565c0; color:#0d47a1; font-size:11px; }
   .rank-badge.wi-rank { width:22px; height:22px; background:#e0f7fa; border-color:#00838f; color:#006064; font-size:11px; }
   .rank-badge.mi-rank { width:22px; height:22px; background:#ffebee; border-color:#c62828; color:#b71c1c; font-size:11px; }
+  .rank-badge.oh-rank { width:22px; height:22px; background:#f3e5f5; border-color:#6a1b9a; color:#4a148c; font-size:11px; }
   .searchbox { background:rgba(255,255,255,0.96); border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,0.3); padding:6px; width:236px;
     font:13px -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
   .searchbox input { width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid #bbb; border-radius:6px; font-size:13px; outline:none; }
@@ -484,29 +485,7 @@ function loadGeo(url, layer, transform, onfail){
   }).catch(() => { if (onfail) onfail(); });
 }
 
-/* ---- 13-county search corridor (county polygons fetched at runtime) ---- */
-const corridorFips = new Set([
-  "39073","39045","39127","39009","39163","39079","39141","39131","39145","39167","39105","39053","39087"
-]); // Hocking, Fairfield, Perry, Athens, Vinton, Jackson, Ross, Pike, Scioto, Washington, Meigs, Gallia, Lawrence
-const corridorLayer = L.geoJSON(null, {
-  pane:'publiclands',
-  style: { color:"#1f4e79", weight:1.1, fillColor:"#3388ff", fillOpacity:0.06 },
-  onEachFeature: (f, lyr) => {
-    const nm = (f.properties && f.properties.NAME) ? f.properties.NAME + " County" : "County";
-    lyr.bindTooltip(nm, { sticky:true });
-  }
-}).addTo(map);
-loadGeo(
-  'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json',
-  corridorLayer,
-  geo => geo.features.filter(f => corridorFips.has(f.id)),
-  () => {
-    const note = L.control({ position:'bottomleft' });
-    note.onAdd = function(){ const d=L.DomUtil.create('div','info-box');
-      d.innerHTML='<span class="sub">Boundary overlays need internet — connect to load the county corridor &amp; public-land layers.</span>'; return d; };
-    note.addTo(map);
-  }
-);
+/* ---- 13-county search corridor REMOVED 2026-07-05 per request. ---- */
 
 /* ---- REFINEMENT 2a: Wayne National Forest (USFS admin boundary) ---- */
 const wayneLayer = L.geoJSON(null, {
@@ -1350,6 +1329,22 @@ miLongest.forEach(c => {
 });
 miLongestLayer.addTo(map);
 
+
+/* ---- OH — Longest Caves — ranked by length, numbered badges (from OH_Long_Cave_List.xlsx, 2026-07-05). ON by default. ---- */
+const ohLongest = [{"r":1,"n":"Ohio (Reames Cave) Caverns","lat":40.23809,"lng":-83.69643,"mi":2.99,"pr":"exact","co":"Champaign","via":"Already on live map as 'Ohio Caverns (Reames Cave)' (r=1.00); coords from the mapped cave."},{"r":2,"n":"Freelands Cave","lat":38.7776,"lng":-83.3302,"mi":0.44,"pr":"undisclosed","co":"Adams","via":"Already on live map as 'Freeland's Cave' (r=0.94); coords from the mapped cave."},{"r":3,"n":"Reifs Cave","lat":39.3394,"lng":-82.995,"mi":0.433,"pr":"county","co":"Ross","via":"Already on live map as 'Reif's Cave' (r=0.89); coords from the mapped cave."},{"r":4,"n":"Zane Caverns","lat":40.37576,"lng":-83.63512,"mi":0.29,"pr":"exact","co":"Logan","via":"Already on live map as 'Zane Caverns' (r=1.00); coords from the mapped cave."},{"r":5,"n":"The Devil's Den Fracture System","lat":41.33117,"lng":-81.04204,"mi":0.219,"pr":"landmark","co":"Portage","via":"Already on live map as 'Devil's Den Fracture System' (r=1.00); coords from the mapped cave."},{"r":6,"n":"Cedar Forks Cave","lat":38.7917,"lng":-83.5442,"mi":0.194,"pr":"county","co":"Adams","via":"Already on live map as 'Cedar Fork Cave' (r=0.95); coords from the mapped cave."},{"r":7,"n":"Slate Stone (Sanborn's) Cave","lat":40.26,"lng":-83.71,"mi":0.171,"pr":"county","co":"Champaign","via":"Already on live map as 'Slate Stone (Sanborn's) Cave' (r=1.00); coords from the mapped cave."},{"r":8,"n":"Wet Cave (Cave of the Springs)","lat":39.2222,"lng":-83.3598,"mi":0.153,"pr":"landmark","co":"Highland","via":"Already on live map as 'Wet Cave (Cave of the Springs)' (r=1.00); coords from the mapped cave."},{"r":9,"n":"Ash Cave ?","lat":39.3936,"lng":-82.5464,"mi":0.133,"pr":"landmark","co":"Hocking","via":"Already on live map as 'Ash Cave' (r=1.00); coords from the mapped cave."},{"r":10,"n":"Paradise Cave","lat":41.6545,"lng":-82.8175,"mi":0.121,"pr":"landmark","co":"Ottawa","via":"Already on live map as 'Paradise Cave' (r=1.00); coords from the mapped cave."},{"r":11,"n":"Indian Trail Caverns (Show)","lat":40.9807,"lng":-83.4448,"mi":0.114,"pr":"exact","co":"Wyandot","via":"Already on live map as 'Indian Trail Caverns (Sheriden Cave)' (r=1.00); coords from the mapped cave."},{"r":12,"n":"Frost (Sinking) Cave","lat":39.15855,"lng":-83.21775,"mi":0.112,"pr":"landmark","co":"Pike","via":"Already on live map as 'Frost Cave' (r=1.00); coords from the mapped cave."},{"r":13,"n":"Cave Hill Cave","lat":38.7955,"lng":-83.416,"mi":0.102,"pr":"landmark","co":"Adams","via":"Pholeos Vol.21: on the named hill 'Cave Hill', Liberty Twp, Adams Co (Seaman quad); entrance in a steep-walled sinkhole ~1080 ft, Karr property. [src: Pholeos Vol.21]"},{"r":14,"n":"Kindt's I Cave","lat":41.645,"lng":-82.8335,"mi":0.102,"pr":"undisclosed","co":"Ottawa","via":"Already on live map as 'Kindt's Cave (+ island caves)' (r=0.83); coords from the mapped cave."},{"r":15,"n":"Chesterland Cave","lat":41.532,"lng":-81.329,"mi":0.087,"pr":"landmark","co":"Geauga","via":"Pholeos Vol.09 'Chesterland Caves Area Survey': largest cave in the North Gorge of the Chesterland Caves ridge, Munson Twp, Geauga Co (Sharon Conglomerate, drains to Chagrin R). Coord = North-Gorge estimate NE of Chesterland village. [src: Pholeos Vol.09 (1) + LiDAR placement]"},{"r":16,"n":"Cedar Forest Cave #1 (Coon Man)","lat":41.647,"lng":-82.824,"mi":0.083,"pr":"landmark","co":"Ottawa","via":"OCS 'Under Ohio' 2025 + Verber & Stansberry 1953: a domed dolomite island cave on South Bass Island (Put-in-Bay), Ottawa Co, alongside Kindt's/Paradise/Perry's caves. [src: ocs_uo_2025_v3_i1.md; Pholeos Vol.15(2)]"},{"r":17,"n":"Little Mountain Caverns (Devil's Kitchen)","lat":41.637821,"lng":-81.271993,"mi":0.081,"pr":"exact","co":"Geauga","via":"Already on live map as 'Little Mountain' (r=1.00); coords from the mapped cave."},{"r":18,"n":"Devil's Den Cave","lat":38.72,"lng":-83.32,"mi":0.081,"pr":"landmark","co":"Adams","via":"Pholeos Vol.02: dolomitic-limestone cave on the south face of Devil's Den Bluff, SE Adams Co, overlooking Ohio Brush Creek (429 ft, joint-controlled). NOT the Portage Co. Devil's Den Fracture System. Coord = SE Adams / Ohio Brush Creek area estimate. [src: Pholeos Vol.02 (1)]"},{"r":19,"n":"Kessler's Cave","lat":39.2282,"lng":-83.3648,"mi":0.08,"pr":"landmark","co":"Highland","via":"Already on live map as 'Kessler's Cave' (r=1.00); coords from the mapped cave."},{"r":20,"n":"Black Run Cave (Haunted)","lat":38.85,"lng":-83.47,"mi":0.075,"pr":"county","co":"Adams","via":"Pholeos survey list: 'Black Run Cave, Adams Co., OH, 3 July 1980, THC 120m'; named for Black Run; no township/coords in corpus - Adams Co. centroid (Ohio Brush Creek karst). [src: Pholeos Vol.15(2)/28(1-2)]"},{"r":21,"n":"Crystal Rock Cave","lat":41.44783,"lng":-82.84269,"mi":0.058,"pr":"landmark","co":"Erie","via":"Already on live map as 'Crystal Rock Cave' (r=1.00); coords from the mapped cave."}];
+const ohLongestLayer = L.layerGroup();
+ohLongest.forEach(c => {
+  const ic = L.divIcon({ className:'rank-icon', html:'<span class="rank-badge oh-rank">'+c.r+'</span>', iconSize:[24,24], iconAnchor:[12,12] });
+  L.marker([c.lat,c.lng], { icon:ic, zIndexOffset:2400, riseOnHover:true })
+    .bindPopup('<div class="popup"><b>#'+c.r+' · '+c.n+'</b>'
+      +'<div class="meta">'+c.co+' County · <b>'+c.mi+' mi</b> · precision: '+c.pr
+      +'<br>'+c.lat.toFixed(5)+', '+c.lng.toFixed(5)+'</div>'
+      +'<div class="role">'+c.via+'</div></div>', { maxWidth:330 })
+    .bindTooltip('#'+c.r+' '+c.n+' — '+c.mi+' mi', { direction:'top', offset:[0,-12] })
+    .addTo(ohLongestLayer);
+});
+ohLongestLayer.addTo(map);
+
 /* ---- controls ---- */
 const baseLayers = {
   "Topographic (Esri)": esriTopo,
@@ -1361,9 +1356,7 @@ const baseLayers = {
 const overlays = {};
 overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
-overlays["🟩 Ohio State Forests"] = stateForestLayer;
-overlays["▦ 13-county search corridor"] = corridorLayer;
-if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
+overlays["🟩 Ohio State Forests"] = stateForestLayer;if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
 overlays["🟫 IL sinkhole areas — ISGS (138)"] = ilAreasLayer;
 overlays["🟠 IL sinkholes — ISGS LiDAR (21,799)"] = ilPtsLayer;
 overlays["🟣 IL industrial mines — ILMINES (1,112)"] = ilIndLayer;
@@ -1374,6 +1367,7 @@ overlays["① IN — Longest Caves (62, by length)"] = inLongestLayer;
 overlays["① IL — Longest Caves (21, by length)"] = ilLongestLayer;
 overlays["① WI — Longest Caves (5, by length)"] = wiLongestLayer;
 overlays["① MI — Longest Caves (8, by length)"] = miLongestLayer;
+overlays["① OH — Longest Caves (21, by length)"] = ohLongestLayer;
 overlays["■ Ohio caves"] = ohio;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
 L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
