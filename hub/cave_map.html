@@ -1278,7 +1278,7 @@ map.on('overlayadd',function(e){
     ilCaveSymBuilt=true;
     for(let i=0;i<ilCaveSym.length;i++){ const c=ilCaveSym[i];
       L.circleMarker([c[0],c[1]],{renderer:ilCaveSymCanvas,radius:3.5,color:'#ffffff',weight:1,fillColor:'#1a1a1a',fillOpacity:0.9})
-        .bindPopup('<b>Cave</b> &mdash; digitized from ISGS Map 8<br><span style="color:#666">Unnamed cave symbol traced from ISGS Illinois Map 8 (Weibel &amp; Panno 1997). Location approximate (~&plusmn;1 mi).</span>')
+        .bindPopup('<b>Cave</b> &mdash; digitized from ISGS Map 8<br><b>'+c[0].toFixed(5)+', '+c[1].toFixed(5)+'</b> <span style="color:#888">(approximate)</span><br><span style="color:#666">Unnamed cave symbol traced from ISGS Illinois Map 8 (Weibel &amp; Panno 1997). Location <b>approximate</b> (~&plusmn;1 mi).</span>')
         .addTo(ilCaveSymLayer);
     }
   }
