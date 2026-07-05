@@ -54,7 +54,7 @@ export default function InvadersController({
   const fire = () => { haptic(18); onCtl('F'); };
 
   const alive = me ? me[2] === 1 : true;
-  const lives = me ? me[1] : 2;
+  const lives = me ? me[1] : 1;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[rgba(2,3,14,0.96)] select-none" style={{ touchAction: 'none' }}>
@@ -66,7 +66,7 @@ export default function InvadersController({
         )}
         {status === 'playing' && alive && (
           <p className="jeo-headline uppercase tracking-[0.2em] text-lg" style={{ color }}>
-            {myName ?? 'Your ship'} · <span className="text-[#ff7d92]">{'♥'.repeat(Math.max(0, lives))}<span className="text-white/15">{'♥'.repeat(Math.max(0, 2 - lives))}</span></span>
+            {myName ?? 'Your ship'} · <span className="text-[#ff7d92]">{'♥'.repeat(Math.max(0, lives))}<span className="text-white/15">{'♥'.repeat(Math.max(0, 1 - lives))}</span></span>
           </p>
         )}
         {status === 'playing' && !alive && (

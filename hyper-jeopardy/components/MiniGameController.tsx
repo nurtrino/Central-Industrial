@@ -64,8 +64,8 @@ function IntroCtl({ d }: { d: MiniGameData }) {
         <>
           <p className="text-blue-100/90 text-base leading-snug">Unscramble the word fastest. Type it here when play opens.</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
-            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
-            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(Math.round(d.value / 2))}</span>
             <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th+ {fmtPts(-d.value)}</span>
           </div>
@@ -75,8 +75,8 @@ function IntroCtl({ d }: { d: MiniGameData }) {
         <>
           <p className="text-blue-100/90 text-base leading-snug">{d.category} · 10 questions · 30s. Most correct wins.</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
-            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
-            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(Math.round(d.value / 2))}</span>
             <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
           </div>
@@ -86,8 +86,8 @@ function IntroCtl({ d }: { d: MiniGameData }) {
         <>
           <p className="text-blue-100/90 text-base leading-snug">Tiles flash, then hide — tap them all from memory. Levels grow 4×4→5×5. 3 wrong guesses and you&apos;re out. Climb furthest!</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
-            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
-            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(Math.round(d.value / 2))}</span>
             <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
           </div>
@@ -97,8 +97,8 @@ function IntroCtl({ d }: { d: MiniGameData }) {
         <>
           <p className="text-blue-100/90 text-base leading-snug">Guess the hidden 5-letter word — first to solve wins big.</p>
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
-            <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
-            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">1st {fmtPts(d.value)}</span>
+            <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(Math.round(d.value / 2))}</span>
             <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
           </div>

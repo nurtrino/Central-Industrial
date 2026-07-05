@@ -80,7 +80,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
             Unscramble the word on your phone. First to solve wins big — but be slow and it&apos;ll cost you.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th+', -d.value]].map(([label, pts]) => (
+            {[['1st', d.value], ['2nd', Math.round(d.value / 2)], ['3rd', 0], ['4th+', -d.value]].map(([label, pts]) => (
               <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
                 {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
               </span>
@@ -94,7 +94,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
             One category — <span className="text-[var(--jeo-gold)]">{d.category}</span>. 10 questions, 30 seconds — answer as many as you can. Most correct wins.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
+            {[['1st', d.value], ['2nd', Math.round(d.value / 2)], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
               <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
                 {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
               </span>
@@ -108,7 +108,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
             Tiles flash on your phone — find them all from memory. Clear a level and it grows: 4×4 with 5 lit up to 5×5 with 9. Three wrong guesses and you&apos;re out. Climb furthest, fastest.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
+            {[['1st', d.value], ['2nd', Math.round(d.value / 2)], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
               <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
                 {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
               </span>
@@ -122,7 +122,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
             A hidden 5-letter word — letters reveal one at a time. First to solve on your phone wins big.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
+            {[['1st', d.value], ['2nd', Math.round(d.value / 2)], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
               <span key={label} className={`jeo-headline uppercase tracking-widest text-lg sm:text-2xl px-5 py-3 rounded-xl border border-white/10 bg-[rgba(6,8,26,0.5)] ${ptsClass(pts as number)}`}>
                 {label} <span className="jeo-value">{fmtPts(pts as number)}</span>
               </span>
@@ -259,7 +259,7 @@ function MemoryStage({ state, d }: { state: GameState; d: MemoryData }) {
     .sort((a, b) => b.cleared - a.cleared);
   return (
     <div className="space-y-6">
-      <FirstSolveBanner state={state} solvedOrder={d.solvedOrder} roundScores={d.roundScores} fallbackPts={2 * d.value} label="cleared the ladder first!" />
+      <FirstSolveBanner state={state} solvedOrder={d.solvedOrder} roundScores={d.roundScores} fallbackPts={d.value} label="cleared the ladder first!" />
       <p className="text-center jeo-headline uppercase tracking-[0.28em] text-[#ffd97a] text-lg sm:text-xl">
         4×4 · 5 lit → 5×5 · 9 lit <span className="text-blue-200/50 text-base">· watch your phone</span>
       </p>

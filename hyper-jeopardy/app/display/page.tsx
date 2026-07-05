@@ -11,7 +11,6 @@ import {
 import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import MiniGameStage from '@/components/MiniGameStage';
-import HyperFlair from '@/components/HyperFlair';
 import InvadersStage from '@/components/InvadersStage';
 
 // The shared screen is sized for a TV. On phones (<=640px) the `display-scale`
@@ -229,7 +228,6 @@ export default function Display() {
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="hyper-burst w-[60vmin] h-[60vmin] rounded-full" />
             </div>
-            <HyperFlair density="full" />
             {state.cluePhase === 'hyper_intro' ? (
               <div className="relative space-y-6">
                 <p className="jeo-headline uppercase tracking-[0.5em] text-blue-200/80 text-2xl">Hyper Mode</p>

@@ -22,7 +22,7 @@ export const INV_H = 3.8;
 export const SHIP_Y = 91;      // ships' fixed row
 export const SHIP_W = 6;
 export const SHIP_H = 3.2;
-export const SHIP_LIVES = 2;
+export const SHIP_LIVES = 1;
 
 const EDGE_MIN_X = 2;
 const EDGE_MAX_X = 98 - ((INV_COLS - 1) * INV_SPACING_X + INV_W);

@@ -221,11 +221,19 @@ export function playSIMarch(stepIdx: number): void {
   osc.start(t0); osc.stop(t0 + 0.1);
 }
 
-// Fleet destroyed: a grim descending dirge.
+// Fleet destroyed: a grim descending dirge (synth fallback).
 export function playSILose(): void {
   const seq = [392, 311, 247, 185];
   seq.forEach((f, i) => scheduleNote({ freq: f, start: i * 0.22, dur: 0.24, type: 'sawtooth', gain: 0.16 }));
   scheduleNote({ freq: 92, start: 0.9, dur: 0.8, type: 'sawtooth', gain: 0.2 });
+}
+
+// Players failed to clear the wave — plays the arcade "death" clip on every
+// device, falling back to the synth dirge if the file is missing or blocked.
+// Preloaded via preloadLasers() so it fires the instant the fleet lands.
+export function playInvadersLose(): void {
+  if (playSample('/sounds/invaders-lose.mp3', 0.85)) return;
+  playSILose();
 }
 
 // The "Welcome to Hyper Jeopardy" voice clip — plays once when the app is
@@ -306,6 +314,13 @@ let laserLoadStarted = false;
 export function preloadLasers(): void {
   if (laserLoadStarted || typeof window === 'undefined') return;
   laserLoadStarted = true;
+  // Warm the Space Invaders defeat clip so it plays instantly on a loss.
+  try {
+    const lose = new Audio('/sounds/invaders-lose.mp3');
+    lose.preload = 'auto';
+    lose.load();
+    sampleElemCache.set('/sounds/invaders-lose.mp3', lose);
+  } catch { /* falls back to the synth dirge */ }
   fetch('/sounds/lasers/manifest.json', { cache: 'force-cache' })
     .then((r) => r.json())
     .then((m: { clips?: string[] }) => {

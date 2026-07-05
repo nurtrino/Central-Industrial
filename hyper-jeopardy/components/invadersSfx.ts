@@ -1,7 +1,7 @@
 'use client';
 import { INV_COLS, INV_ROWS, type InvSnapshot } from '@/lib/invaders';
 import {
-  playSIMarch, playSIShot, playSIBoom, playSIShipBoom, playSILose, playMiniCelebrate,
+  playSIMarch, playSIShot, playSIBoom, playSIShipBoom, playInvadersLose, playMiniCelebrate,
 } from '@/lib/audio';
 
 // Shared tick-diff sound engine for the SPACE INVADERS ambush — used by BOTH
@@ -41,7 +41,7 @@ export function applyInvaderTickSfx(
 
   if (t.st !== prev.st && !endSounded.current) {
     if (t.st === 'won') { endSounded.current = true; playMiniCelebrate(); }
-    if (t.st === 'lost') { endSounded.current = true; playSILose(); }
+    if (t.st === 'lost') { endSounded.current = true; playInvadersLose(); }
   }
   return ev;
 }

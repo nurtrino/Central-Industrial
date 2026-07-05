@@ -33,10 +33,11 @@ export const MEMORY_LEVELS: MemoryLevelSpec[] = [
 ];
 export const MEMORY_STRIKES = 3;
 
-// Placement scoring shared by Anagram Race and Rapid Fire: points are a MULTIPLE
-// of the board-cell value by finish position — 1st = 2×, 2nd = 1×, 3rd = 0,
-// 4th+ = −1×. Players who didn't place (no solve / no correct answer) get 0.
-const PLACEMENT_MULT = [2, 1, 0, -1];
+// Placement scoring shared by every mini-game: points are a MULTIPLE of the
+// board-cell value by finish position — 1st = full value, 2nd = half, 3rd = 0,
+// 4th+ = −full value. Players who didn't place (no solve / no correct answer)
+// get 0. Half values round to the nearest point (board values are always even).
+const PLACEMENT_MULT = [1, 0.5, 0, -1];
 
 // ── broadcast state shapes (no secrets) ─────────────────────────────────────
 export type MiniGameStatus = 'intro' | 'playing' | 'results';
