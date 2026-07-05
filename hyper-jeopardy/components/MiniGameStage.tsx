@@ -105,7 +105,7 @@ function IntroPanel({ d }: { d: MiniGameData }) {
       {d.key === 'memory_match' && (
         <div className="space-y-6">
           <p className="text-blue-100/90 text-2xl sm:text-3xl leading-relaxed max-w-3xl mx-auto">
-            Tiles flash on your phone — find them all from memory. Clear a level and it grows: 4×4 with 5 lit up to 5×5 with 8. Three wrong guesses and you&apos;re out. Climb furthest, fastest.
+            Tiles flash on your phone — find them all from memory. Clear a level and it grows: 4×4 with 5 lit up to 5×5 with 9. Three wrong guesses and you&apos;re out. Climb furthest, fastest.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
             {[['1st', 2 * d.value], ['2nd', d.value], ['3rd', 0], ['4th', -d.value]].map(([label, pts]) => (
@@ -261,7 +261,7 @@ function MemoryStage({ state, d }: { state: GameState; d: MemoryData }) {
     <div className="space-y-6">
       <FirstSolveBanner state={state} solvedOrder={d.solvedOrder} roundScores={d.roundScores} fallbackPts={2 * d.value} label="cleared the ladder first!" />
       <p className="text-center jeo-headline uppercase tracking-[0.28em] text-[#ffd97a] text-lg sm:text-xl">
-        4×4 · 5 lit → 5×5 · 8 lit <span className="text-blue-200/50 text-base">· watch your phone</span>
+        4×4 · 5 lit → 5×5 · 9 lit <span className="text-blue-200/50 text-base">· watch your phone</span>
       </p>
       <div className="space-y-3 max-w-3xl mx-auto">
         {rows.map(r => (

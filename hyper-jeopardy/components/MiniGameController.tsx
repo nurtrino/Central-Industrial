@@ -260,8 +260,8 @@ function LetterCtl({ d, playerId, onAction }: { d: LetterData; playerId: string;
 // humanbenchmark.com/tests/memory style, run per player on their own phone:
 // the pattern flashes ~1.6s, hides, then tap every lit cell from memory. Hits
 // stay lit; 3 wrong guesses at ANY time across the run → out. Clear the final
-// 5×5/8 rung to finish the ladder.
-const MEMORY_FLASH_MS = 1600;
+// 5×5/9 rung to finish the ladder.
+const MEMORY_FLASH_MS = 1350;
 
 function MemoryCtl({ d, playerId, onAction }: { d: MemoryData; playerId: string; onAction: Props['onAction'] }) {
   const seq = d.patternSeq[playerId] ?? 0;

@@ -34,6 +34,7 @@ import {
   handleMiniGameAction,
   revealLetter,
   finishMiniGame,
+  miniGameWinnerId,
   INTRO_MS,
   HYPER_ROUND_MS,
   RAPID_ROUND_MS,
@@ -659,7 +660,14 @@ function finishMini() {
   broadcast();
   setTimer('mg_results', RESULTS_MS, () => {
     if (gameState && gameState.cluePhase === 'hyper_active') {
+      // The mini-game winner takes control of the board for the next pick
+      // (read before endHyper clears miniGameData). Skip if they've since
+      // disconnected, or if nobody placed — then the current controller stays.
+      const winnerId = miniGameWinnerId(gameState);
       endHyper(gameState);
+      if (winnerId && gameState.players.some(p => p.id === winnerId && p.connected)) {
+        gameState.boardController = winnerId;
+      }
       maybeAdvanceRound();
       broadcast();
     }

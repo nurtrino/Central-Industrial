@@ -2,18 +2,23 @@
 // never reach the client). Curated for "medium" solvability: common enough to
 // be gettable, interesting enough to be fun.
 
-// Anagram Race — 5–7 letter single words, no proper nouns, all distinct-ish.
+// Anagram Race — 6–7 letter single words, no proper nouns. Every entry is the
+// ONLY English word its letters can spell, so each scramble has exactly one
+// valid solution (verified against a 370k-word dictionary; ambiguous words like
+// silent→listen/tinsel, forest→foster, garden→danger were dropped).
 export const ANAGRAM_WORDS: string[] = [
-  'planet', 'rocket', 'meteor', 'cosmos', 'galaxy', 'nebula', 'gravity', 'orbit',
-  'castle', 'dragon', 'wizard', 'puzzle', 'garden', 'guitar', 'jungle', 'island',
-  'bridge', 'candle', 'copper', 'silver', 'diamond', 'thunder', 'breeze', 'winter',
-  'summer', 'autumn', 'forest', 'meadow', 'canyon', 'desert', 'glacier', 'volcano',
-  'anchor', 'compass', 'lantern', 'harbor', 'voyage', 'pirate', 'treasure', 'mystery',
-  'pepper', 'walnut', 'orange', 'cherry', 'coffee', 'muffin', 'noodle', 'pickle',
-  'rabbit', 'falcon', 'turtle', 'badger', 'otter', 'iguana', 'panther', 'dolphin',
-  'circus', 'ticket', 'violin', 'trumpet', 'canvas', 'marble', 'crayon', 'ribbon',
-  'engine', 'magnet', 'signal', 'rubber', 'button', 'socket', 'helmet', 'shovel',
-  'frozen', 'bright', 'gentle', 'clever', 'hollow', 'silent', 'golden', 'velvet',
+  'anatomy', 'autumn', 'balloon', 'banana', 'barrel', 'bicycle', 'blanket', 'bouquet',
+  'bright', 'bullet', 'button', 'cannon', 'canvas', 'cherry', 'clever', 'coffee',
+  'compass', 'compost', 'cookie', 'copper', 'cosmos', 'cricket', 'crystal', 'diamond',
+  'emerald', 'flight', 'fossil', 'freeze', 'frozen', 'galaxy', 'garlic', 'gloves',
+  'gravity', 'guitar', 'hammer', 'harbor', 'helmet', 'hollow', 'iceberg', 'island',
+  'jacket', 'jaguar', 'jungle', 'lantern', 'magnet', 'makeup', 'marvel', 'meadow',
+  'muffin', 'museum', 'mystery', 'noodle', 'olympic', 'panther', 'pencil', 'penguin',
+  'pepper', 'phantom', 'picnic', 'pillow', 'pocket', 'poison', 'puzzle', 'pyramid',
+  'rabbit', 'rainbow', 'rhythm', 'rocket', 'rubber', 'runner', 'socket', 'stomach',
+  'surgeon', 'tackle', 'texture', 'thunder', 'ticket', 'tomato', 'tractor', 'trumpet',
+  'vaccine', 'vampire', 'velvet', 'viking', 'violin', 'volcano', 'voyage', 'walnut',
+  'whistle', 'wizard',
 ];
 
 // Letter Reveal — common 5-letter words.

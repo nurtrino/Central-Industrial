@@ -28,7 +28,8 @@ export const MEMORY_LEVELS: MemoryLevelSpec[] = [
   { grid: 16, lit: 5 },  // 4×4 — humanbenchmark level 3
   { grid: 16, lit: 6 },
   { grid: 25, lit: 7 },  // grid grows to 5×5
-  { grid: 25, lit: 8 },  // final rung
+  { grid: 25, lit: 8 },
+  { grid: 25, lit: 9 },  // final rung — one notch harder
 ];
 export const MEMORY_STRIKES = 3;
 
@@ -434,6 +435,16 @@ export function finishMiniGame(state: GameState): void {
   d.answerReveal = answerReveal(d);
   d.status = 'results';
   d.endsAt = null;
+}
+
+// The mini-game winner = the player who finished 1st (top positive score).
+// Called after finishMiniGame() (which sorts `results` by points desc) so the
+// server can hand board control to the winner for the next pick. Returns null
+// when nobody placed (all zero), so the caller keeps the current controller.
+export function miniGameWinnerId(state: GameState): string | null {
+  const d = state.miniGameData as unknown as MiniGameData | null;
+  const top = d?.results?.[0];
+  return top && top.points > 0 ? top.playerId : null;
 }
 
 function resultDetail(d: MiniGameData, playerId: string): string {
