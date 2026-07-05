@@ -417,6 +417,16 @@ export function initSocketServer(httpServer: HTTPServer) {
       battleControl(battle, socket.id, me?.name, String(a ?? ''), Date.now());
     });
 
+    // Playtest: the host arms (or disarms) the SPACE INVADERS ambush — it
+    // springs right after the next resolved clue, in any board round.
+    socket.on('arm_invasion', () => {
+      if (!gameState) return;
+      if (!gameState.players.find(p => p.id === socket.id && p.isHost)) return;
+      if (gameState.cluePhase === 'invaders') return;
+      gameState.invadersArmed = !gameState.invadersArmed;
+      broadcast();
+    });
+
     // Dev/test shortcut (set DEV_SHORTCUTS=1): burn the rest of the current
     // board so the next round — or the ambush — arrives immediately.
     if (process.env.DEV_SHORTCUTS === '1') {
@@ -720,13 +730,17 @@ function maybeAdvanceRound() {
   if (gameState.cluePhase !== 'idle') return;
 
   // SPACE INVADERS AMBUSH: springs the moment the board goes idle after the
-  // trigger threshold — before any round advancement.
-  if (
+  // trigger threshold — before any round advancement. The host's playtest
+  // "arm" button forces it after the next resolved clue in ANY board round
+  // (and ignores the one-per-game flag so it can be tested repeatedly).
+  const inBoardRound = gameState.phase === 'jeopardy' || gameState.phase === 'double_jeopardy';
+  const naturalTrigger =
     gameState.phase === 'double_jeopardy' &&
     !gameState.invadersDone &&
     gameState.invadersTriggerAt > 0 &&
-    gameState.usedClues.size >= gameState.invadersTriggerAt
-  ) {
+    gameState.usedClues.size >= gameState.invadersTriggerAt;
+  if (inBoardRound && (gameState.invadersArmed || naturalTrigger)) {
+    gameState.invadersArmed = false;
     startInvasion();
     return;
   }

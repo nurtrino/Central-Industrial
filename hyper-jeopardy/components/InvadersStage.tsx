@@ -6,9 +6,7 @@ import {
   INV_COLS, INV_ROWS, INV_SPACING_X, INV_SPACING_Y, INV_W, INV_H,
   SHIP_Y, SHIP_W, type InvSnapshot,
 } from '@/lib/invaders';
-import {
-  playSIShot, playSIBoom, playSIShipBoom, playSIMarch, playSILose, playMiniCelebrate,
-} from '@/lib/audio';
+import { applyInvaderTickSfx } from '@/components/invadersSfx';
 
 // SPACE INVADERS AMBUSH — the shared-screen battle. A fixed overlay above the
 // (dimmed) game board: canvas renders the wave, ships, bullets and explosions
@@ -80,42 +78,23 @@ export default function InvadersStage({ state }: { state: GameState }) {
     const s = getSocket();
     const onTick = (t: InvSnapshot) => {
       const prev = prevRef.current;
-      if (prev) {
-        if (t.st === 'playing' && t.step !== prev.step) playSIMarch(t.step);
-        if (t.shots > prev.shots) playSIShot();
-        for (let r = 0; r < INV_ROWS; r++) {
-          const died = prev.a[r] & ~t.a[r];
-          if (!died) continue;
-          for (let c = 0; c < INV_COLS; c++) {
-            if (died & (1 << c)) {
-              boomsRef.current.push({
-                x: t.bx + c * INV_SPACING_X + INV_W / 2,
-                y: t.by + r * INV_SPACING_Y + INV_H / 2,
-                at: performance.now(), big: false, color: ROW_COLORS[r % ROW_COLORS.length],
-              });
-              playSIBoom();
-            }
-          }
-        }
-        t.sh.forEach((sh, i) => {
-          const p = prev.sh[i];
-          if (!p) return;
-          if (sh[1] < p[1] || (p[2] === 1 && sh[2] === 0)) {
-            boomsRef.current.push({
-              x: sh[0] / 10, y: SHIP_Y, at: performance.now(),
-              big: sh[2] === 0, color: rosterRef.current[i]?.color ?? '#ffffff',
-            });
-            playSIShipBoom();
-          }
+      // shared sound engine (same sounds fire on every phone) + visual events
+      const ev = applyInvaderTickSfx(prev, t, endSoundRef);
+      for (const k of ev.kills) {
+        boomsRef.current.push({
+          x: t.bx + k.c * INV_SPACING_X + INV_W / 2,
+          y: t.by + k.r * INV_SPACING_Y + INV_H / 2,
+          at: performance.now(), big: false, color: ROW_COLORS[k.r % ROW_COLORS.length],
         });
-        if (t.st !== prev.st) {
-          setLiveStatus(t.st);
-          if (t.st === 'won' && !endSoundRef.current) { endSoundRef.current = true; playMiniCelebrate(); }
-          if (t.st === 'lost' && !endSoundRef.current) { endSoundRef.current = true; playSILose(); }
-        }
-      } else {
-        setLiveStatus(t.st);
       }
+      for (const sb of ev.shipBooms) {
+        const sh = t.sh[sb.idx];
+        boomsRef.current.push({
+          x: (sh?.[0] ?? 0) / 10, y: SHIP_Y, at: performance.now(),
+          big: sb.fatal, color: rosterRef.current[sb.idx]?.color ?? '#ffffff',
+        });
+      }
+      if (!prev || t.st !== prev.st) setLiveStatus(t.st);
       prevRef.current = t;
       snapRef.current = t;
     };

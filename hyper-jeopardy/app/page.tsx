@@ -344,12 +344,27 @@ export default function Home() {
               </p>
             </div>
             {player?.isHost && (
-              <button
-                onClick={handleNewGame}
-                className="shrink-0 jeo-headline tracking-wider uppercase text-[11px] sm:text-xs px-3 py-1.5 rounded-md border border-[rgba(0,229,255,0.45)] text-[var(--jeo-gold)] bg-[rgba(0,229,255,0.05)] hover:bg-[rgba(0,229,255,0.15)] active:scale-95 transition"
-              >
-                New Game
-              </button>
+              <div className="shrink-0 flex items-center gap-2">
+                {/* Playtest: arm the Space Invaders ambush — springs after the
+                    next resolved clue. Tap again to disarm. */}
+                <button
+                  onClick={() => socket?.emit('arm_invasion')}
+                  title="Playtest: spring the Space Invaders ambush after the next clue"
+                  className={`jeo-headline tracking-wider uppercase text-[11px] sm:text-xs px-2.5 py-1.5 rounded-md border transition active:scale-95 ${
+                    state.invadersArmed
+                      ? 'border-[#ff5c8a] text-[#ff9ab5] bg-[rgba(255,92,138,0.18)] mg-urgent'
+                      : 'border-white/15 text-blue-200/60 bg-white/[0.03] hover:text-[#ff9ab5] hover:border-[#ff5c8a]/60'
+                  }`}
+                >
+                  👾{state.invadersArmed ? ' Armed!' : ''}
+                </button>
+                <button
+                  onClick={handleNewGame}
+                  className="jeo-headline tracking-wider uppercase text-[11px] sm:text-xs px-3 py-1.5 rounded-md border border-[rgba(0,229,255,0.45)] text-[var(--jeo-gold)] bg-[rgba(0,229,255,0.05)] hover:bg-[rgba(0,229,255,0.15)] active:scale-95 transition"
+                >
+                  New Game
+                </button>
+              </div>
             )}
           </div>
           {boardController && state.cluePhase === 'idle' && (

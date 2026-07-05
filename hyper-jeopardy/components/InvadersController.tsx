@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '@/lib/gameEngine';
 import { getSocket } from '@/lib/socket-client';
 import type { InvSnapshot } from '@/lib/invaders';
-import { playSIShot, haptic } from '@/lib/audio';
+import { haptic } from '@/lib/audio';
+import { applyInvaderTickSfx } from '@/components/invadersSfx';
 
 // SPACE INVADERS AMBUSH — phone battle station. Big ◀ ▶ hold-to-move pads and
 // a FIRE button. Movement uses press/release semantics (pointerdown → move,
@@ -21,6 +22,8 @@ export default function InvadersController({
 }) {
   const [snap, setSnap] = useState<InvSnapshot | null>(null);
   const holdRef = useRef<CtlAction | null>(null);
+  const prevTickRef = useRef<InvSnapshot | null>(null);
+  const endSoundRef = useRef(false);
   const roster = state.invaders?.roster ?? [];
   const myName = state.players.find(p => p.id === playerId)?.name;
   let myIdx = roster.findIndex(r => r.id === playerId);
@@ -31,7 +34,12 @@ export default function InvadersController({
 
   useEffect(() => {
     const s = getSocket();
-    const onTick = (t: InvSnapshot) => setSnap(t);
+    const onTick = (t: InvSnapshot) => {
+      // full battle soundtrack on the phone too — march, shots, booms, stingers
+      applyInvaderTickSfx(prevTickRef.current, t, endSoundRef);
+      prevTickRef.current = t;
+      setSnap(t);
+    };
     s.on('invaders', onTick);
     return () => { s.off('invaders', onTick); };
   }, []);
@@ -41,7 +49,9 @@ export default function InvadersController({
 
   const press = (a: 'L' | 'R') => { holdRef.current = a; haptic(10); onCtl(a); };
   const release = () => { if (holdRef.current) { holdRef.current = null; onCtl('S'); } };
-  const fire = () => { playSIShot(0.1); haptic(18); onCtl('F'); };
+  // Haptic is instant; the pew itself arrives via the shared tick soundtrack
+  // (~a tick later), so every device hears the identical shot at the same time.
+  const fire = () => { haptic(18); onCtl('F'); };
 
   const alive = me ? me[2] === 1 : true;
   const lives = me ? me[1] : 2;

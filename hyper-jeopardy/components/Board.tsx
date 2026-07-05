@@ -76,7 +76,7 @@ export default function Board({ board, state, playerId, onSelectClue, revealHype
               >
                 {!used && (
                   <span className="jeo-value text-2xl sm:text-4xl">
-                    ${value.toLocaleString()}
+                    {value}
                   </span>
                 )}
                 {isHyper && hg && <span className="hyper-badge" aria-hidden>{hg.badge}</span>}

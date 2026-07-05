@@ -169,6 +169,8 @@ export interface GameState {
   invaders: InvadersSummary | null; // roster + status while the battle runs
   invadersDone: boolean;            // one ambush per game
   invadersTriggerAt: number;        // usedClues.size threshold that springs it
+  invadersArmed: boolean;           // playtest: host armed the ambush to spring
+                                    // after the NEXT resolved clue (any round)
   activeMiniGame: MiniGame | null;  // the mini-game running during a hyper cell
   miniGameTrivia: TriviaQuestion[] | null; // pre-fetched questions for the active mini-game
   miniGameData: Record<string, unknown> | null; // per-game runtime state (wireframe prototyping)
@@ -213,6 +215,7 @@ export function createGame(showNumber: number, airDate: string): GameState {
     invaders: null,
     invadersDone: false,
     invadersTriggerAt: 0,
+    invadersArmed: false,
     activeMiniGame: null,
     miniGameTrivia: null,
     miniGameData: null,

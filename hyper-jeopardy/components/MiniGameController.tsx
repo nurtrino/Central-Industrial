@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '@/lib/gameEngine';
 import type { AnagramData, RapidData, LetterData, MemoryData, MiniGameData } from '@/lib/miniGames';
-import { playSolve, playWrong, haptic } from '@/lib/audio';
+import { playSolve, playWrong, playMiniCelebrate, haptic } from '@/lib/audio';
 
 export interface MGFeedback {
   correct?: boolean; points?: number; invalid?: boolean; already?: boolean; stale?: boolean;
@@ -31,6 +31,19 @@ function ptsClass(n: number): string {
 
 export default function MiniGameController({ state, playerId, onAction }: Props) {
   const d = state.miniGameData as unknown as MiniGameData | null;
+  const solvedCount = (d && 'solvedOrder' in d) ? d.solvedOrder.length : 0;
+  const seenSolvesRef = useRef(0);
+
+  // First-solve fanfare on EVERY phone (the shared screen already plays it):
+  // the moment the first player solves/finishes, the whole room hears it.
+  useEffect(() => {
+    if (solvedCount > seenSolvesRef.current) {
+      if (seenSolvesRef.current === 0) playMiniCelebrate();
+      seenSolvesRef.current = solvedCount;
+    }
+    if (solvedCount === 0) seenSolvesRef.current = 0; // fresh round
+  }, [solvedCount]);
+
   if (!d || !playerId) return null;
 
   if (d.status === 'results') return <ResultsView d={d} playerId={playerId} />;

@@ -4,7 +4,10 @@ import { Socket } from 'socket.io-client';
 import { getSocket } from '@/lib/socket-client';
 import { GameState } from '@/lib/gameEngine';
 import { isUnavailableClue } from '@/lib/clueSentinel';
-import { unlockAudio, preloadLasers, playHyperStart } from '@/lib/audio';
+import {
+  unlockAudio, preloadLasers, playHyperStart, playGameStart, playBoardFill,
+  playBuzzIn, playDailyDouble, playCorrect, playWrong, playTimeUp,
+} from '@/lib/audio';
 import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import MiniGameStage from '@/components/MiniGameStage';
@@ -59,14 +62,54 @@ export default function Display() {
     };
   }, []);
 
-  // HYPER MODE activation: play the same server-seeded clip as every phone.
+  // HYPER MODE activation + clue-flow sounds: the shared screen plays the SAME
+  // effects as every phone (buzz-in, Daily Double fanfare) on phase changes.
   useEffect(() => {
     const phase = state?.cluePhase ?? null;
-    if (prevCluePhaseRef.current !== 'hyper_intro' && phase === 'hyper_intro') {
-      playHyperStart(state?.hyperSeed ?? 0);
+    const prev = prevCluePhaseRef.current;
+    if (prev !== phase) {
+      if (phase === 'hyper_intro') playHyperStart(state?.hyperSeed ?? 0);
+      if (phase === 'answering' && prev === 'buzzing') playBuzzIn();
+      if (phase === 'daily_double_wager') playDailyDouble();
+      prevCluePhaseRef.current = phase;
     }
-    prevCluePhaseRef.current = phase;
   }, [state?.cluePhase, state?.hyperSeed]);
+
+  // Round-change sounds — same as the phones: laser-charge for the first
+  // board, board-fill for Double Jeopardy.
+  const lastBoardPhaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    const phase = state?.phase;
+    if (!phase) return;
+    if ((phase === 'jeopardy' || phase === 'double_jeopardy') && lastBoardPhaseRef.current !== phase) {
+      lastBoardPhaseRef.current = phase;
+      if (phase === 'jeopardy') playGameStart();
+      else playBoardFill();
+    }
+  }, [state?.phase]);
+
+  // Correct/wrong stings on judged answers (same broadcast the phones use).
+  useEffect(() => {
+    const s = getSocket();
+    const onResult = ({ result }: { result?: string }) => {
+      if (result === 'correct') playCorrect();
+      else if (result === 'wrong') playWrong();
+    };
+    s.on('answer_result', onResult);
+    return () => { s.off('answer_result', onResult); };
+  }, []);
+
+  // Time-up buzzer when a buzz/answer clock expires.
+  useEffect(() => {
+    const phase = state?.cluePhase;
+    const endsAt = state?.timerEndsAt;
+    if (!endsAt || !phase) return;
+    if (phase !== 'buzzing' && phase !== 'answering' && phase !== 'daily_double_answer') return;
+    const ms = endsAt - Date.now();
+    if (ms <= 0) return;
+    const t = setTimeout(() => playTimeUp(), ms);
+    return () => clearTimeout(t);
+  }, [state?.cluePhase, state?.timerEndsAt]);
 
   if (!connected || !state) {
     return (
