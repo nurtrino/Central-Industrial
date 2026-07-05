@@ -437,29 +437,7 @@ if (window.L && L.esri) {
   });
 }
 
-/* ---- OCS Top-Ten Longest Caves — ranked overlay (numbered badges) ---- */
-const top10 = [
-  {r:1,n:"Ohio Caverns (Reames Cave)",ft:"15,787 ft (2.99 mi)",county:"Champaign",lat:40.23809,lng:-83.69643},
-  {r:2,n:"Freeland's Cave",ft:"2,323 ft",county:"Adams",lat:38.7776,lng:-83.3302},
-  {r:3,n:"Reif's Cave",ft:"2,288 ft",county:"Ross",lat:39.3394,lng:-82.9950},
-  {r:4,n:"Zane Caverns",ft:"1,529 ft",county:"Logan",lat:40.37576,lng:-83.63512},
-  {r:5,n:"Devil's Den Fracture System",ft:"1,155 ft",county:"Portage",lat:41.33117,lng:-81.04204},
-  {r:6,n:"Cedar Fork Cave",ft:"1,023 ft",county:"Adams",lat:38.7917,lng:-83.5442},
-  {r:7,n:"Slate Stone (Sanborn's) Cave",ft:"902 ft",county:"Champaign",lat:40.2600,lng:-83.7100},
-  {r:8,n:"Wet Cave",ft:"807 ft",county:"Highland",lat:39.2222,lng:-83.3598},
-  {r:9,n:"Paradise Cave",ft:"640 ft",county:"Ottawa",lat:41.6545,lng:-82.8175},
-  {r:10,n:"Indian Trail Caverns",ft:"597 ft",county:"Wyandot",lat:40.9807,lng:-83.4448}
-];
-const top10Layer = L.layerGroup();
-top10.forEach(t => {
-  const ic = L.divIcon({ className:'rank-icon', html:'<span class="rank-badge">'+t.r+'</span>', iconSize:[22,22], iconAnchor:[11,11] });
-  L.marker([t.lat,t.lng], { icon:ic, zIndexOffset:1500 })
-   .bindPopup('<div class="popup"><b>#'+t.r+' &middot; '+t.n+'</b><div class="meta">'+t.county+' County'
-     +'<br>Coords: '+t.lat.toFixed(4)+', '+t.lng.toFixed(4)+'</div>'
-     +'<div class="role">Length: <b>'+t.ft+'</b>. From the OCS unofficial "Top-Ten Longest Caves" list (NSS Cave Files / Long &amp; Deep Caves).</div></div>')
-   .bindTooltip('#'+t.r+' '+t.n+' — '+t.ft, {direction:'top', offset:[0,-11]})
-   .addTo(top10Layer);
-});
+/* ---- Top-Ten Longest Caves overlay REMOVED 2026-07-05 — being rebuilt state-by-state (Indiana first). ---- */
 
 /* ---- OCS "Ohio Cave Regions" — generalized zones (NOT exact boundaries) ---- */
 const caveRegionsData = [
@@ -1302,9 +1280,7 @@ overlays["🟫 IL sinkhole areas — ISGS (138)"] = ilAreasLayer;
 overlays["🟠 IL sinkholes — ISGS LiDAR (21,799)"] = ilPtsLayer;
 overlays["🟣 IL industrial mines — ILMINES (1,112)"] = ilIndLayer;
 overlays["⚫ IL coal mine entries — ILMINES (7,840, abandoned)"] = ilCoalLayer;
-overlays["◗ IL caves — digitized from ISGS Map 8 (207, approx)"] = ilCaveSymLayer;
-overlays["① Top-10 longest caves (ranked)"] = top10Layer;
-overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
+overlays["◗ IL caves — digitized from ISGS Map 8 (207, approx)"] = ilCaveSymLayer;overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
 /* ---- one master toggle per state, grouped at the bottom of the panel ---- */
 overlays["■ Ohio caves"] = ohio;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
