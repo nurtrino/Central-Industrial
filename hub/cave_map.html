@@ -32,6 +32,7 @@
     font:700 9px sans-serif; display:flex; align-items:center; justify-content:center; margin-right:6px; flex:0 0 auto; }
   .rank-badge.in-rank { width:22px; height:22px; background:#e8f5e9; border-color:#1b5e20; color:#14521a; font-size:11px; }
   .rank-badge.il-rank { width:22px; height:22px; background:#e3f2fd; border-color:#1565c0; color:#0d47a1; font-size:11px; }
+  .rank-badge.wi-rank { width:22px; height:22px; background:#e0f7fa; border-color:#00838f; color:#006064; font-size:11px; }
   .searchbox { background:rgba(255,255,255,0.96); border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,0.3); padding:6px; width:236px;
     font:13px -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
   .searchbox input { width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid #bbb; border-radius:6px; font-size:13px; outline:none; }
@@ -1316,6 +1317,22 @@ ilLongest.forEach(c => {
 });
 ilLongestLayer.addTo(map);
 
+
+/* ---- WI — Longest Caves — ranked by length, numbered badges (from WI_Long_Cave_List.xlsx, 2026-07-05). ON by default. ---- */
+const wiLongest = [{"r":1,"n":"Crystal Cave","lat":44.8325,"lng":-92.2519,"mi":0.739,"pr":"exact","co":"Pierce","via":"Already on live map as 'Crystal Cave'; coords from the mapped cave. Crystal Cave show cave, Spring Valley, Pierce Co."},{"r":2,"n":"Eagle Cave","lat":43.2437,"lng":-90.5411,"mi":0.568,"pr":"exact","co":"Grant","via":"Already on live map as 'Eagle Cave'; coords from the mapped cave. Eagle Cave show cave near Blue River, Grant Co."},{"r":3,"n":"Cave of the Mounds","lat":43.0167,"lng":-89.8149,"mi":0.32,"pr":"exact","co":"Dane","via":"Already on live map as 'Cave of the Mounds'; coords from the mapped cave. National Natural Landmark show cave, Blue Mounds, Dane Co."},{"r":4,"n":"Tatarus Cave System","lat":44.28833,"lng":-87.77411,"mi":0.062,"pr":"landmark","co":"Manitowoc","via":"Tartarus Cave System — a cave in the Maribel Caves county park cluster (Manitowoc Co, Twp of Gibson; served by the 1900 Maribel Caves Hotel). Anchored to the mapped Maribel Caves park location. Src: WI_Cave_Catalog.md; NSS News Dec_12 & April_14."},{"r":5,"n":"Enerson's Cave","lat":43.139,"lng":-89.7479,"mi":0.045,"pr":"landmark","co":"Dane","via":"Already on live map as 'Enerson's Cave'; coords from the mapped cave. Near Black Earth, Dane Co.; hilltop sink entrance in Prairie du Chien dolomite (WI catalog)."}];
+const wiLongestLayer = L.layerGroup();
+wiLongest.forEach(c => {
+  const ic = L.divIcon({ className:'rank-icon', html:'<span class="rank-badge wi-rank">'+c.r+'</span>', iconSize:[24,24], iconAnchor:[12,12] });
+  L.marker([c.lat,c.lng], { icon:ic, zIndexOffset:2200, riseOnHover:true })
+    .bindPopup('<div class="popup"><b>#'+c.r+' · '+c.n+'</b>'
+      +'<div class="meta">'+c.co+' County · <b>'+c.mi+' mi</b> · precision: '+c.pr
+      +'<br>'+c.lat.toFixed(5)+', '+c.lng.toFixed(5)+'</div>'
+      +'<div class="role">'+c.via+'</div></div>', { maxWidth:330 })
+    .bindTooltip('#'+c.r+' '+c.n+' — '+c.mi+' mi', { direction:'top', offset:[0,-12] })
+    .addTo(wiLongestLayer);
+});
+wiLongestLayer.addTo(map);
+
 /* ---- controls ---- */
 const baseLayers = {
   "Topographic (Esri)": esriTopo,
@@ -1338,6 +1355,7 @@ overlays["◗ IL caves — digitized from ISGS Map 8 (207, approx)"] = ilCaveSym
 /* ---- one master toggle per state, grouped at the bottom of the panel ---- */
 overlays["① IN — Longest Caves (62, by length)"] = inLongestLayer;
 overlays["① IL — Longest Caves (21, by length)"] = ilLongestLayer;
+overlays["① WI — Longest Caves (5, by length)"] = wiLongestLayer;
 overlays["■ Ohio caves"] = ohio;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
 L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
