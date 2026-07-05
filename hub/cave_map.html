@@ -498,30 +498,6 @@ function loadGeo(url, layer, transform, onfail){
   }).catch(() => { if (onfail) onfail(); });
 }
 
-/* ---- 13-county search corridor (county polygons fetched at runtime) ---- */
-const corridorFips = new Set([
-  "39073","39045","39127","39009","39163","39079","39141","39131","39145","39167","39105","39053","39087"
-]); // Hocking, Fairfield, Perry, Athens, Vinton, Jackson, Ross, Pike, Scioto, Washington, Meigs, Gallia, Lawrence
-const corridorLayer = L.geoJSON(null, {
-  pane:'publiclands',
-  style: { color:"#1f4e79", weight:1.1, fillColor:"#3388ff", fillOpacity:0.06 },
-  onEachFeature: (f, lyr) => {
-    const nm = (f.properties && f.properties.NAME) ? f.properties.NAME + " County" : "County";
-    lyr.bindTooltip(nm, { sticky:true });
-  }
-}).addTo(map);
-loadGeo(
-  'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json',
-  corridorLayer,
-  geo => geo.features.filter(f => corridorFips.has(f.id)),
-  () => {
-    const note = L.control({ position:'bottomleft' });
-    note.onAdd = function(){ const d=L.DomUtil.create('div','info-box');
-      d.innerHTML='<span class="sub">Boundary overlays need internet — connect to load the county corridor &amp; public-land layers.</span>'; return d; };
-    note.addTo(map);
-  }
-);
-
 /* ---- REFINEMENT 2a: Wayne National Forest (USFS admin boundary) ---- */
 const wayneLayer = L.geoJSON(null, {
   pane:'publiclands',
@@ -532,7 +508,14 @@ loadGeo(
   "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_ForestSystemBoundaries_01/MapServer/0/query"
   + "?where=FORESTNAME%3D'Wayne%20National%20Forest'&outFields=FORESTNAME&returnGeometry=true"
   + "&geometryPrecision=4&maxAllowableOffset=0.004&outSR=4326&f=geojson",
-  wayneLayer
+  wayneLayer,
+  null,
+  () => {
+    const note = L.control({ position:'bottomleft' });
+    note.onAdd = function(){ const d=L.DomUtil.create('div','info-box');
+      d.innerHTML='<span class="sub">Boundary overlays need internet — connect to load the public-land layers.</span>'; return d; };
+    note.addTo(map);
+  }
 );
 
 /* ---- REFINEMENT 2b: Ohio State Forests (ODNR Lands, SE-corridor extent) ---- */
@@ -1204,7 +1187,6 @@ const overlays = {};
 overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
 overlays["🟩 Ohio State Forests"] = stateForestLayer;
-overlays["▦ 13-county search corridor"] = corridorLayer;
 if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
 overlays["① Top-10 longest caves (ranked)"] = top10Layer;
 overlays["▨ OCS cave regions (generalized)"] = caveRegionLayer;
