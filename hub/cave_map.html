@@ -33,6 +33,7 @@
   .rank-badge.in-rank { width:22px; height:22px; background:#e8f5e9; border-color:#1b5e20; color:#14521a; font-size:11px; }
   .rank-badge.il-rank { width:22px; height:22px; background:#e3f2fd; border-color:#1565c0; color:#0d47a1; font-size:11px; }
   .rank-badge.wi-rank { width:22px; height:22px; background:#e0f7fa; border-color:#00838f; color:#006064; font-size:11px; }
+  .rank-badge.mi-rank { width:22px; height:22px; background:#ffebee; border-color:#c62828; color:#b71c1c; font-size:11px; }
   .searchbox { background:rgba(255,255,255,0.96); border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,0.3); padding:6px; width:236px;
     font:13px -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
   .searchbox input { width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid #bbb; border-radius:6px; font-size:13px; outline:none; }
@@ -1333,6 +1334,22 @@ wiLongest.forEach(c => {
 });
 wiLongestLayer.addTo(map);
 
+
+/* ---- MI — Longest Caves — ranked by length, numbered badges (from MI_Long_Cave_List.xlsx, 2026-07-05). ON by default. ---- */
+const miLongest = [{"r":1,"n":"Hendrie River Water Cave","lat":46.19,"lng":-85.32,"mi":0.401,"pr":"landmark","co":"Mackinac","via":"Fiborn Karst Preserve (Rexton quad), near Rexton/Trout Lake, Mackinac Co. Michigan's longest cave. 1977 Guidebook map 'HENDRIE RIVER WATER CAVE / MACKINAC CO., MICH.'; NSS Bull v.53 (Volz & Yao 1991) locates it in the Fiborn Karst Preserve on the USGS Rexton 7.5' quad, 'the largest cave in the state', near Rexton/Trout Lake. [src: 1977-Guidebook-compressed.md; Vol 53 num 2.md]"},{"r":2,"n":"Kochab Cave","lat":46.191,"lng":-85.316,"mi":0.083,"pr":"landmark","co":"Mackinac","via":"Fiborn Karst area, immediately adjacent to Hendrie River Water Cave, Mackinac Co. 1977 Guidebook map 'KOCHAB CAVE / MACKINAC CO., MICH.' (surveyed 1975-76 by Michigan Interlakes Grotto); 'less water, more mud than neighboring Hendrie River Water Cave' â€” immediately adjacent to Hendrie in the Fiborn Karst area. [src: 1977-Guidebook-compressed.md]"},{"r":3,"n":"Big Pit","lat":45.98,"lng":-87.865,"mi":0.043,"pr":"county","co":"Dickinson","via":"NOT in corpus (only out-of-state homonyms) - placed at Dickinson Co. centroid. No Michigan/Dickinson Co attribution in corpus; all 'Big Pit' hits are homonyms/generic (Mexico, Pennsylvania, internal cave pits). County from input only. [src: none (not in corpus)]"},{"r":4,"n":"Skull Cave","lat":45.855,"lng":-84.617,"mi":0.04,"pr":"landmark","co":"Mackinac Island","via":"Mackinac Island, ~1/2 mi N of Fort Mackinac on Garrison Road (historic burial-vault cave). 1977 Guidebook: 'Half a mile north of Fort Mackinac, on Garrison Road, is Skull Cave... an ancient burial vault' â€” the Mackinac Island historic cave. Rejected the NY (Albany Co) 'Skull Cave' homonym. [src: 1977-Guidebook-compressed.md]"},{"r":5,"n":"Bear Cave (Show)","lat":41.8656,"lng":-86.383,"mi":0.028,"pr":"landmark","co":"Bertrand","via":"Public show cave: Bear Cave Resort, ~4085 Bear Cave Rd near Buchanan, Berrien Co, on the St. Joseph River (from the cave's known public location; not in the corpus). No Michigan-attributed Bear Cave in corpus (all hits out-of-state). The real cave is the Bear Cave Resort show cave near Buchanan, Berrien Co, on the St. Joseph River â€” supplied from public knowledge, not the corpus. [src: not in corpus; public show-cave (Bear Cave Resort, Buchanan MI)]"},{"r":6,"n":"Fibron Quarry Cave","lat":46.188,"lng":-85.325,"mi":0.028,"pr":"landmark","co":"Mackinac","via":"South wall of the Fiborn Quarry, Fiborn Karst Preserve, NE of Rexton, Mackinac Co. ('Fibron'=OCR of 'Fiborn'). 'Fibron'=OCR of 'Fiborn'. 'Quarry Cave is located in the south wall of the Fiborn Quarry' on the Fiborn Karst Preserve, between Rexton and Trout Lake, NE of Rexton (Mackinac County 742 / Fiborn Quarry Rd off H-40). [src: 1987-Guidebook.md ('STOP 12: FIBORN QUARRY KARST'); update_010.md]"},{"r":7,"n":"Eitzgeraid Lake Cave #1","lat":45.03,"lng":-83.56,"mi":0.019,"pr":"county","co":"Alpena","via":"NOT in corpus as a named cave ('Fitzgerald' is a small karst lake near Long Lake) - placed at Alpena Co. centroid. 'Eitzgeraid'=likely 'Fitzgerald'. Corpus names 'Fitzgerald' only as a small karst-controlled lake in NE lower Michigan (Alpena/Presque Isle block near Long Lake), no cave described. County-level (Alpena) only. [src: 1977-Guidebook-compressed.md (Alpena karst road log); no cave entry]"},{"r":8,"n":"Spider Cave ( Burnt Bluff Cave or 20DE3)","lat":45.73,"lng":-86.68,"mi":0.017,"pr":"landmark","co":"Delta","via":"Burnt Bluff (160-ft cliffs), Garden Peninsula, Delta Co, ~6 mi from Fayette across Big Bay de Noc (small pictograph caves). 'Spider Cave'/20DE site not named for MI, but its Burnt Bluff alias is anchored: 'Burnt Bluff, with its 160 foot cliffs' on the Garden Peninsula, Delta Co, ~6 mi from Fayette across Big Bay de Noc, small caves with Indian pictographs (now private). [src: 1977-Guidebook-compressed.md (Garden-Fayette tour, Burnt Bluff caves)]"}];
+const miLongestLayer = L.layerGroup();
+miLongest.forEach(c => {
+  const ic = L.divIcon({ className:'rank-icon', html:'<span class="rank-badge mi-rank">'+c.r+'</span>', iconSize:[24,24], iconAnchor:[12,12] });
+  L.marker([c.lat,c.lng], { icon:ic, zIndexOffset:2300, riseOnHover:true })
+    .bindPopup('<div class="popup"><b>#'+c.r+' · '+c.n+'</b>'
+      +'<div class="meta">'+c.co+' County · <b>'+c.mi+' mi</b> · precision: '+c.pr
+      +'<br>'+c.lat.toFixed(5)+', '+c.lng.toFixed(5)+'</div>'
+      +'<div class="role">'+c.via+'</div></div>', { maxWidth:330 })
+    .bindTooltip('#'+c.r+' '+c.n+' — '+c.mi+' mi', { direction:'top', offset:[0,-12] })
+    .addTo(miLongestLayer);
+});
+miLongestLayer.addTo(map);
+
 /* ---- controls ---- */
 const baseLayers = {
   "Topographic (Esri)": esriTopo,
@@ -1356,6 +1373,7 @@ overlays["◗ IL caves — digitized from ISGS Map 8 (207, approx)"] = ilCaveSym
 overlays["① IN — Longest Caves (62, by length)"] = inLongestLayer;
 overlays["① IL — Longest Caves (21, by length)"] = ilLongestLayer;
 overlays["① WI — Longest Caves (5, by length)"] = wiLongestLayer;
+overlays["① MI — Longest Caves (8, by length)"] = miLongestLayer;
 overlays["■ Ohio caves"] = ohio;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
 L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
