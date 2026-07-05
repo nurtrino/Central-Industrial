@@ -19,7 +19,8 @@ export type CluePhase =
   | 'daily_double_wager'// DD: player wagering
   | 'daily_double_answer'// DD: player answering
   | 'hyper_intro'       // HYPER MODE activation splash before the mini-game
-  | 'hyper_active';     // HYPER MODE mini-game running (placeholder for now)
+  | 'hyper_active'      // HYPER MODE mini-game running
+  | 'invaders';         // SPACE INVADERS AMBUSH takeover (mid-Double-Jeopardy)
 
 // A mini-game that can fire when a "hyper" cell is chosen.
 //   mode   — 'single' (one player's spotlight) or 'multi' (whole table competes)
@@ -43,8 +44,9 @@ export interface MiniGame {
 // Phase 1 mini-games (all multiplayer). Their logic lives in lib/miniGames.ts.
 export const MINI_GAMES: MiniGame[] = [
   { key: 'anagram_race',  title: 'Anagram Race',  family: 'Word Race',   mode: 'multi', trivia: false,                     blurb: 'Unscramble the word before your rivals — the faster you solve, the more you bank.' },
-  { key: 'rapid_fire',    title: 'Rapid Fire',    family: 'Speed',       mode: 'multi', trivia: 'random', triviaCount: 15, blurb: 'One category, forty-five seconds. Answer as many as you can — wrong answers cost you.' },
+  { key: 'rapid_fire',    title: 'Rapid Fire',    family: 'Speed',       mode: 'multi', trivia: 'random', triviaCount: 10, blurb: 'Ten questions, one category, thirty seconds. Answer as many as you can — most correct wins.' },
   { key: 'letter_reveal', title: 'Letter Reveal', family: 'Word Reveal', mode: 'multi', trivia: false,                     blurb: 'Five hidden letters reveal one by one. Guess early — the fewer shown, the bigger the score.' },
+  { key: 'memory_match',  title: 'Memory Matrix', family: 'Memory',      mode: 'multi', trivia: false,                     blurb: 'A pattern flashes on the grid — memorize it, then rebuild it from memory. First perfect match wins.' },
 ];
 
 export function pickMiniGame(): MiniGame {
@@ -127,6 +129,14 @@ export interface FinalJeopardyEntry {
   correct: boolean | null;
 }
 
+// Broadcast-facing summary of the SPACE INVADERS AMBUSH. The high-rate battle
+// telemetry travels on its own socket event ('invaders'); this summary rides
+// the normal state broadcast so late joiners/refreshes know who's flying what.
+export interface InvadersSummary {
+  status: 'intro' | 'playing' | 'won' | 'lost';
+  roster: { id: string; name: string; color: string }[];
+}
+
 export interface GameState {
   gameId: string;
   phase: GamePhase;
@@ -153,6 +163,14 @@ export interface GameState {
   scores: Record<string, number[]>; // history for display
   hyperClues: number[];             // clue ids that trigger HYPER MODE this round
   hyperGames: Record<number, string>; // clue id → pre-assigned mini-game key
+  hyperSeed: number;                // rolled on each hyper activation — every client
+                                    // plays the SAME start clip (seed % clip count)
+  // SPACE INVADERS AMBUSH — fires once, at a random point in Double Jeopardy.
+  invaders: InvadersSummary | null; // roster + status while the battle runs
+  invadersDone: boolean;            // one ambush per game
+  invadersTriggerAt: number;        // usedClues.size threshold that springs it
+  invadersArmed: boolean;           // playtest: host armed the ambush to spring
+                                    // after the NEXT resolved clue (any round)
   activeMiniGame: MiniGame | null;  // the mini-game running during a hyper cell
   miniGameTrivia: TriviaQuestion[] | null; // pre-fetched questions for the active mini-game
   miniGameData: Record<string, unknown> | null; // per-game runtime state (wireframe prototyping)
@@ -164,7 +182,7 @@ const READING_DELAY_MS = 6_000;
 const REVEAL_PAUSE_MS = 3_000;
 const DD_ANSWER_MS = 30_000;
 export const HYPER_INTRO_MS = 3_500;   // activation splash duration
-export const HYPER_MAX_MS = 120_000;   // safety cap so a placeholder can't hang the board
+export const HYPER_MAX_MS = 75_000;    // absolute safety cap (5s rules + 60s round + buffer)
 
 export function createGame(showNumber: number, airDate: string): GameState {
   return {
@@ -193,6 +211,11 @@ export function createGame(showNumber: number, airDate: string): GameState {
     scores: {},
     hyperClues: [],
     hyperGames: {},
+    hyperSeed: 0,
+    invaders: null,
+    invadersDone: false,
+    invadersTriggerAt: 0,
+    invadersArmed: false,
     activeMiniGame: null,
     miniGameTrivia: null,
     miniGameData: null,
@@ -278,6 +301,7 @@ export function selectClue(
   if (state.hyperClues.includes(clue.id)) {
     const key = state.hyperGames[clue.id];
     state.activeMiniGame = MINI_GAMES.find(g => g.key === key) ?? pickMiniGame();
+    state.hyperSeed = Math.floor(Math.random() * 1_000_000); // same start clip on every screen
     state.cluePhase = 'hyper_intro';
     state.timerEndsAt = Date.now() + HYPER_INTRO_MS;
   } else if (clue.isDailyDouble) {

@@ -4,10 +4,15 @@ import { Socket } from 'socket.io-client';
 import { getSocket } from '@/lib/socket-client';
 import { GameState } from '@/lib/gameEngine';
 import { isUnavailableClue } from '@/lib/clueSentinel';
-import { unlockAudio, preloadLasers, playRandomLaser } from '@/lib/audio';
+import {
+  unlockAudio, preloadLasers, playHyperStart, playGameStart, playBoardFill,
+  playBuzzIn, playDailyDouble, playCorrect, playWrong, playTimeUp,
+} from '@/lib/audio';
 import Board from '@/components/Board';
 import Scoreboard from '@/components/Scoreboard';
 import MiniGameStage from '@/components/MiniGameStage';
+import HyperFlair from '@/components/HyperFlair';
+import InvadersStage from '@/components/InvadersStage';
 
 // The shared screen is sized for a TV. On phones (<=640px) the `display-scale`
 // class (globals.css) zooms it to 75% so the whole board + scoreboard fit;
@@ -44,9 +49,8 @@ export default function Display() {
     };
   }, []);
 
-  // The shared screen is the stage — play the laser cue here on HYPER MODE
-  // activation. Browsers block audio until a gesture, so unlock on the first
-  // click/key and preload the clips so they fire instantly.
+  // Preload the hyper-start clips so activation fires instantly, and unlock
+  // audio on the first gesture (browser autoplay policy).
   useEffect(() => {
     preloadLasers();
     const unlock = () => unlockAudio();
@@ -58,13 +62,54 @@ export default function Display() {
     };
   }, []);
 
+  // HYPER MODE activation + clue-flow sounds: the shared screen plays the SAME
+  // effects as every phone (buzz-in, Daily Double fanfare) on phase changes.
   useEffect(() => {
     const phase = state?.cluePhase ?? null;
-    if (prevCluePhaseRef.current !== 'hyper_intro' && phase === 'hyper_intro') {
-      playRandomLaser();
+    const prev = prevCluePhaseRef.current;
+    if (prev !== phase) {
+      if (phase === 'hyper_intro') playHyperStart(state?.hyperSeed ?? 0);
+      if (phase === 'answering' && prev === 'buzzing') playBuzzIn();
+      if (phase === 'daily_double_wager') playDailyDouble();
+      prevCluePhaseRef.current = phase;
     }
-    prevCluePhaseRef.current = phase;
-  }, [state?.cluePhase]);
+  }, [state?.cluePhase, state?.hyperSeed]);
+
+  // Round-change sounds — same as the phones: laser-charge for the first
+  // board, board-fill for Double Jeopardy.
+  const lastBoardPhaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    const phase = state?.phase;
+    if (!phase) return;
+    if ((phase === 'jeopardy' || phase === 'double_jeopardy') && lastBoardPhaseRef.current !== phase) {
+      lastBoardPhaseRef.current = phase;
+      if (phase === 'jeopardy') playGameStart();
+      else playBoardFill();
+    }
+  }, [state?.phase]);
+
+  // Correct/wrong stings on judged answers (same broadcast the phones use).
+  useEffect(() => {
+    const s = getSocket();
+    const onResult = ({ result }: { result?: string }) => {
+      if (result === 'correct') playCorrect();
+      else if (result === 'wrong') playWrong();
+    };
+    s.on('answer_result', onResult);
+    return () => { s.off('answer_result', onResult); };
+  }, []);
+
+  // Time-up buzzer when a buzz/answer clock expires.
+  useEffect(() => {
+    const phase = state?.cluePhase;
+    const endsAt = state?.timerEndsAt;
+    if (!endsAt || !phase) return;
+    if (phase !== 'buzzing' && phase !== 'answering' && phase !== 'daily_double_answer') return;
+    const ms = endsAt - Date.now();
+    if (ms <= 0) return;
+    const t = setTimeout(() => playTimeUp(), ms);
+    return () => clearTimeout(t);
+  }, [state?.cluePhase, state?.timerEndsAt]);
 
   if (!connected || !state) {
     return (
@@ -136,6 +181,7 @@ export default function Display() {
 
   const activeClue = state.activeClue;
   const isHyper = state.cluePhase === 'hyper_intro' || state.cluePhase === 'hyper_active';
+  const isInvaders = state.cluePhase === 'invaders';
   const hyperController = state.players.find(p => p.id === state.boardController);
   const showFullscreenClue = !!activeClue && state.cluePhase !== 'idle' && !isHyper;
   const buzzedPlayer = state.players.find(p => p.id === state.buzzedPlayerId);
@@ -183,6 +229,7 @@ export default function Display() {
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="hyper-burst w-[60vmin] h-[60vmin] rounded-full" />
             </div>
+            <HyperFlair density="full" />
             {state.cluePhase === 'hyper_intro' ? (
               <div className="relative space-y-6">
                 <p className="jeo-headline uppercase tracking-[0.5em] text-blue-200/80 text-2xl">Hyper Mode</p>
@@ -258,18 +305,24 @@ export default function Display() {
         )}
       </div>
 
-      {/* Scoreboard pinned at bottom, TV-sized */}
-      <div className="bg-[rgba(8,10,30,0.92)] border-t-2 border-[rgba(0,229,255,0.4)] p-6">
-        <div className="max-w-[1800px] mx-auto">
-          <Scoreboard
-            players={state.players}
-            currentPlayerId={null}
-            buzzedPlayerId={state.buzzedPlayerId}
-            compact={false}
-            isHost={false}
-          />
+      {/* Scoreboard pinned at bottom, TV-sized. During the SPACE INVADERS
+          ambush it hides — the panels have "become" the ships on screen. */}
+      {!isInvaders && (
+        <div className="bg-[rgba(8,10,30,0.92)] border-t-2 border-[rgba(0,229,255,0.4)] p-6">
+          <div className="max-w-[1800px] mx-auto">
+            <Scoreboard
+              players={state.players}
+              currentPlayerId={null}
+              buzzedPlayerId={state.buzzedPlayerId}
+              compact={false}
+              isHost={false}
+            />
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* SPACE INVADERS AMBUSH — full-screen battle over the dimmed board */}
+      {isInvaders && <InvadersStage state={state} />}
     </div>
   );
 }

@@ -35,10 +35,9 @@ import {
   revealLetter,
   finishMiniGame,
   INTRO_MS,
-  ANAGRAM_MS,
-  RAPID_MS,
+  HYPER_ROUND_MS,
+  RAPID_ROUND_MS,
   REVEAL_INTERVAL_MS,
-  LETTER_GRACE_MS,
   RESULTS_MS,
 } from './miniGames';
 import {
@@ -46,6 +45,7 @@ import {
   getAccount, getAccounts, updateAccount,
 } from './accounts';
 import { persistGame, clearGame, loadGame, flushGameSync } from './gameStore';
+import { Battle, initBattle, tickBattle, battleControl, battleSnapshot } from './invaders';
 
 let io: SocketIOServer | null = null;
 let gameState: GameState | null = null;
@@ -54,6 +54,12 @@ const timers: Map<string, NodeJS.Timeout> = new Map();
 // Trivia for a hyper mini-game is fetched in parallel with the activation
 // splash; we await this at the intro→active transition so questions are ready.
 let hyperTriviaPromise: Promise<TriviaQuestion[] | null> = Promise.resolve(null);
+
+// SPACE INVADERS AMBUSH — authoritative battle + its tick loop. The battle
+// telemetry broadcasts on its own 'invaders' socket event (~20Hz, compact);
+// the normal state broadcast only carries phase transitions.
+let battle: Battle | null = null;
+let invLoop: NodeJS.Timeout | null = null;
 
 export function getIO() { return io; }
 export function getGameState() { return gameState; }
@@ -90,22 +96,25 @@ function broadcastAccounts() {
 // create or touch a persisted Account, even on a win. This is deliberate:
 // permanent accounts only come into existence through the explicit
 // Create Account screen.
+function creditWinners() {
+  if (!gameState || !gameState.players.length) return;
+  const top = Math.max(...gameState.players.map(p => p.score));
+  const winners = gameState.players.filter(p => p.score === top);
+  let anyCredited = false;
+  for (const w of winners) {
+    if (w.accountId && getAccount(w.accountId)) {
+      awardWinToAccount(w.accountId);
+      anyCredited = true;
+    }
+  }
+  if (anyCredited) broadcastAccounts();
+}
+
 function finalizeAndAward() {
   if (!gameState) return;
   const wasGameOver = gameState.phase === 'game_over';
   revealFinalJeopardy(gameState);
-  if (!wasGameOver && gameState.phase === 'game_over') {
-    const top = Math.max(...gameState.players.map(p => p.score));
-    const winners = gameState.players.filter(p => p.score === top);
-    let anyCredited = false;
-    for (const w of winners) {
-      if (w.accountId && getAccount(w.accountId)) {
-        awardWinToAccount(w.accountId);
-        anyCredited = true;
-      }
-    }
-    if (anyCredited) broadcastAccounts();
-  }
+  if (!wasGameOver && gameState.phase === 'game_over') creditWinners();
 }
 
 function ensureGameData() {
@@ -386,20 +395,6 @@ export function initSocketServer(httpServer: HTTPServer) {
       }
     });
 
-    // HYPER MODE: the board controller (or host) ends the placeholder
-    // mini-game and returns to the board. Real mini-games will resolve
-    // themselves; this is the manual close for the placeholder stage.
-    socket.on('end_hyper', () => {
-      if (!gameState) return;
-      if (gameState.cluePhase !== 'hyper_active' && gameState.cluePhase !== 'hyper_intro') return;
-      const me = gameState.players.find(p => p.id === socket.id);
-      if (!me || (!me.isHost && gameState.boardController !== socket.id)) return;
-      clearMiniGameTimers();
-      endHyper(gameState);
-      maybeAdvanceRound();
-      broadcast();
-    });
-
     // Mini-game action channel: routes a player's move to the active game's
     // logic, acks immediate feedback (correct/wrong/points) for the phone, and
     // finishes the round the moment every player is done.
@@ -413,6 +408,39 @@ export function initSocketServer(httpServer: HTTPServer) {
       if (res.changed) broadcast();
       if (res.complete) finishMini();
     });
+
+    // SPACE INVADERS AMBUSH: phone controls. 'L'/'R' start moving (held),
+    // 'S' stops, 'F' fires. No broadcast — the 20Hz tick loop carries state.
+    socket.on('invader_ctl', ({ a }: { a?: string } = {}) => {
+      if (!battle || !gameState || gameState.cluePhase !== 'invaders') return;
+      const me = gameState.players.find(p => p.id === socket.id);
+      battleControl(battle, socket.id, me?.name, String(a ?? ''), Date.now());
+    });
+
+    // Playtest: the host arms (or disarms) the SPACE INVADERS ambush — it
+    // springs right after the next resolved clue, in any board round.
+    socket.on('arm_invasion', () => {
+      if (!gameState) return;
+      if (!gameState.players.find(p => p.id === socket.id && p.isHost)) return;
+      if (gameState.cluePhase === 'invaders') return;
+      gameState.invadersArmed = !gameState.invadersArmed;
+      broadcast();
+    });
+
+    // Dev/test shortcut (set DEV_SHORTCUTS=1): burn the rest of the current
+    // board so the next round — or the ambush — arrives immediately.
+    if (process.env.DEV_SHORTCUTS === '1') {
+      socket.on('dev_advance_round', () => {
+        if (!gameState || !currentGame) return;
+        if (!gameState.players.find(p => p.id === socket.id)) return;
+        if (gameState.cluePhase !== 'idle') return;
+        for (const cat of gameState.currentBoard ?? []) {
+          for (const c of cat.clues) { c.used = true; gameState.usedClues.add(c.id); }
+        }
+        maybeAdvanceRound();
+        broadcast();
+      });
+    }
 
     socket.on('answer', ({ answer }: { answer: string }) => {
       if (!gameState) return;
@@ -518,6 +546,7 @@ export function initSocketServer(httpServer: HTTPServer) {
       if (!gameState) return;
       if (!gameState.players.find(p => p.id === socket.id && p.isHost)) return;
       for (const name of Array.from(timers.keys())) clearTimer(name);
+      stopInvasionLoop();
       const game = loadRandomGame();
       if (!game) { socket.emit('error', 'No game data'); return; }
       currentGame = game;
@@ -533,6 +562,7 @@ export function initSocketServer(httpServer: HTTPServer) {
       if (!gameState) return;
       if (!gameState.players.find(p => p.id === socket.id)) return;
       for (const name of Array.from(timers.keys())) clearTimer(name);
+      stopInvasionLoop();
       if (!currentGame) currentGame = loadRandomGame();
       if (!currentGame) { socket.emit('error', 'No game data'); return; }
       gameState = createGame(currentGame.showNumber, currentGame.airDate);
@@ -570,7 +600,6 @@ function clearMiniGameTimers() {
   clearTimer('mg_round');
   clearTimer('mg_intro');
   clearTimer('mg_reveal');
-  clearTimer('mg_grace');
   clearTimer('mg_results');
 }
 
@@ -595,12 +624,13 @@ function beginPlaying() {
   beginMiniGamePlaying(gameState);
   broadcast();
 
+  // Round cap: Rapid Fire is a hard 30s sprint; the others run 60s and can end
+  // earlier once every player is resolved (solved / done / out).
+  // Memory Matrix paces itself per player (patterns flash on each phone).
   const key = gameState.activeMiniGame?.key;
-  if (key === 'letter_reveal') {
-    scheduleReveal();
-  } else {
-    setTimer('mg_round', key === 'rapid_fire' ? RAPID_MS : ANAGRAM_MS, () => finishMini());
-  }
+  setTimer('mg_round', key === 'rapid_fire' ? RAPID_ROUND_MS : HYPER_ROUND_MS, () => finishMini());
+  // Letter Reveal also paces its own letter reveals on top of the cap.
+  if (key === 'letter_reveal') scheduleReveal();
 }
 
 // Letter Reveal: expose one more letter every interval; after the last, a grace
@@ -612,8 +642,9 @@ function scheduleReveal() {
     if (!d || d.status !== 'playing') return;
     const { fullyRevealed } = revealLetter(gameState);
     broadcast();
-    if (fullyRevealed) setTimer('mg_grace', LETTER_GRACE_MS, () => finishMini());
-    else scheduleReveal();
+    // After the last letter, stop revealing; the round ends on all-resolved or
+    // the 60s cap (mg_round) — same as the other games.
+    if (!fullyRevealed) scheduleReveal();
   });
 }
 
@@ -635,9 +666,84 @@ function finishMini() {
   });
 }
 
+// ── SPACE INVADERS AMBUSH orchestration ─────────────────────────────────────
+// One wave, sprung once at a random point in Double Jeopardy. Win together →
+// trivia resumes. Lose (fleet destroyed or invaders land) → the WHOLE game
+// ends at current scores — no Final Jeopardy.
+function stopInvasionLoop() {
+  if (invLoop) { clearInterval(invLoop); invLoop = null; }
+  clearTimer('inv_end');
+  battle = null;
+}
+
+function startInvasion() {
+  if (!gameState || !io) return;
+  const roster = gameState.players.filter(p => p.connected);
+  if (!roster.length) { gameState.invadersDone = true; return; }
+  battle = initBattle(roster.map(p => ({ id: p.id, name: p.name })), Date.now());
+  gameState.cluePhase = 'invaders';
+  gameState.invaders = {
+    status: 'intro',
+    roster: battle.ships.map(s => ({ id: s.id, name: s.name, color: s.color })),
+  };
+  broadcast();
+  invLoop = setInterval(tickInvasion, 50);
+}
+
+function tickInvasion() {
+  if (!gameState || !battle || gameState.cluePhase !== 'invaders') { stopInvasionLoop(); return; }
+  tickBattle(battle, Date.now());
+  io?.emit('invaders', battleSnapshot(battle));
+  if (gameState.invaders) gameState.invaders.status = battle.status;
+
+  if (battle.status === 'won' || battle.status === 'lost') {
+    const won = battle.status === 'won';
+    if (invLoop) { clearInterval(invLoop); invLoop = null; } // keep `battle` for the outro frame
+    broadcast();
+    setTimer('inv_end', 5_000, () => (won ? resumeFromInvasion() : endGameByInvasion()));
+  }
+}
+
+function resumeFromInvasion() {
+  if (!gameState) return;
+  battle = null;
+  gameState.invaders = null;
+  gameState.invadersDone = true;
+  gameState.cluePhase = 'idle';
+  broadcast();
+  maybeAdvanceRound(); // the board may already be exhausted → on to Final Jeopardy
+}
+
+function endGameByInvasion() {
+  if (!gameState) return;
+  battle = null;
+  gameState.invaders = null;
+  gameState.invadersDone = true;
+  gameState.cluePhase = 'idle';
+  gameState.phase = 'game_over'; // scores stand as-is; Final Jeopardy is skipped
+  creditWinners();
+  broadcast();
+}
+
 function maybeAdvanceRound() {
   if (!gameState || !currentGame) return;
   if (gameState.cluePhase !== 'idle') return;
+
+  // SPACE INVADERS AMBUSH: springs the moment the board goes idle after the
+  // trigger threshold — before any round advancement. The host's playtest
+  // "arm" button forces it after the next resolved clue in ANY board round
+  // (and ignores the one-per-game flag so it can be tested repeatedly).
+  const inBoardRound = gameState.phase === 'jeopardy' || gameState.phase === 'double_jeopardy';
+  const naturalTrigger =
+    gameState.phase === 'double_jeopardy' &&
+    !gameState.invadersDone &&
+    gameState.invadersTriggerAt > 0 &&
+    gameState.usedClues.size >= gameState.invadersTriggerAt;
+  if (inBoardRound && (gameState.invadersArmed || naturalTrigger)) {
+    gameState.invadersArmed = false;
+    startInvasion();
+    return;
+  }
 
   const phase = gameState.phase as string;
   const allUsed = gameState.currentBoard?.every(cat =>
@@ -651,6 +757,10 @@ function maybeAdvanceRound() {
     const djSpecial = assignSpecialCells(currentGame.doubleJeopardyRound);
     gameState.hyperClues = djSpecial.hyperClues;
     gameState.hyperGames = djSpecial.hyperGames;
+    // Arm the AMBUSH: it springs after the Nth resolved clue of this round
+    // (random 3rd–11th; INVADERS_AFTER=<n> pins it for testing).
+    const after = Math.max(1, parseInt(process.env.INVADERS_AFTER || '', 10) || (3 + Math.floor(Math.random() * 9)));
+    gameState.invadersTriggerAt = gameState.usedClues.size + after;
     // Real-Jeopardy rule: trailing (lowest-score) connected player picks
     // first in DJ. If everyone is tied, keep the current board controller.
     const connected = gameState.players.filter(p => p.connected);

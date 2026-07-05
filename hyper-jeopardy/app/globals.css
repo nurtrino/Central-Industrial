@@ -241,6 +241,7 @@ html, body {
 .cell-hyper.hg-anagram { --hg: 61, 139, 255;  --hg-text: #7fb0ff; }  /* blue  */
 .cell-hyper.hg-rapid   { --hg: 255, 60, 92;   --hg-text: #ff7d92; }  /* red   */
 .cell-hyper.hg-letter  { --hg: 45, 224, 138;  --hg-text: #62e8ac; }  /* green */
+.cell-hyper.hg-memory  { --hg: 255, 238, 0;   --hg-text: #fff176; }  /* yellow */
 .cell-hyper .jeo-value {
   background: none !important;
   -webkit-text-fill-color: var(--hg-text) !important;
@@ -264,9 +265,112 @@ html, body {
   50%      { box-shadow: 0 0 26px rgba(var(--hg),0.7), inset 0 0 0 1px rgba(var(--hg),0.6); }
 }
 
+/* ── Mini-game juice ───────────────────────────────────────────────────────── */
+/* Tiles pop in with a staggered delay (set inline via animation-delay). */
+@keyframes mg-pop {
+  from { opacity: 0; transform: translateY(7px) scale(0.7); }
+  to   { opacity: 1; transform: none; }
+}
+.mg-pop { animation: mg-pop 0.32s cubic-bezier(0.2, 0.8, 0.3, 1.25) both; }
+
+/* Wrong-guess shake on the phone input. */
+@keyframes mg-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+.mg-shake { animation: mg-shake 0.42s ease; }
+
+/* First-solve celebration banner on the shared screen. */
+@keyframes mg-flash-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.92); }
+  to   { opacity: 1; transform: none; }
+}
+.mg-flash { animation: mg-flash-in 0.3s ease both; }
+
+/* Final-seconds urgency pulse on the round timer. */
+@keyframes mg-urgent {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.14); }
+}
+.mg-urgent { display: inline-block; animation: mg-urgent 0.9s ease-in-out infinite; }
+
+/* ── HYPER MODE flair layer (components/HyperFlair.tsx) ─────────────────────
+   Drifting nebulas + periodic shooting stars + rockets, all decorative. */
+.hf-nebula {
+  position: absolute;
+  width: 58%;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  filter: blur(28px);
+  mix-blend-mode: screen;
+  animation: hf-drift 17s ease-in-out infinite alternate, hf-breathe 9s ease-in-out infinite;
+}
+.hf-n1 { top: -22%; left: -14%; background: radial-gradient(circle, rgba(255,47,214,0.42) 0%, rgba(123,92,255,0.20) 45%, transparent 70%); }
+.hf-n2 { bottom: -26%; right: -12%; width: 64%;
+         background: radial-gradient(circle, rgba(0,229,255,0.34) 0%, rgba(123,92,255,0.18) 45%, transparent 70%);
+         animation-delay: -6s, -3s; animation-duration: 21s, 11s; }
+@keyframes hf-drift {
+  from { transform: translate(-5%, -4%) scale(1); }
+  to   { transform: translate(6%, 5%) scale(1.18); }
+}
+@keyframes hf-breathe {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.75; }
+}
+
+/* Shooting stars: a bright streak sweeps across, then rests most of the cycle. */
+.hf-star {
+  position: absolute;
+  width: 130px;
+  height: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.95), rgba(140,200,255,0.5) 55%, transparent);
+  box-shadow: 0 0 8px rgba(180,225,255,0.7);
+  opacity: 0;
+  transform: rotate(24deg);
+}
+.hf-s1 { top: 8%;  animation: hf-shoot 9s  linear infinite; animation-delay: 1.2s; }
+.hf-s2 { top: 34%; animation: hf-shoot 12s linear infinite; animation-delay: 5.6s; width: 90px; }
+.hf-s3 { top: 62%; animation: hf-shoot 15s linear infinite; animation-delay: 9.1s; width: 110px; }
+@keyframes hf-shoot {
+  0%   { left: -12%; opacity: 0; transform: rotate(24deg) translateY(0); }
+  2%   { opacity: 0.9; }
+  11%  { left: 104%; opacity: 0; transform: rotate(24deg) translateY(9vh); }
+  100% { left: 104%; opacity: 0; transform: rotate(24deg) translateY(9vh); }
+}
+
+/* Rockets: little cruisers bobbing across; r2 flies the other way. */
+.hf-rocket {
+  position: absolute;
+  font-size: 22px;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 6px rgba(0,229,255,0.55));
+}
+.hf-r1 { top: 74%; animation: hf-fly-right 16s linear infinite; animation-delay: 2s; }
+.hf-r2 { top: 16%; font-size: 16px; animation: hf-fly-left 23s linear infinite; animation-delay: 11s; }
+@keyframes hf-fly-right {
+  0%   { left: -8%;  transform: rotate(45deg) translateY(0); }
+  25%  { transform: rotate(45deg) translateY(-10px); }
+  50%  { transform: rotate(45deg) translateY(4px); }
+  75%  { transform: rotate(45deg) translateY(-8px); }
+  100% { left: 105%; transform: rotate(45deg) translateY(0); }
+}
+@keyframes hf-fly-left {
+  0%   { left: 105%; transform: scaleX(-1) rotate(45deg) translateY(0); }
+  30%  { transform: scaleX(-1) rotate(45deg) translateY(8px); }
+  60%  { transform: scaleX(-1) rotate(45deg) translateY(-9px); }
+  100% { left: -8%;  transform: scaleX(-1) rotate(45deg) translateY(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .jeo-buzz, .hyper-title, .hyper-burst, .cell-hyper { animation: none; }
   .jeo-tile-hover:hover { transform: none; }
+  .mg-pop, .mg-shake, .mg-flash, .mg-urgent { animation: none; }
+  .hf-nebula { animation: none; opacity: 0.45; }
+  .hf-star, .hf-rocket { display: none; }
 }
 
 /* Shared screen (/display): full size on TV/desktop, shrink to ~75% on phones

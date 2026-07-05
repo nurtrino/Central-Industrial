@@ -111,6 +111,8 @@ export function loadGame(): { gameState: GameState; currentGame: GameForPlay } |
       activeMiniGame: null,
       miniGameTrivia: null,
       miniGameData: null,
+      invaders: null, // a mid-battle snapshot resumes at the board; the ambush re-arms
+                      // (trigger check is >= so it springs after the next clue)
       players: (Array.isArray(gs.players) ? gs.players : []).map(
         (p) => ({ ...(p as GameState['players'][number]), connected: false }),
       ),
