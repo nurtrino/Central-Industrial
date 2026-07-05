@@ -170,7 +170,7 @@ export default function Display() {
               <span className="text-3xl jeo-headline tracking-widest text-blue-200/70">#{i + 1}</span>
               <span className="text-3xl font-semibold text-white">{p.name}</span>
               <span className={`ml-auto jeo-value text-4xl ${p.score < 0 ? 'text-red-300' : ''}`}>
-                {p.score < 0 ? `-$${Math.abs(p.score).toLocaleString()}` : `$${p.score.toLocaleString()}`}
+                {p.score.toLocaleString()}
               </span>
             </div>
           ))}
@@ -256,7 +256,7 @@ export default function Display() {
                 {state.activeCategoryName}
               </p>
               <p className={`jeo-value mt-3 ${isDailyDouble ? 'text-3xl sm:text-4xl' : 'text-5xl sm:text-7xl'}`}>
-                {isDailyDouble ? 'DAILY DOUBLE' : `$${activeClue.value.toLocaleString()}`}
+                {isDailyDouble ? 'DAILY DOUBLE' : activeClue.value.toLocaleString()}
               </p>
             </div>
 

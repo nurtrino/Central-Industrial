@@ -103,7 +103,7 @@ function ScoreCard({ p, isBuzzed, isYou, compact, isHost, onSetScore }: CardProp
         <div className={`jeo-headline uppercase text-blue-200/80 truncate`}>{p.name}</div>
       </div>
       <div className={`jeo-value ${valueSize} ${p.score < 0 ? '!text-red-400' : ''}`}>
-        {p.score < 0 ? `-$${Math.abs(p.score).toLocaleString()}` : `$${p.score.toLocaleString()}`}
+        {p.score.toLocaleString()}
       </div>
       {isHost && onSetScore && (
         <button

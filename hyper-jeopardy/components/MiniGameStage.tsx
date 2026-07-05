@@ -29,11 +29,11 @@ function Timer({ endsAt }: { endsAt: number | null }) {
   );
 }
 
-// signed money format: +$2,000 / $0 / −$1,000
+// signed points format: +2,000 / 0 / −1,000
 function fmtPts(n: number): string {
-  if (n > 0) return `+$${n.toLocaleString()}`;
-  if (n < 0) return `−$${Math.abs(n).toLocaleString()}`;
-  return '$0';
+  if (n > 0) return `+${n.toLocaleString()}`;
+  if (n < 0) return `−${Math.abs(n).toLocaleString()}`;
+  return '0';
 }
 function ptsClass(n: number): string {
   return n > 0 ? 'text-[var(--neon-lime)]' : n < 0 ? 'text-red-400' : 'text-blue-200/60';

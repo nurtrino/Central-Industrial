@@ -296,7 +296,7 @@ export function initSocketServer(httpServer: HTTPServer) {
       if (gameState.cluePhase === 'hyper_intro') {
         // HYPER MODE: play the activation splash (~3.5s), pre-fetching trivia in
         // parallel so it's ready, then start the mini-game. Trivia is medium,
-        // random allowed category (excludes Musicals & Theatres) unless forced.
+        // random allowed category (excludes Musicals & Theatres and Anime) unless forced.
         const mg = gameState.activeMiniGame;
         hyperTriviaPromise = (mg && mg.trivia !== false)
           ? fetchTrivia({ amount: mg.triviaCount ?? 1, category: mg.trivia, difficulty: 'medium' })

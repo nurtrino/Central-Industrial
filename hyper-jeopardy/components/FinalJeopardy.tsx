@@ -87,7 +87,7 @@ export default function FinalJeopardy({ state, playerId, onWager, onAnswer, onRe
             {entry?.wager == null && player && player.score > 0 ? (
               <div className="space-y-3">
                 <p className="text-center text-blue-200/80 jeo-headline tracking-wider">
-                  Your score: <span className="jeo-value">${player.score.toLocaleString()}</span>
+                  Your score: <span className="jeo-value">{player.score.toLocaleString()}</span>
                 </p>
                 <input
                   className="jeo-input w-full px-4 py-3 rounded-lg text-xl text-center jeo-value"
@@ -107,7 +107,7 @@ export default function FinalJeopardy({ state, playerId, onWager, onAnswer, onRe
               </div>
             ) : entry?.wager != null ? (
               <p className="text-center text-green-300 jeo-headline tracking-widest uppercase">
-                Wager locked: ${entry.wager?.toLocaleString()}
+                Wager locked: {entry.wager?.toLocaleString()}
               </p>
             ) : (
               <p className="text-center text-blue-200/70 jeo-headline tracking-wider uppercase text-sm">
@@ -185,11 +185,11 @@ export default function FinalJeopardy({ state, playerId, onWager, onAnswer, onRe
                     <div className="flex justify-between items-center">
                       <span className="jeo-headline text-lg tracking-wide">{p.name}</span>
                       <span className={`jeo-value text-xl ${p.score < 0 ? '!text-red-300' : ''}`}>
-                        ${p.score.toLocaleString()}
+                        {p.score.toLocaleString()}
                       </span>
                     </div>
                     <p className="text-blue-200/70 text-sm mt-1">
-                      &ldquo;{e?.answer}&rdquo; · wager ${e?.wager?.toLocaleString()}
+                      &ldquo;{e?.answer}&rdquo; · wager {e?.wager?.toLocaleString()}
                     </p>
                   </div>
                 );

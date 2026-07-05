@@ -301,7 +301,7 @@ export default function Home() {
                     <span className="jeo-headline text-blue-200/60 text-sm">#{i + 1}</span>
                     <span className="flex-1 text-left text-white jeo-headline uppercase tracking-wide truncate">{p.name}{p.id === playerId ? ' (you)' : ''}</span>
                     <span className={`jeo-value text-lg ${p.score < 0 ? 'text-red-300' : ''}`}>
-                      {p.score < 0 ? `-$${Math.abs(p.score).toLocaleString()}` : `$${p.score.toLocaleString()}`}
+                      {p.score.toLocaleString()}
                     </span>
                   </div>
                 ))}

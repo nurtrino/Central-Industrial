@@ -19,11 +19,11 @@ interface Props {
 
 // Phone-side controls for the Phase 1 mini-games (wireframe). Emits
 // mini_game_action and reads back per-player state from the broadcast.
-// signed money format: +$2,000 / $0 / −$1,000
+// signed points format: +2,000 / 0 / −1,000
 function fmtPts(n: number): string {
-  if (n > 0) return `+$${n.toLocaleString()}`;
-  if (n < 0) return `−$${Math.abs(n).toLocaleString()}`;
-  return '$0';
+  if (n > 0) return `+${n.toLocaleString()}`;
+  if (n < 0) return `−${Math.abs(n).toLocaleString()}`;
+  return '0';
 }
 function ptsClass(n: number): string {
   return n > 0 ? 'text-[var(--neon-lime)]' : n < 0 ? 'text-red-400' : 'text-blue-200/60';
@@ -66,7 +66,7 @@ function IntroCtl({ d }: { d: MiniGameData }) {
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
-            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th+ {fmtPts(-d.value)}</span>
           </div>
         </>
@@ -77,7 +77,7 @@ function IntroCtl({ d }: { d: MiniGameData }) {
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
-            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
           </div>
         </>
@@ -88,7 +88,7 @@ function IntroCtl({ d }: { d: MiniGameData }) {
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
-            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
           </div>
         </>
@@ -99,7 +99,7 @@ function IntroCtl({ d }: { d: MiniGameData }) {
           <div className="flex flex-wrap justify-center gap-1.5 text-xs jeo-headline uppercase tracking-wider">
             <span className="text-[var(--neon-lime)]">1st {fmtPts(2 * d.value)}</span>
             <span className="text-[var(--neon-lime)]">· 2nd {fmtPts(d.value)}</span>
-            <span className="text-blue-200/60">· 3rd $0</span>
+            <span className="text-blue-200/60">· 3rd 0</span>
             <span className="text-red-400">· 4th {fmtPts(-d.value)}</span>
           </div>
         </>

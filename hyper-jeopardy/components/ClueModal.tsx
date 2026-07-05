@@ -120,7 +120,7 @@ export default function ClueModal({ state, playerId, onBuzz, onSkip, onAnswer, o
           <span className="jeo-value text-2xl">
             {cluePhase === 'daily_double_wager' || cluePhase === 'daily_double_answer'
               ? 'DAILY DOUBLE!'
-              : `$${activeClue.value.toLocaleString()}`}
+              : activeClue.value.toLocaleString()}
           </span>
         </div>
 
@@ -181,7 +181,7 @@ export default function ClueModal({ state, playerId, onBuzz, onSkip, onAnswer, o
                 Daily Double! Enter your wager
               </p>
               <p className="text-blue-200/80 text-center text-sm jeo-headline tracking-wider">
-                Max: ${((player?.score ?? 0) > 0 ? (player?.score ?? 0) : (state.phase === 'jeopardy' ? 1000 : 2000)).toLocaleString()}
+                Max: {((player?.score ?? 0) > 0 ? (player?.score ?? 0) : (state.phase === 'jeopardy' ? 1000 : 2000)).toLocaleString()}
               </p>
               <input
                 className="jeo-input w-full px-4 py-3 rounded-lg text-xl text-center jeo-value"
@@ -212,7 +212,7 @@ export default function ClueModal({ state, playerId, onBuzz, onSkip, onAnswer, o
           {cluePhase === 'daily_double_answer' && isAnswerer && (
             <div className="space-y-3">
               <p className="jeo-headline uppercase tracking-widest text-[var(--jeo-gold)] text-center">
-                Wager: ${state.dailyDoubleWager?.toLocaleString()}
+                Wager: {state.dailyDoubleWager?.toLocaleString()}
               </p>
               <input
                 className="jeo-input w-full px-4 py-3 rounded-lg text-xl"

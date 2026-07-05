@@ -56,12 +56,14 @@ export const OPENTDB_CATEGORIES: Record<number, string> = {
   32: 'Entertainment: Cartoon & Animations',
 };
 
-// The one category the game never draws from at random.
-export const EXCLUDED_CATEGORY_ID = 13;
+// Categories the random picker never draws from:
+//   13 — Musicals & Theatres (too niche for a speed round)
+//   31 — Japanese Anime & Manga (banned by request; it kept surfacing)
+export const EXCLUDED_CATEGORY_IDS = new Set<number>([13, 31]);
 
 export const ALLOWED_CATEGORY_IDS = Object.keys(OPENTDB_CATEGORIES)
   .map(Number)
-  .filter((id) => id !== EXCLUDED_CATEGORY_ID);
+  .filter((id) => !EXCLUDED_CATEGORY_IDS.has(id));
 
 export function randomAllowedCategory(): number {
   return ALLOWED_CATEGORY_IDS[Math.floor(Math.random() * ALLOWED_CATEGORY_IDS.length)];
