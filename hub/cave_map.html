@@ -35,6 +35,7 @@
   .rank-badge.wi-rank { width:22px; height:22px; background:#e0f7fa; border-color:#00838f; color:#006064; font-size:11px; }
   .rank-badge.mi-rank { width:22px; height:22px; background:#ffebee; border-color:#c62828; color:#b71c1c; font-size:11px; }
   .rank-badge.oh-rank { width:22px; height:22px; background:#f3e5f5; border-color:#6a1b9a; color:#4a148c; font-size:11px; }
+  .rank-badge.ia-rank { width:22px; height:22px; background:#efebe9; border-color:#5d4037; color:#4e342e; font-size:11px; }
   .searchbox { background:rgba(255,255,255,0.96); border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,0.3); padding:6px; width:236px;
     font:13px -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
   .searchbox input { width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid #bbb; border-radius:6px; font-size:13px; outline:none; }
@@ -1359,6 +1360,22 @@ ohLongest.forEach(c => {
 });
 ohLongestLayer.addTo(map);
 
+/* ---- IA — Longest Caves — ranked by length, numbered badges (from IA_Long_Cave_List.xlsx, 2026-07-05). ON by default. ---- */
+const iaLongest = [{"r":1,"n":"Coldwater Cave","lat":43.4343,"lng":-91.9479,"mi":17.005,"pr":"exact","co":"Winneshiek","via":"Iowa's longest cave (~17 mi). Cold Water Spring State Preserve, ~3 mi NW of Bluffton / N of Decorah near the MN border; gated/protected entrance off Coldwater Creek Rd on the Upper Iowa River. Src: 1974 NSS Convention Guidebook (MN/IA/WI) route via Freeport & Upper Iowa R.; Coldwater Cave Project."},{"r":2,"n":"Kemling Cave","lat":42.41,"lng":-90.64,"mi":3.22,"pr":"landmark","co":"Dubuque","via":"Lead-mine solution cave on a farm adjacent to Crystal Lake Cave, ~5-6 mi S of Dubuque. Src: NSS News Mar-1950 ('one of the best caves we've found in Iowa... Crystal Lake cave lies on an adjacent farm') &amp; Jul-1983 (Iowa Grotto trips w/ Durango Pit &amp; Timmens Cave)."},{"r":3,"n":"April Cave","lat":43.4,"lng":-91.85,"mi":1.627,"pr":"county","co":"Winneshiek","via":"&#9888; <b>Location approximate.</b> Winneshiek Co karst near Coldwater Cave (Decorah / Upper Iowa R. region). Src: NSS News May-2010 (explored alongside the Coldwater Cave Project) &amp; Apr-1989 Iowa index. No PLSS in corpus; anchored to the Coldwater/Winneshiek karst."},{"r":4,"n":"Crystal Lake Cave","lat":42.43376,"lng":-90.6204,"mi":1.553,"pr":"exact","co":"Dubuque","via":"Commercial show cave ~6 mi S of Dubuque (7699 Crystal Lake Cave Rd; Hwy 52 S). Once 'the largest known cave in Iowa' (~8,000 ft). Src: SD_1959 Iowa gazetteer (owner Herbert Knockel; PLSS T88N Sec.16 — OCR range digit garbled, so anchored to the commercial site)."},{"r":5,"n":"Level Crevice Cave","lat":42.42,"lng":-90.7,"mi":1.014,"pr":"county","co":"Dubuque","via":"&#9888; <b>Location approximate.</b> Lead-mined solution cave near Dubuque; a landmark sulfuric-acid / iron-bacteria speleogenesis site (Morehouse 1968; Peck 1986). Src: JCKS v69(1); SD_1976 index ('Level Crevice System, Dubuque'). County-tier near Dubuque."},{"r":6,"n":"Dancehall Cave","lat":42.11857,"lng":-90.77609,"mi":0.263,"pr":"exact","co":"Jackson","via":"The show/trunk cave of <b>Maquoketa Caves State Park</b> (~7 mi NW of Maquoketa; Hwy 61 N to Hwy 130 W) with the walk-through lighted tunnel. Src: SD_1959 gazetteer (neighboring park caves owned by 'Maquoketa Caves State Park'); 1974 Convention Guidebook."},{"r":7,"n":"Black Crevice Cave (Billboard)","lat":42.42,"lng":-90.68,"mi":0.199,"pr":"county","co":"Dubuque","via":"&#9888; <b>Location approximate.</b> Expanded-joint crevice cave of the Dubuque lead district S of the city (a.k.a. Billboard). Src: SD_1959 Dubuque index (listed w/ Becker Quarry, Blackhawk); Guidebooks 1988-2013. County-tier."},{"r":8,"n":"Keppler's Cave","lat":42.85,"lng":-91.3,"mi":0.176,"pr":"county","co":"Clayton","via":"&#9888; <b>Location approximate.</b> Clayton Co Driftless karst (Galena-Platteville/Hopkinton dolomite; the Elkader/Garber/Guttenberg cave cluster). Src: JCKS 86; SD_1959 Clayton Co gazetteer (regional context). County-tier."},{"r":9,"n":"Indian Bluff Cave","lat":42.1,"lng":-91.24,"mi":0.099,"pr":"landmark","co":"Jones","via":"&#9888; <b>Location approximate.</b> In the 'Indian Bluffs' along the Wapsipinicon River near Anamosa (same Hopkinton-dolomite karst as Wapsipinicon State Park); a long crawlway. Src: 1974 Convention Guidebook (East-Central Iowa trip); SD_1976 (Hedges 1969 survey + map)."},{"r":10,"n":"Engelken Cave","lat":42.45,"lng":-90.75,"mi":0.095,"pr":"county","co":"Dubuque","via":"&#9888; <b>Location approximate.</b> Dubuque Co cave entered through a vertical culvert (current Iowa Grotto cave). Src: NSS News Nov-2025 (Iowa Grotto trip report). County-tier only."},{"r":11,"n":"Eighth Street Cave","lat":42.5,"lng":-90.66,"mi":0.095,"pr":"county","co":"Dubuque","via":"&#9888; <b>Location approximate.</b> Likely an urban lead/crevice cave in the city of Dubuque (cf. named-street lead caves: El Dorado on Dodge St, caves on Kauffman Ave). Not locatable to a point in the corpus; placed at Dubuque. County-tier."}];
+const iaLongestLayer = L.layerGroup();
+iaLongest.forEach(c => {
+  const ic = L.divIcon({ className:'rank-icon', html:'<span class="rank-badge ia-rank">'+c.r+'</span>', iconSize:[24,24], iconAnchor:[12,12] });
+  L.marker([c.lat,c.lng], { icon:ic, zIndexOffset:2500, riseOnHover:true })
+    .bindPopup('<div class="popup"><b>#'+c.r+' \u00b7 '+c.n+'</b>'
+      +'<div class="meta">'+c.co+' County \u00b7 <b>'+c.mi+' mi</b> \u00b7 precision: '+c.pr
+      +'<br>'+c.lat.toFixed(5)+', '+c.lng.toFixed(5)+'</div>'
+      +'<div class="role">'+c.via+'</div></div>', { maxWidth:330 })
+    .bindTooltip('#'+c.r+' '+c.n+' \u2014 '+c.mi+' mi', { direction:'top', offset:[0,-12] })
+    .addTo(iaLongestLayer);
+});
+iaLongestLayer.addTo(map);
+
+
 /* ---- controls ---- */
 const baseLayers = {
   "Topographic (Esri)": esriTopo,
@@ -1384,6 +1401,7 @@ overlays["① IL — Longest Caves (21, by length)"] = ilLongestLayer;
 overlays["① WI — Longest Caves (5, by length)"] = wiLongestLayer;
 overlays["① MI — Longest Caves (8, by length)"] = miLongestLayer;
 overlays["① OH — Longest Caves (21, by length)"] = ohLongestLayer;
+overlays["① IA — Longest Caves (11, by length)"] = iaLongestLayer;
 overlays["■ Ohio caves"] = ohio;
 for (const r in expansionRegions) overlays["■ " + expansionRegions[r].label] = expansionGroups[r];
 L.control.layers(baseLayers, overlays, { collapsed:true, position:'topleft' }).addTo(map);
