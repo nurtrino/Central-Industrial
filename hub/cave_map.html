@@ -518,6 +518,21 @@ loadGeo(
   stateForestLayer
 );
 
+/* ---- County Outline — dashed county borders, the 5 focus states (OH/IN/IL/WI/MI), Census TIGERweb ---- */
+map.createPane('countypane');
+map.getPane('countypane').style.zIndex = 300;   // above tiles & karst dots, below public lands & markers
+const countyOutlineLayer = L.geoJSON(null, {
+  pane:'countypane',
+  interactive: false,   // outlines only — never intercept cave-marker clicks
+  style: { color:"#4a4a4a", weight:1.1, dashArray:"4 4", opacity:0.8, fill:false }
+}).addTo(map);
+loadGeo(
+  "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query"
+  + "?where=STATE%20IN%20('39','18','17','55','26')&outFields=NAME,STATE&returnGeometry=true"
+  + "&geometryPrecision=3&maxAllowableOffset=0.005&f=geojson",
+  countyOutlineLayer
+);
+
 /* ================================================================== *
  * MULTI-STATE EXPANSION — Indiana, Illinois & Wisconsin
  * (State outline frames were removed 2026-07-02.) To add a cave, push
@@ -1379,7 +1394,9 @@ const baseLayers = {
 const overlays = {};
 overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
-overlays["🟩 Ohio State Forests"] = stateForestLayer;if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
+overlays["🟩 Ohio State Forests"] = stateForestLayer;
+overlays["▦ County Outline"] = countyOutlineLayer;
+if (karstPoints)  overlays["🔴🟠🟡 Karst features — ODNR EG-1 (46,789, by confidence)"] = karstPoints;
 overlays["🟫 IL sinkhole areas — ISGS (138)"] = ilAreasLayer;
 overlays["🟠 IL sinkholes — ISGS LiDAR (21,799)"] = ilPtsLayer;
 overlays["🟣 IL industrial mines — ILMINES (1,112)"] = ilIndLayer;
