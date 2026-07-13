@@ -65,14 +65,12 @@
   .feedback{min-height:22px;text-align:center;font-size:13px;font-weight:800;margin:8px 0;padding:0 8px}
   .feedback .lead{color:var(--bad)} .feedback.good .lead{color:var(--good)}
 
-  /* keyboard */
-  .keyboard{margin-top:auto;padding:10px 0 16px;display:flex;flex-direction:column;gap:7px}
-  .krow{display:flex;gap:6px;justify-content:center}
-  .key{flex:1;max-width:40px;height:50px;border:none;border-radius:9px;background:var(--key);color:var(--key-ink);
-    font-family:inherit;font-size:16px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center}
-  .key.wide{max-width:70px;font-size:12px;font-weight:900;letter-spacing:.5px}
-  .key:active{transform:translateY(1px)}
-  .key.enter{background:var(--ink);color:#fff}
+  /* native text entry — a hidden but focusable input that drives the board and
+     pops the device's own keyboard (iOS/Android) when a box is tapped. */
+  #entry{position:absolute;left:50%;top:45%;width:1px;height:1px;opacity:0;
+    border:0;padding:0;margin:0;font-size:16px;z-index:-1;pointer-events:none}
+  .entry-hint{margin-top:auto;text-align:center;font-size:12px;font-weight:800;
+    color:var(--muted);padding:16px 8px 22px}
 
   /* win */
   .win{position:fixed;inset:0;background:rgba(244,243,239,.96);display:none;flex-direction:column;
@@ -114,7 +112,9 @@
   <div class="chips" id="chips"></div>
   <div class="feedback" id="feedback"></div>
 
-  <div class="keyboard" id="keyboard"></div>
+  <input id="entry" type="text" inputmode="text" autocomplete="off" autocapitalize="characters"
+         autocorrect="off" spellcheck="false" aria-label="Type your word" />
+  <div class="entry-hint" id="entryHint">Tap a box and type · Enter to submit</div>
 </div>
 
 <div class="win" id="win">
@@ -216,6 +216,7 @@ function buildPool(){
 }
 function loadPuzzle(p){
   puzzle=p;slots=[norm(p.start),null,null,null,norm(p.end)];active=1;input='';done=false;startTime=Date.now();
+  if(window.entry||document.getElementById('entry'))document.getElementById('entry').value='';
   document.getElementById('win').classList.remove('show');
   renderMeta();render();
 }
@@ -245,7 +246,7 @@ function commit(){
     if(types.length===0){slots[active]=prev;const nb=(si===active-1)?above:below;setFeedback('“'+w+'” doesn’t connect to “'+nb+'”.');return;}}
   if(!assignDistinctTypes(filledSeams())){slots[active]=prev;
     setFeedback('That repeats a move type you’ve already used. Each type is used once.');return;}
-  input='';setFeedback('');
+  input='';entry.value='';setFeedback('');
   if(checkWin())return;
   const nx=pickNext(active,above&&!below?1:below&&!above?-1:0);
   if(nx)active=nx;
@@ -259,7 +260,7 @@ function checkWin(){
   const asg=assignDistinctTypes(seams);if(!asg)return false;
   done=true;showWin(asg);return true;
 }
-function clearBox(i){if(done||i<1||i>3)return;slots[i]=null;active=i;input='';setFeedback('');render();}
+function clearBox(i){if(done||i<1||i>3)return;slots[i]=null;active=i;input='';entry.value='';setFeedback('');focusEntry();render();}
 
 /* ============ rendering ============ */
 function computeSeams(){
@@ -284,7 +285,7 @@ function render(){
     }
     if(!fixed&&slots[i]&&!done){const c=document.createElement('button');c.className='clear';c.textContent='✕';
       c.onclick=e=>{e.stopPropagation();clearBox(i);};box.appendChild(c);}
-    if(!fixed&&!done)box.onclick=()=>{if(active!==i){if(input.trim())commit();input='';active=i;if(slots[i])input=slots[i];setFeedback('');render();}};
+    if(!fixed&&!done)box.onclick=()=>{if(active!==i&&input.trim())commit();active=i;input=slots[i]||'';entry.value=input;setFeedback('');focusEntry();render();};
     const rowWrap=document.createElement('div');rowWrap.className='seam-wrap';
     rowWrap.appendChild(box);
     if(i<4){const seam=document.createElement('div');seam.className='seam';
@@ -322,25 +323,32 @@ function showWin(asg){
     if(i<4)html+='<br><span class="t" style="background:'+colors[asg[i]]+';padding:2px 8px;border-radius:6px">'+LABEL[asg[i]]+'</span><br>';}
   document.getElementById('winChain').innerHTML=html;
   document.getElementById('win').classList.add('show');
+  try{entry.blur();}catch(e){}   // drop the device keyboard on the win screen
 }
 
-/* ============ input ============ */
-function type(ch){if(done)return;if(active<1||active>3)return;input+=ch.toLowerCase();render();}
-function backspace(){if(done)return;input=input.slice(0,-1);render();}
-document.addEventListener('keydown',e=>{
-  if(done){if(e.key==='Enter')nextPuzzle();return;}
-  if(e.key==='Enter')commit();
-  else if(e.key==='Backspace')backspace();
-  else if(/^[a-zA-Z]$/.test(e.key))type(e.key);
-});
-function buildKeyboard(){
-  const rows=['qwertyuiop','asdfghjkl','zxcvbnm'];const kb=document.getElementById('keyboard');kb.innerHTML='';
-  rows.forEach((r,ri)=>{const div=document.createElement('div');div.className='krow';
-    if(ri===2){const en=document.createElement('button');en.className='key wide enter';en.textContent='ENTER';en.onclick=commit;div.appendChild(en);}
-    for(const ch of r){const k=document.createElement('button');k.className='key';k.textContent=ch.toUpperCase();k.onclick=()=>type(ch);div.appendChild(k);}
-    if(ri===2){const bk=document.createElement('button');bk.className='key wide';bk.textContent='⌫';bk.onclick=backspace;div.appendChild(bk);}
-    kb.appendChild(div);});
+/* ============ input — native device keyboard via a hidden mirror <input> ============ */
+const entry=document.getElementById('entry');
+function focusEntry(){try{entry.focus({preventScroll:true});}catch(e){entry.focus();}}
+function syncEntry(){
+  // keep the game buffer in lockstep with the field; strip anything but letters/'-
+  let v=entry.value.toLowerCase().replace(/[^a-z'-]/g,'');
+  if(v!==entry.value)entry.value=v;
+  input=v;
+  if(!done)render();
 }
+entry.addEventListener('input',syncEntry);
+entry.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();if(done)nextPuzzle();else commit();}
+});
+// Fallback for keystrokes that land on the document rather than the focused
+// field (desktop focus drift; some environments dispatch keys at document
+// level). Enter still commits, and a letter re-focuses the field without being
+// lost. (On mobile, tapping a box focuses the field and raises the keyboard.)
+document.addEventListener('keydown',e=>{
+  if(e.target===entry)return;                       // the field's own handler covers it
+  if(e.key==='Enter'){e.preventDefault();if(done)nextPuzzle();else commit();return;}
+  if(/^[a-z]$/i.test(e.key)&&!e.metaKey&&!e.ctrlKey){focusEntry();entry.value+=e.key;syncEntry();e.preventDefault();}
+});
 
 /* ============ controls ============ */
 function wireSeg(id,cb){document.getElementById(id).querySelectorAll('button').forEach(b=>{
@@ -353,12 +361,12 @@ document.getElementById('winNext').onclick=nextPuzzle;
 document.getElementById('helpBtn').onclick=()=>alert(
   'TWIXTLE\n\nTransform the start word into the end word in exactly four moves — '+
   'one Anagram, one Verb form, one Homophone, one Compound, each used once.\n\n'+
-  'Click a box, type a word, press Enter. Fill the three middle boxes in any order. '+
+  'Tap a box and type a word using your keyboard, then press Enter. Fill the three middle boxes in any order. '+
   'For a compound you can type the whole compound word (e.g. “sundial” next to “sun”) and it extracts the partner.');
 
 /* ============ boot ============ */
-buildKeyboard();
 poolIdx=-1;nextPuzzle();
+focusEntry();   // desktop: ready to type immediately (mobile waits for a tap)
 </script>
 </body>
 </html>
