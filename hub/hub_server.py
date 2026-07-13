@@ -26,6 +26,7 @@ import hmac
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +39,15 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "5050"))
 PROBE_TIMEOUT = float(os.environ.get("HUB_PROBE_TIMEOUT", "3.5"))
+
+# Shared Twixtle puzzle store. Lives on a persistent disk in production
+# (DATA_DIR=/var/data) so puzzles generated/built on the site are server-side and
+# shared across every device; falls back to BASE for local dev. Reads are public;
+# writes are gated by the same access-code auth as /api/status.
+DATA_DIR = os.environ.get("DATA_DIR", BASE)
+TWIXTLE_STORE = os.path.join(DATA_DIR, "twixtle_puzzles.json")
+TWIXTLE_MAX = 5000
+_twixtle_lock = threading.Lock()
 
 ACCESS_CODE = os.environ.get("ACCESS_CODE", "")
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
@@ -146,6 +156,49 @@ def status_payload():
         return {"tools": list(ex.map(probe, tools)), "gated": GATE_ON, "sso": sso}
 
 
+# ── shared Twixtle puzzle store (JSON file on the persistent disk) ────────────
+def twixtle_load():
+    try:
+        with open(TWIXTLE_STORE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("puzzles"), list):
+                return data
+    except Exception:
+        pass
+    return {"puzzles": []}
+
+
+def twixtle_save(data):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = TWIXTLE_STORE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, TWIXTLE_STORE)
+
+
+def twixtle_key(p):
+    return (p.get("start", "") or "").lower().strip() + ">" + (p.get("end", "") or "").lower().strip()
+
+
+def twixtle_validate(p):
+    if not isinstance(p, dict):
+        return "bad puzzle"
+    word = lambda v: isinstance(v, str) and re.match(r"^[a-z'-]{1,20}$", v) is not None
+    if not word(p.get("start")) or not word(p.get("end")):
+        return "bad start/end"
+    sol = p.get("solution")
+    if not isinstance(sol, list) or len(sol) != 5 or not all(word(w) for w in sol):
+        return "bad solution"
+    ty = p.get("types")
+    if not isinstance(ty, list) or sorted(ty) != ["a", "c", "h", "v"]:
+        return "bad types"
+    if p.get("source") not in ("claude", "user"):
+        return "bad source"
+    if p.get("difficulty") not in ("easy", "medium", "hard"):
+        return "bad difficulty"
+    return None
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=BASE, **kw)
@@ -193,7 +246,37 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": False, "error": "incorrect access code"}, 401)
         if p == "/api/logout":
             return self._json({"ok": True}, 200, [("Set-Cookie", _cookie_clear())])
+        if p == "/api/twixtle/puzzles":
+            if not self._authed():
+                return self._json({"ok": False, "error": "unauthorized"}, 401)
+            return self._twixtle_write(self._read_json())
         return self._json({"error": "not found"}, 404)
+
+    # Add or delete a shared Twixtle puzzle. {action:"add", puzzle:{...}} or
+    # {action:"delete", key:"start>end"}. Gated by _authed() in do_POST.
+    def _twixtle_write(self, body):
+        action = (body or {}).get("action", "add")
+        with _twixtle_lock:
+            data = twixtle_load()
+            puzzles = data.get("puzzles", [])
+            if action == "delete":
+                key = str((body or {}).get("key", "")).lower().strip()
+                data["puzzles"] = [p for p in puzzles if twixtle_key(p) != key]
+                twixtle_save(data)
+                return self._json({"ok": True, "count": len(data["puzzles"])})
+            pz = (body or {}).get("puzzle")
+            err = twixtle_validate(pz)
+            if err:
+                return self._json({"ok": False, "error": err}, 400)
+            if len(puzzles) >= TWIXTLE_MAX:
+                return self._json({"ok": False, "error": "archive full"}, 400)
+            key = twixtle_key(pz)
+            if any(twixtle_key(p) == key for p in puzzles):
+                return self._json({"ok": True, "duplicate": True, "count": len(puzzles)})
+            puzzles.append(pz)
+            data["puzzles"] = puzzles
+            twixtle_save(data)
+            return self._json({"ok": True, "count": len(puzzles)})
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -201,6 +284,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not self._authed():
                 return self._json({"error": "unauthorized"}, 401)
             return self._json(status_payload())
+        if parsed.path == "/api/twixtle/puzzles":
+            return self._json(twixtle_load())   # public read — anyone can play the shared set
         if parsed.path in ("/", ""):
             self.path = "/index.html"
         elif parsed.path in ("/cave", "/cave/"):

@@ -395,26 +395,52 @@ function generateMany(tier,count,onProgress){
   return {puzzles:out,attempts,timedOut:(Date.now()-t0)>=14000};
 }
 
-/* ================= persistence ================= */
-const LS={claude:'twixtle:v1:claude',user:'twixtle:v1:user',solved:'twixtle:v1:solved'};
+/* ================= persistence =================
+   Puzzle SETS live on the server (shared across devices) via /api/twixtle/puzzles.
+   Solved progress is inherently personal, so it stays in localStorage.
+   A device-local fallback holds puzzles saved while signed out / offline. */
+const LS={solved:'twixtle:v1:solved',local:'twixtle:v1:local'};
 function lsLoad(k,def){try{const r=localStorage.getItem(k);return r?JSON.parse(r):def;}catch(e){return def;}}
 function lsSave(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
-let claudePuzzles=lsLoad(LS.claude,[]);
-let userPuzzles=lsLoad(LS.user,[]);
+let serverPuzzles=[];                              // shared set, fetched from the server
+let localFallback=lsLoad(LS.local,[]);             // saved on this device only (signed out/offline)
 let solvedSet=new Set(lsLoad(LS.solved,[]));
-function persistClaude(){lsSave(LS.claude,claudePuzzles);}
-function persistUser(){lsSave(LS.user,userPuzzles);}
+function persistLocal(){lsSave(LS.local,localFallback);}
 function persistSolved(){lsSave(LS.solved,[...solvedSet]);}
 function pkey(p){return norm(p.start)+'>'+norm(p.end);}
 function isSolved(p){return solvedSet.has(pkey(p));}
 const OFFICIAL=(window.PUZZLES||[]).map(p=>Object.assign({},p,{source:'official'}));
-function allPuzzles(){return OFFICIAL.concat(claudePuzzles,userPuzzles);}
+function allPuzzles(){return OFFICIAL.concat(serverPuzzles,localFallback);}
+function claudeList(){return serverPuzzles.filter(p=>p.source==='claude').concat(localFallback.filter(p=>p.source==='claude'));}
+function userList(){return serverPuzzles.filter(p=>p.source==='user').concat(localFallback.filter(p=>p.source==='user'));}
 function existsKey(key,extra){
-  if(OFFICIAL.some(p=>pkey(p)===key))return true;
-  if(claudePuzzles.some(p=>pkey(p)===key))return true;
-  if(userPuzzles.some(p=>pkey(p)===key))return true;
-  if(extra&&extra.some(p=>pkey(p)===key))return true;
-  return false;
+  return allPuzzles().some(p=>pkey(p)===key)||(extra&&extra.some(p=>pkey(p)===key));
+}
+// Load the shared set from the server (public read).
+async function loadServer(){
+  try{const r=await fetch('/api/twixtle/puzzles',{cache:'no-store'});
+    if(r.ok){const d=await r.json();if(d&&Array.isArray(d.puzzles))serverPuzzles=d.puzzles;}}catch(e){}
+}
+// Save one puzzle. Tries the shared server first; if not signed in (401) or
+// offline, falls back to this device. Returns {shared:bool}.
+async function savePuzzle(p){
+  try{
+    const r=await fetch('/api/twixtle/puzzles',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'add',puzzle:p})});
+    if(r.ok){const d=await r.json();if(d&&d.ok){if(!serverPuzzles.some(x=>pkey(x)===pkey(p)))serverPuzzles.push(p);return {shared:true};}}
+  }catch(e){}
+  // fallback: keep it on this device
+  if(!localFallback.some(x=>pkey(x)===pkey(p))){localFallback.push(p);persistLocal();}
+  return {shared:false};
+}
+async function removePuzzle(p){
+  const key=pkey(p);
+  if(serverPuzzles.some(x=>pkey(x)===key)){
+    try{await fetch('/api/twixtle/puzzles',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'delete',key})});}catch(e){}
+    serverPuzzles=serverPuzzles.filter(x=>pkey(x)!==key);
+  }
+  if(localFallback.some(x=>pkey(x)===key)){localFallback=localFallback.filter(x=>pkey(x)!==key);persistLocal();}
 }
 
 /* ================= game state + board ================= */
@@ -541,7 +567,7 @@ let archDiff='all';
 function renderArchive(){
   const host=document.getElementById('archiveList');host.innerHTML='';
   const sections=[['official','Official'],['claude','Claude created'],['user','User created']];
-  const byId={official:OFFICIAL,claude:claudePuzzles,user:userPuzzles};
+  const byId={official:OFFICIAL,claude:claudeList(),user:userList()};
   for(const [src,title] of sections){
     let list=byId[src].filter(p=>archDiff==='all'||p.difficulty===archDiff);
     const sec=document.createElement('div');sec.className='arch-section';
@@ -562,18 +588,14 @@ function renderArchive(){
       const tier=document.createElement('span');tier.className='rtier tier '+p.difficulty;tier.textContent=p.difficulty;
       row.appendChild(tick);row.appendChild(pair);row.appendChild(tier);
       if(src!=='official'){const del=document.createElement('button');del.className='del';del.textContent='✕';del.title='Delete';
-        del.onclick=e=>{e.stopPropagation();deletePuzzle(src,p);};row.appendChild(del);}
+        del.onclick=e=>{e.stopPropagation();deletePuzzle(p);};row.appendChild(del);}
       row.onclick=()=>loadPuzzle(p);
       sec.appendChild(row);
     }
     host.appendChild(sec);
   }
 }
-function deletePuzzle(src,p){
-  if(src==='claude'){claudePuzzles=claudePuzzles.filter(x=>x!==p);persistClaude();}
-  else if(src==='user'){userPuzzles=userPuzzles.filter(x=>x!==p);persistUser();}
-  renderArchive();
-}
+async function deletePuzzle(p){await removePuzzle(p);renderArchive();}
 document.getElementById('archDiffSeg').querySelectorAll('button').forEach(b=>b.onclick=()=>{
   document.getElementById('archDiffSeg').querySelectorAll('button').forEach(x=>x.classList.remove('on'));
   b.classList.add('on');archDiff=b.dataset.v;renderArchive();});
@@ -584,16 +606,19 @@ genBtn.onclick=()=>{
   const tier=document.getElementById('genDiff').value;
   let count=parseInt(document.getElementById('genCount').value,10);if(!(count>=1))count=1;if(count>25)count=25;
   genBtn.disabled=true;genStatus.className='gen-status';genStatus.textContent='Generating '+count+' '+(tier==='any'?'':tier+' ')+'puzzle'+(count===1?'':'s')+'…';
-  setTimeout(()=>{
+  setTimeout(async ()=>{
     let res;
     try{res=generateMany(tier,count);}catch(e){genStatus.className='gen-status bad';genStatus.textContent='Generator error: '+e.message;genBtn.disabled=false;return;}
-    if(res.puzzles.length){claudePuzzles=claudePuzzles.concat(res.puzzles);persistClaude();}
+    let shared=0,local=0;
+    for(const p of res.puzzles){const r=await savePuzzle(p);if(r.shared)shared++;else local++;}
     genBtn.disabled=false;
-    if(res.puzzles.length>=count){genStatus.className='gen-status good';
-      genStatus.textContent='✓ Created '+res.puzzles.length+' puzzle'+(res.puzzles.length===1?'':'s')+'. Find them in Archive → Claude created.';}
-    else if(res.puzzles.length>0){genStatus.className='gen-status good';
-      genStatus.textContent='✓ Created '+res.puzzles.length+' of '+count+' (the '+tier+' filter is sparse — try again or a different difficulty).';}
-    else{genStatus.className='gen-status bad';genStatus.textContent='Couldn’t find a '+tier+' puzzle this pass. Try again or pick a different difficulty.';}
+    const n=res.puzzles.length;
+    if(!n){genStatus.className='gen-status bad';genStatus.textContent='Couldn’t find a '+tier+' puzzle this pass. Try again or pick a different difficulty.';return;}
+    const where=local===0?'saved to the shared archive (every device).'
+      :shared===0?'saved on this device only — sign in on the home page (enter the access code) to share them.'
+      :('— '+shared+' shared, '+local+' saved on this device (sign in to share the rest).');
+    genStatus.className='gen-status good';
+    genStatus.textContent='✓ Created '+n+(n<count?(' of '+count):'')+' puzzle'+(n===1?'':'s')+' '+where+' See Archive → Claude created.';
   },30);
 };
 
@@ -646,22 +671,24 @@ function validateBuild(){
   saveBtn.disabled=!valid;
   saveBtn.dataset.ready=valid?'1':'';
 }
-document.getElementById('saveBuildBtn').onclick=()=>{
+document.getElementById('saveBuildBtn').onclick=async ()=>{
   const words=buildWords();
   const seams=[];for(let i=0;i<4;i++)seams.push({idx:i,types:seamTypesFor(words[i],words[i+1])});
   const asg=assignDistinctTypes(seams);if(!asg)return;
+  const status=document.getElementById('buildStatus');const saveBtn=document.getElementById('saveBuildBtn');
   const key=norm(words[0])+'>'+norm(words[4]);
-  if(existsKey(key)){document.getElementById('buildStatus').className='build-status bad';
-    document.getElementById('buildStatus').textContent='A puzzle with that start & end already exists.';return;}
+  if(existsKey(key)){status.className='build-status bad';status.textContent='A puzzle with that start & end already exists.';return;}
+  saveBtn.disabled=true;
   const cs=solveJS(words[0],words[4],3,35000);const unique=(cs.sols.length===1&&!cs.capped);
   const g=gradeChain(words,unique);
   const p={id:'user-'+Date.now().toString(36),source:'user',start:words[0],end:words[4],solution:words,
     types:[asg[0],asg[1],asg[2],asg[3]],num_solutions:cs.capped?'2+':cs.sols.length,difficulty:g.tier,score:g.score,created:Date.now()};
-  userPuzzles.push(p);persistUser();
+  const r=await savePuzzle(p);
   for(let i=0;i<5;i++)document.getElementById('build'+i).value='';
   validateBuild();
-  const status=document.getElementById('buildStatus');status.className='build-status good';
-  status.textContent='✓ Saved “'+p.start.toUpperCase()+' → '+p.end.toUpperCase()+'” ('+p.difficulty+') to Archive → User created.';
+  status.className='build-status good';
+  status.textContent='✓ Saved “'+p.start.toUpperCase()+' → '+p.end.toUpperCase()+'” ('+p.difficulty+') '+
+    (r.shared?'to the shared archive (every device).':'on this device only — sign in on the home page to share it.');
 };
 
 /* ================= controls + boot ================= */
@@ -679,8 +706,10 @@ document.getElementById('helpBtn').onclick=()=>alert(
   'ARCHIVE: browse all puzzles — Official, Claude created, and your own. A ✓ marks ones you’ve solved.\n\n'+
   'CREATE: have Claude generate puzzles by difficulty, or build your own.');
 
-newRandom();
+newRandom();          // paint an official puzzle immediately
 focusEntry();
+// then pull the shared set from the server in the background
+loadServer().then(()=>{ if(currentView==='archive')renderArchive(); });
 </script>
 </body>
 </html>

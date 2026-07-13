@@ -36,10 +36,18 @@ services:
     domains:
       - centralindustrial.ai
       - www.centralindustrial.ai
+    # Persistent disk for the shared Twixtle puzzle store (twixtle_puzzles.json).
+    # Without it, generated/built puzzles would be wiped on every redeploy.
+    disk:
+      name: hub-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - fromGroup: central-industrial-auth
       - key: PYTHON_VERSION
         value: "3.12.6"
+      - key: DATA_DIR            # where the shared Twixtle store lives (the disk)
+        value: /var/data
       - key: ACCESS_CODE          # the C64 access code (secret)
         sync: false
       - key: COOKIE_DOMAIN        # share the auth cookie across all subdomains
