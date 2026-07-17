@@ -80,7 +80,7 @@ def _headers(resp):
     return resp
 
 
-SESS_TTL = 2 * 3600     # tool session granted after a hub handshake (2 hours)
+SESS_TTL = 12 * 3600    # tool session granted after a hub handshake (12 hours)
 
 
 def _verify(purpose, tok):
