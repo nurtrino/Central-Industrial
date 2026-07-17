@@ -292,6 +292,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = "/cave_map.html"
         elif parsed.path in ("/twixtle", "/twixtle/"):
             self.path = "/twixtle.html"
+        elif parsed.path in ("/crate", "/crate/"):
+            self.path = "/crate.html"
         return super().do_GET()
 
 
