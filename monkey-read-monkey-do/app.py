@@ -80,7 +80,7 @@ GATE_ON = HOSTED and bool(AUTH_SECRET)
 _GATE_EXEMPT = ("/healthz",)            # always-open (plus the /fonts/ prefix)
 
 
-SESS_TTL = 2 * 3600     # tool session granted after a hub handshake (2 hours)
+SESS_TTL = 8 * 3600     # tool session granted after a hub handshake (8 hours)
 
 
 def _verify(purpose: str, tok: str) -> bool:
