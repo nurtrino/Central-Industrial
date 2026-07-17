@@ -996,6 +996,175 @@ def deep_research_sources():
     return jsonify({"ok": True, "count": len(srcs)})
 
 
+# ── Extract a source: scrape one page / crawl a site (Firecrawl → Exa fallback) ──
+def _firecrawl_scrape(url, log=lambda m: None):
+    """Single-page scrape via Firecrawl v2. Returns dict or None."""
+    key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+    if not key:
+        return None
+    import requests
+    try:
+        r = requests.post("https://api.firecrawl.dev/v2/scrape",
+                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"url": url, "formats": ["markdown"]}, timeout=120)
+        if r.status_code == 200:
+            data = (r.json() or {}).get("data") or {}
+            md = (data.get("markdown") or "").strip()
+            if md:
+                meta = data.get("metadata") or {}
+                return {"markdown": md, "title": meta.get("title") or url,
+                        "url": meta.get("sourceURL") or url, "pages": 1}
+        log(f"[firecrawl] scrape HTTP {r.status_code}")
+    except Exception as e:  # noqa: BLE001
+        log(f"[firecrawl] scrape error: {e}")
+    return None
+
+
+def _firecrawl_crawl(url, limit, progress=lambda c, t: None, log=lambda m: None, deadline=None):
+    """Multi-page crawl via Firecrawl v2 (async: start, then poll). Returns dict or None."""
+    key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+    if not key:
+        return None
+    import requests
+    import time
+    hdr = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    try:
+        r = requests.post("https://api.firecrawl.dev/v2/crawl", headers=hdr,
+                          json={"url": url, "limit": limit,
+                                "scrapeOptions": {"formats": ["markdown"]}}, timeout=60)
+        if r.status_code != 200:
+            log(f"[firecrawl] crawl start HTTP {r.status_code}")
+            return None
+        cid = (r.json() or {}).get("id")
+        if not cid:
+            return None
+    except Exception as e:  # noqa: BLE001
+        log(f"[firecrawl] crawl start error: {e}")
+        return None
+    status_url = f"https://api.firecrawl.dev/v2/crawl/{cid}"
+    deadline = deadline or (time.time() + 300)
+    pages = []
+    while time.time() < deadline:
+        try:
+            s = requests.get(status_url, headers={"Authorization": f"Bearer {key}"}, timeout=60).json()
+        except Exception as e:  # noqa: BLE001
+            log(f"[firecrawl] crawl poll error: {e}")
+            break
+        if s.get("data"):
+            pages = s["data"]
+        progress(s.get("completed") or len(pages), s.get("total") or limit)
+        st = s.get("status")
+        if st in ("completed", "failed"):
+            break
+        time.sleep(3)
+    parts = []
+    for p in pages:
+        md = (p.get("markdown") or "").strip()
+        if not md:
+            continue
+        meta = p.get("metadata") or {}
+        parts.append(f"## {meta.get('title') or ''}\n\n<{meta.get('sourceURL') or meta.get('url') or ''}>\n\n{md}")
+    if not parts:
+        return None
+    return {"markdown": "\n\n---\n\n".join(parts), "title": f"Crawl of {url}",
+            "url": url, "pages": len(parts)}
+
+
+def _exa_extract_fallback(url, log=lambda m: None):
+    """Last-resort single-page fetch via Exa's cleaned-text contents."""
+    try:
+        from engines.research.exa_search import exa_contents
+        txt = (exa_contents(url, log=log) or "").strip()
+        if txt:
+            return {"markdown": txt, "title": url, "url": url, "pages": 1}
+    except Exception as e:  # noqa: BLE001
+        log(f"[exa] extract fallback error: {e}")
+    return None
+
+
+def _extract_worker(job_id, url, mode, limit):
+    def setj(**kw):
+        with _JOBS_LOCK:
+            j = _JOBS.get(job_id)
+            if j:
+                j.update(kw)
+
+    def log(m):
+        setj(message=m)
+
+    try:
+        result, provider = None, None
+        if mode == "crawl":
+            setj(message=f"Crawling {url} (up to {limit} pages) via Firecrawl…", pct=None)
+            result = _firecrawl_crawl(
+                url, limit, log=log,
+                progress=lambda c, t: setj(message=f"Crawling… {c}/{t or limit} pages",
+                                           pct=(int(min(c, t) * 100 / t) if t else None)))
+            provider = "Firecrawl (crawl)" if result else None
+            if not result:
+                setj(message="Crawl unavailable — falling back to a single-page scrape…", pct=None)
+                result = _firecrawl_scrape(url, log=log)
+                provider = "Firecrawl (scrape)" if result else None
+        else:
+            setj(message=f"Scraping {url} via Firecrawl…", pct=None)
+            result = _firecrawl_scrape(url, log=log)
+            provider = "Firecrawl" if result else None
+
+        if not result:
+            setj(message="Firecrawl failed — trying Exa…", pct=None)
+            result = _exa_extract_fallback(url, log=log)
+            provider = "Exa (fallback)" if result else None
+
+        if not result:
+            setj(done=True, error="Could not fetch this site's contents via Firecrawl or Exa.")
+            return
+        setj(done=True, pct=100, message="Done.",
+             result={"markdown": result["markdown"], "title": result.get("title") or url,
+                     "url": result.get("url") or url, "pages": result.get("pages", 1),
+                     "provider": provider, "mode": mode})
+    except Exception as e:  # noqa: BLE001
+        setj(done=True, error=f"{type(e).__name__}: {e}")
+
+
+@app.route("/api/deep_research/extract", methods=["POST", "OPTIONS"])
+def deep_research_extract():
+    if request.method == "OPTIONS":
+        return "", 204
+    url = (request.form.get("url") or "").strip()
+    mode = (request.form.get("mode") or "scrape").strip().lower()
+    if mode not in ("scrape", "crawl"):
+        mode = "scrape"
+    try:
+        limit = int(request.form.get("limit") or 25)
+    except (TypeError, ValueError):
+        limit = 25
+    limit = max(1, min(limit, 50))          # hard cap on crawl breadth
+    if not re.match(r"^https?://", url, re.I):
+        return jsonify({"error": "a valid http(s) URL is required"}), 400
+    job_id = os.urandom(8).hex()
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {"stage": "extract", "pct": None, "message": "Starting…",
+                         "done": False, "error": None, "result": None}
+    threading.Thread(target=_extract_worker, args=(job_id, url, mode, limit), daemon=True).start()
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/deep_research/extract_status", methods=["GET"])
+def deep_research_extract_status():
+    job_id = request.args.get("job", "")
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return jsonify({"error": "unknown job"}), 404
+        payload = {"done": job["done"], "error": job["error"],
+                   "pct": job["pct"], "message": job["message"]}
+        if job["done"] and not job["error"]:
+            payload["result"] = job["result"]
+        if job["done"]:
+            _JOBS.pop(job_id, None)
+    return jsonify(payload)
+
+
 @app.route("/api/deep_research/prompt", methods=["GET", "POST", "OPTIONS"])
 def deep_research_prompt():
     """Read/update the governance prompt (prompts/deep_research.md). Loaded fresh at the
