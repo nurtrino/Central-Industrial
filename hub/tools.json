@@ -24,6 +24,11 @@
       "id": "twixtle",
       "name": "Twixtle",
       "url": "https://centralindustrial.ai/twixtle"
+    },
+    {
+      "id": "crate",
+      "name": "Crate",
+      "url": "https://nurtrino.github.io/Bryndal-App/spotify-crate/"
     }
   ]
 }
