@@ -495,6 +495,9 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
   const _dr = { data: null, abort: null, gen: 0, query: '', depth: 'standard', files: [],
                 clarify: null, clarAns: {}, sources: null, srcOpen: false,
                 deeperOpen: false, deeperFiles: [], deeperQuery: '',
+                extractOpen: false, extractUrl: '', extractMode: 'scrape', extractLimit: 25,
+                extractBusy: false, extractResult: null, extractError: null,
+                extractMsg: '', extractPct: null, _extractGen: 0,
                 channels: { api_search: true, web_engines: true, site_queries: true, neural_search: false },
                 prefs: { open: false, loaded: false, prompt: '', name: '', status: '' } };
 
@@ -509,6 +512,12 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
     _dr.deeperOpen = false;
     _dr.deeperFiles = [];
     _dr.deeperQuery = '';
+    _dr.extractOpen = false;
+    _dr.extractUrl = '';
+    _dr.extractResult = null;
+    _dr.extractError = null;
+    _dr.extractBusy = false;
+    _dr._extractGen++;
   }
 
   function _drRender() {
@@ -732,7 +741,8 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
         </div>
         <div class="vc-memo-body">${reportHtml}</div>
       </div>
-      ${_drDeeperPanel()}`;
+      ${_drDeeperPanel()}
+      ${_drExtractPanel()}`;
   }
 
   function _drDeeperPanel() {
@@ -846,6 +856,120 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
     _dr.data = null;
     _dr.deeperOpen = false;
     drStartJob('');
+  }
+
+  // ── Extract a source: scrape one page / crawl a site (Firecrawl → Exa) ──────
+  function _drExtractPanel() {
+    if (!_dr.extractOpen) {
+      return `
+        <div class="dr-deeper-cta" style="margin-top:14px">
+          <div>
+            <div class="dr-deeper-cta-title">Extract a source</div>
+            <div class="dr-deeper-cta-sub">Scrape a single page — or crawl a whole site — from the sources this
+              research surfaced, and read its full content as clean markdown.</div>
+          </div>
+          <button class="dr-run-btn" onclick="drExtractOpen()">Extract →</button>
+        </div>`;
+    }
+    const srcs = (_dr.data && _dr.data.sources) || [];
+    const opts = srcs.map(s =>
+      `<option value="${_esc(s.url)}" ${(_dr.extractUrl === s.url) ? 'selected' : ''}>${_esc((s.title || s.url).slice(0, 90))}</option>`).join('');
+    const modeChip = (id, label, sub) =>
+      `<button type="button" class="dr-chip ${_dr.extractMode === id ? 'active' : ''}" onclick="drExtractSetMode('${id}')">
+         <span class="dr-chip-label">${label}</span><span class="dr-chip-sub">${sub}</span></button>`;
+    const busy = _dr.extractBusy;
+    const res = _dr.extractResult;
+    const resHtml = res ? `
+        <div class="vc-memo-outer" style="margin-top:18px">
+          <div class="vc-memo-toolbar">
+            <div class="vc-memo-files"><strong style="color:var(--text-secondary)">${res.mode === 'crawl' ? 'Crawled' : 'Scraped'}:</strong>
+              ${_esc(res.url)} &nbsp;·&nbsp; ${res.pages} page${res.pages > 1 ? 's' : ''} &nbsp;·&nbsp; via ${_esc(res.provider || '')}</div>
+            <div style="display:flex;gap:8px"><button class="vc-memo-download" onclick="drExtractDownload()">💾 Download .md</button></div>
+          </div>
+          <div class="vc-memo-body">${(typeof marked !== 'undefined') ? marked.parse(res.markdown) : _esc(res.markdown)}</div>
+        </div>` : '';
+    const err = _dr.extractError ? `<div style="margin-top:12px;color:#ff8888;font-size:12px">${_esc(_dr.extractError)}</div>` : '';
+    return `
+      <div class="dr-deeper-box" style="margin-top:14px">
+        <div class="dr-refine-head">Extract a source</div>
+        <div class="dr-refine-sub">Pick a source (or paste any URL), then scrape the page or crawl the site.
+          Content is fetched via Firecrawl, falling back to Exa if needed.</div>
+
+        <label class="dr-label" style="margin-top:10px">Source URL</label>
+        ${srcs.length ? `<select class="dr-textarea" style="height:auto;padding:8px" onchange="drExtractPickUrl(this.value)">
+            <option value="">— choose a surfaced source —</option>${opts}</select>` : ''}
+        <input id="dr-extract-url" class="dr-textarea" style="height:auto;padding:8px;margin-top:8px" type="text"
+          placeholder="https://…" value="${_esc(_dr.extractUrl || '')}" oninput="_dr.extractUrl=this.value">
+
+        <label class="dr-label" style="margin-top:16px">Mode</label>
+        <div class="dr-chips">
+          ${modeChip('scrape', 'Scrape', 'this one page')}
+          ${modeChip('crawl', 'Crawl', 'follow links across the site')}
+        </div>
+        ${_dr.extractMode === 'crawl' ? `
+          <label class="dr-label" style="margin-top:12px">Max pages (1–50)</label>
+          <input id="dr-extract-limit" class="dr-textarea" style="height:auto;padding:8px;width:120px" type="number"
+            min="1" max="50" value="${_dr.extractLimit || 25}"
+            oninput="_dr.extractLimit=Math.max(1,Math.min(50,parseInt(this.value)||25))">` : ''}
+
+        <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="dr-run-btn" onclick="drExtractRun()" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : (_dr.extractMode === 'crawl' ? 'Crawl site →' : 'Scrape page →')}</button>
+          <button class="dr-chip" style="min-width:0;padding:8px 14px" onclick="drExtractClose()">Close</button>
+          ${busy ? `<span style="color:var(--text-muted);font-size:12px">${_esc(_dr.extractMsg || '')}${(_dr.extractPct != null) ? ' (' + _dr.extractPct + '%)' : ''}</span>` : ''}
+        </div>
+        ${err}
+        ${resHtml}
+      </div>`;
+  }
+  function drExtractOpen() { _dr.extractOpen = true; _dr.extractMode = _dr.extractMode || 'scrape'; _dr.extractLimit = _dr.extractLimit || 25; _drRender(); }
+  function drExtractClose() { _dr.extractOpen = false; _drRender(); }
+  function drExtractSetMode(m) { _dr.extractMode = m; _drRender(); }
+  function drExtractPickUrl(u) { if (u) _dr.extractUrl = u; _drRender(); }
+
+  async function drExtractRun() {
+    const inp = document.getElementById('dr-extract-url');
+    const url = ((inp && inp.value) || _dr.extractUrl || '').trim();
+    if (!/^https?:\/\//i.test(url)) { _dr.extractError = 'Enter a valid http(s) URL.'; _drRender(); return; }
+    _dr.extractUrl = url; _dr.extractError = null; _dr.extractResult = null;
+    _dr.extractBusy = true; _dr.extractMsg = 'Starting…'; _dr.extractPct = null;
+    const gen = ++_dr._extractGen;
+    _drRender();
+    try {
+      const fd = new FormData();
+      fd.append('url', url);
+      fd.append('mode', _dr.extractMode || 'scrape');
+      if (_dr.extractMode === 'crawl') fd.append('limit', String(_dr.extractLimit || 25));
+      const j = await (await fetch(`${PERF_SERVER}/api/deep_research/extract`, { method: 'POST', body: fd })).json();
+      if (j.error) throw new Error(j.error);
+      const jobId = j.job_id;
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500));
+        if (gen !== _dr._extractGen) return;                       // superseded / reset
+        const s = await (await fetch(`${PERF_SERVER}/api/deep_research/extract_status?job=${jobId}`)).json();
+        if (gen !== _dr._extractGen) return;
+        _dr.extractMsg = s.message || ''; _dr.extractPct = (s.pct != null) ? s.pct : null;
+        if (s.done) {
+          _dr.extractBusy = false;
+          if (s.error) _dr.extractError = s.error; else _dr.extractResult = s.result;
+          _drRender();
+          return;
+        }
+        _drRender();
+      }
+    } catch (e) {
+      if (gen !== _dr._extractGen) return;
+      _dr.extractBusy = false; _dr.extractError = String((e && e.message) || e); _drRender();
+    }
+  }
+
+  function drExtractDownload() {
+    const res = _dr.extractResult; if (!res || !res.markdown) return;
+    const blob = new Blob([res.markdown], { type: 'text/markdown' });
+    const name = (res.url || 'extract').replace(/^https?:\/\//, '').replace(/[^a-z0-9.-]+/gi, '_').slice(0, 60) || 'extract';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name + '.md';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }
 
   function drDownloadDocx() {
