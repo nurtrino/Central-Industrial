@@ -16,7 +16,7 @@ import { NextRequest, NextResponse } from 'next/server';
 const AUTH_SECRET = process.env.AUTH_SECRET || '';
 const HOME_URL = (process.env.HOME_URL || process.env.HUB_URL || 'https://centralindustrial.ai').trim();
 const GATE_ON = !!AUTH_SECRET;
-const SESS_TTL = 2 * 3600; // host session granted after a hub handshake (2h)
+const SESS_TTL = 8 * 3600; // host session granted after a hub handshake (8h)
 
 const enc = new TextEncoder();
 
