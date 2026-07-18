@@ -572,13 +572,15 @@ def _truncate_words(text: str, max_words: int) -> str:
     return text
 
 
-def _dr_clarify(query):
+def _dr_clarify(query, provider="claude"):
     """Quick scoping pass: up to 3 clarifying questions, or none."""
-    import anthropic
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
+    from engines.research.llm import make_client
+    try:
+        client = make_client(provider, os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    except Exception:          # LM Studio down in local mode -> just skip clarification
+        client = None
+    if client is None:
         return {"needs_clarification": False, "questions": []}
-    client = anthropic.Anthropic(api_key=api_key)
     sys_p = ("You scope research questions for a deep web-research tool. "
              "If the question is already specific enough to research well, set "
              "needs_clarification false. Otherwise give up to 3 SHORT clarifying questions "
@@ -693,7 +695,8 @@ def _dr_wrap_report(query, h, synth_md):
     return display_md, docx_md
 
 
-def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overrides=None):
+def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overrides=None,
+               provider="claude"):
     job = _JOBS[job_id]
     ev = _DR_EVENTS[job_id]
     skip_ev = _DR_SKIP[job_id]
@@ -728,9 +731,18 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         from engines.research.agent import _load_governance, run_gap_round
         from engines.research.synthesize import (synthesize, classify_category,
                                                  stop_judge, gap_queries, DEEPEN_ROUNDS)
+        from engines.research.llm import make_client, is_local, LocalLLMUnavailable
         gov = _load_governance()
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        client = anthropic.Anthropic(api_key=api_key) if api_key else None
+        if is_local(provider):
+            try:
+                client = make_client("local")           # LMStudioClient (whatever model is loaded)
+            except LocalLLMUnavailable as e:
+                with _JOBS_LOCK:
+                    job["error"] = str(e); job["done"] = True
+                return
+        else:
+            client = anthropic.Anthropic(api_key=api_key) if api_key else None
 
         prog("stage1", None, "Starting…")
         br = DRTBrowser(log=lambda m: None).start()
@@ -740,7 +752,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             h = run_search(query, depth=depth, clarifications=clar, browser=br,
                            progress=prog, log=lambda m: None,
                            request_credentials=request_credentials, skip_event=skip_ev,
-                           channel_overrides=channel_overrides)
+                           channel_overrides=channel_overrides, client=client, provider=provider)
             if client and (h.items or doc_context):
                 try:
                     prog("synthesize", None, "Synthesizing the report…")
@@ -826,6 +838,7 @@ def deep_research_start():
         return jsonify({"error": "query is required"}), 400
     depth = (request.form.get("depth") or "standard").strip()
     clarifications = (request.form.get("clarifications") or "").strip()
+    provider = (request.form.get("provider") or "claude").strip().lower()
 
     refinement = (request.form.get("refinement") or "").strip()
     prior_report = (request.form.get("prior_report") or "").strip()
@@ -879,7 +892,8 @@ def deep_research_start():
     _DR_EVENTS[job_id] = threading.Event()
     _DR_SKIP[job_id] = threading.Event()
     threading.Thread(target=_dr_worker,
-                     args=(job_id, query, depth, clarifications, doc_context, channel_overrides),
+                     args=(job_id, query, depth, clarifications, doc_context, channel_overrides,
+                           provider),
                      daemon=True).start()
     return jsonify({"job_id": job_id, "stages": DR_STAGES}), 202
 
@@ -941,12 +955,23 @@ def deep_research_clarify():
     if request.method == "OPTIONS":
         return "", 204
     query = (request.form.get("query") or "").strip()
+    provider = (request.form.get("provider") or "claude").strip().lower()
     if not query:
         return jsonify({"needs_clarification": False, "questions": []})
     try:
-        return jsonify(_dr_clarify(query))
+        return jsonify(_dr_clarify(query, provider))
     except Exception as e:  # noqa: BLE001
         return jsonify({"needs_clarification": False, "questions": [], "warn": str(e)})
+
+
+@app.route("/api/deep_research/local_model", methods=["GET"])
+def deep_research_local_model():
+    """Report the model currently loaded in LM Studio (for the Claude/Local-AI switch)."""
+    from engines.research.llm import detect_local_model, LMSTUDIO_URL
+    try:
+        return jsonify({"ok": True, "model": detect_local_model(), "url": LMSTUDIO_URL})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(e), "url": LMSTUDIO_URL})
 
 
 @app.route("/api/deep_research/vault", methods=["GET", "POST", "OPTIONS"])
