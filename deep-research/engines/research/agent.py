@@ -728,7 +728,7 @@ def _listing(items) -> str:
 def run_search(query: str, depth: str = "standard", clarifications: str = "",
                browser: DRTBrowser | None = None, log=None, progress=None,
                request_credentials=None, vault=None, skip_event=None,
-               channel_overrides=None) -> HarvestResult:
+               channel_overrides=None, client=None, provider="claude") -> HarvestResult:
     """Run the deterministic 4-stage pipeline. Returns a HarvestResult.
 
     progress(stage, pct, msg): UI hook (stages: stage1..stage4).
@@ -748,10 +748,12 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
     sources = load_sources()
     governance = _load_governance()
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY is not set. Add it to the .env file.")
-    client = anthropic.Anthropic(api_key=api_key)
+    if client is None:
+        from .llm import make_client
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if provider != "local" and not api_key:
+            raise ValueError("ANTHROPIC_API_KEY is not set. Add it to the .env file.")
+        client = make_client(provider, api_key)
     vault = vault or CredentialVault()
 
     result = HarvestResult(query=query, depth=depth)
@@ -779,14 +781,18 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
     # ── STAGE 1 — Claude's own web search (intensity set by the plan) ──
     api_ch = plan.get("api_search", {})
     api_weight = api_ch.get("weight", 0.34)
-    if api_ch.get("use", True) and api_weight > 0:
+    if provider != "local" and api_ch.get("use", True) and api_weight > 0:
         base = STAGE1_USES.get(depth, 10)
         s1_uses = max(2, min(base * 2, round(base * api_weight * 3)))
         progress("stage1", None, f"{plan_msg} — Claude's web search ({s1_uses} searches)…")
         s1 = run_api_search(query, clarifications, depth, client=client, log=log,
                             max_uses_override=s1_uses)
     else:
-        log("[plan] Stage 1 (Claude API search) de-prioritised for this question; skipping")
+        if provider == "local":
+            log("[local] Stage 1 uses Claude's server-side web search — unavailable with a local "
+                "model; skipping (Exa / Firecrawl / browser-engine channels still run).")
+        else:
+            log("[plan] Stage 1 (Claude API search) de-prioritised for this question; skipping")
         s1 = {"findings_md": "", "sources": [], "used": False}
     if s1.get("findings_md"):
         result.items.append(HarvestItem(
