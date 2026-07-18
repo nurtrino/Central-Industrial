@@ -494,6 +494,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
    ════════════════════════════════════════════════════════════════════════════ */
   const _dr = { data: null, abort: null, gen: 0, query: '', depth: 'standard', files: [],
                 clarify: null, clarAns: {}, sources: null, srcOpen: false,
+                provider: 'claude', localModel: null, localErr: false,
                 deeperOpen: false, deeperFiles: [], deeperQuery: '',
                 extractOpen: false, extractUrl: '', extractMode: 'scrape', extractLimit: 25,
                 extractBusy: false, extractResult: null, extractError: null,
@@ -530,7 +531,8 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
             <div class="ha-eyebrow">Web Research</div>
             <div class="ha-title">Deep Research</div>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+            ${_drProviderSwitch()}
             <button class="pd-clear-btn" onclick="drTogglePrefs()" title="Edit the editorial guidelines (prompts/deep_research.md)">⚙ Preferences</button>
             ${d ? `<button class="pd-clear-btn" onclick="drClear()">✕ Clear</button>` : ''}
           </div>
@@ -538,6 +540,34 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
         ${_drPrefsHtml()}
         ${d ? _drResultsHtml() : _drForm()}
       </div>`;
+  }
+
+  function _drProviderSwitch() {
+    const p = _dr.provider || 'claude';
+    const on = 'background:var(--admin-color,#7CFF9B);color:#04120a;font-weight:600';
+    const off = 'background:transparent;color:var(--text-secondary)';
+    const seg = (id, label) => `<button onclick="drSetProvider('${id}')" style="border:none;padding:5px 12px;font:inherit;font-size:12px;cursor:pointer;border-radius:6px;${p === id ? on : off}">${label}</button>`;
+    let note = '';
+    if (p === 'local') {
+      if (_dr.localModel) note = `<span style="font-size:11px;color:var(--text-muted)" title="Model loaded in LM Studio">▸ ${_esc(_dr.localModel)}</span>`;
+      else if (_dr.localErr) note = `<span style="font-size:11px;color:#ff8888">⚠ LM Studio not connected</span>`;
+      else note = `<span style="font-size:11px;color:var(--text-muted)">checking…</span>`;
+    }
+    return `<div style="display:flex;align-items:center;gap:10px"
+        title="Local AI routes every AI call to the model loaded in LM Studio — Claude is fully out of the loop for the run.">
+      <div style="display:flex;gap:2px;padding:3px;border:1px solid var(--border-mid);border-radius:8px;background:var(--bg-surface)">${seg('claude', 'Claude')}${seg('local', 'Local AI')}</div>
+      ${note}</div>`;
+  }
+  function drSetProvider(p) {
+    _dr.provider = p;
+    if (p === 'local') {
+      _dr.localModel = null; _dr.localErr = false; _drRender();
+      fetch(`${PERF_SERVER}/api/deep_research/local_model`).then(r => r.json()).then(j => {
+        if (j.ok) { _dr.localModel = j.model; _dr.localErr = false; }
+        else { _dr.localModel = null; _dr.localErr = true; }
+        if (_dr.provider === 'local') _drRender();
+      }).catch(() => { _dr.localErr = true; if (_dr.provider === 'local') _drRender(); });
+    } else { _drRender(); }
   }
 
   function _drPrefsSection() {
@@ -1179,7 +1209,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
           <div class="pd-drop-title">Scoping the question…</div>
         </div>`);
       try {
-        const fd = new FormData(); fd.append('query', q);
+        const fd = new FormData(); fd.append('query', q); fd.append('provider', _dr.provider || 'claude');
         const r = await fetch(`${PERF_SERVER}/api/deep_research/clarify`, { method:'POST', body: fd });
         const j = await r.json();
         if (myGen !== _dr.gen) return;
@@ -1229,6 +1259,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
     const form = new FormData();
     form.append('query', q);
     form.append('depth', _dr.depth);
+    form.append('provider', _dr.provider || 'claude');
     if (clarifications) form.append('clarifications', clarifications);
     if (extra && extra.refinement)  form.append('refinement', extra.refinement);
     if (extra && extra.prior_report) form.append('prior_report', extra.prior_report);
