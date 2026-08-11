@@ -150,7 +150,7 @@ def _tool_defs(include_web_search: bool = True, include_site_search: bool = True
             "name": "exa_find_similar",
             "description": ("Given the URL of a page you've found to be genuinely valuable, return "
                             "other pages that are conceptually SIMILAR to it (Exa neural). Use to "
-                            "expand from a strong source — more like this analyst writeup, this "
+                            "expand from a strong source — more like this specialist writeup, this "
                             "forum thread, this primary document. Returns title + url."),
             "input_schema": {"type": "object", "properties": {
                 "url": {"type": "string", "description": "URL of a strong page already found"}},
@@ -660,7 +660,7 @@ def _stage2_focus(plan: dict, use_sites: bool, use_engines: bool) -> str:
 
 
 # Always kept regardless of the relevance filter — broad, general-purpose sources
-# that earn their place on almost any DD question.
+# that earn their place on almost any research question.
 _ALWAYS_ON_DOMAINS = {"reddit.com", "substack.com"}
 _SEED_FILTER_THRESHOLD = 12   # below this, inject the whole seed list (no filter call)
 _SEED_FILTER_LIMIT = 18       # max topical forums injected into a browser stage

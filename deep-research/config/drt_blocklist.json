@@ -1,5 +1,5 @@
 {
-  "_comment": "Domains the DRT's Stage-1 (Claude API) web search will NEVER return — low-signal SEO/content-farm chaff. Editable. Keep it conservative: only add domains that are reliably junk for due-diligence research, since anything listed here is invisible to Stage 1. (Stage-2 browser engines are separate.)",
+  "_comment": "Domains the DRT's Stage-1 (Claude API) web search will NEVER return — low-signal SEO/content-farm chaff. Editable. Keep it conservative: only add domains that are reliably junk for deep research, since anything listed here is invisible to Stage 1. (Stage-2 browser engines are separate.)",
   "blocked_domains": [
     "pinterest.com",
     "ehow.com",

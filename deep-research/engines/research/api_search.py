@@ -19,7 +19,7 @@ from .models import get_model
 _MODEL = get_model("search")   # Stage-1 web search (Sonnet by default)
 # How many server-side searches Stage 1 may run, by depth tier.
 # Raised per the "max_uses 15-20 for research" guidance — Stage 1 is a cheap,
-# fast baseline, so let it dig harder on multi-entity DD questions.
+# fast baseline, so let it dig harder on multi-entity research questions.
 STAGE1_USES = {"quick": 5, "standard": 10, "deep": 18}
 
 # Prefer the 2026 tool (dynamic result filtering — Claude filters results before
@@ -90,7 +90,7 @@ def run_api_search(query: str, clarifications: str = "", depth: str = "standard"
         "Use web search to establish what is reliably known about the user's question. "
         "Be broad but efficient. Then write a TERSE findings brief: the key established "
         "facts (with the strongest sources), open questions still unresolved, and any "
-        "specialist or gated sources (forums, paywalled analysts, primary filings) that a "
+        "specialist or gated sources (forums, paywalled specialists, primary documents) that a "
         "deeper pass should pursue. Signal only — no filler. If little is found, say so plainly."
     )
     user = f"RESEARCH QUESTION:\n{query}"
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     import sys
     from .agent import _load_env
     _load_env()
-    q = " ".join(sys.argv[1:]) or "Renaissance Technologies Medallion fund returns and secrecy"
+    q = " ".join(sys.argv[1:]) or "James Webb Space Telescope major discoveries and instrument issues"
     out = run_api_search(q, depth="quick", log=lambda m: print(m, flush=True))
     print("used:", out["used"], "| sources:", len(out["sources"]))
     for s in out["sources"][:10]:

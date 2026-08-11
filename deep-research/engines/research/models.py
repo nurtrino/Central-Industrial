@@ -9,7 +9,7 @@ the reader, and keep the high-volume mechanical work cheap.
   - search     : the browser agent tool-use loop + Stage-1 web search — high volume → Sonnet
   - route      : relevance filters, stop-judge, gap-queries — short judgments → Sonnet
   - plan       : the upfront research planner — one call, steers the whole run → Opus
-  - synthesize : the cited DD report (Pass B) — THE deliverable → Opus
+  - synthesize : the cited report (Pass B) — THE deliverable → Opus
 
 Override any role in  config/drt_models.json  (edit + restart the server to apply):
     { "models": { "synthesize": "claude-sonnet-4-6", ... } }

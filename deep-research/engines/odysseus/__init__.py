@@ -1,5 +1,5 @@
 """
-Odysseus Deep Research engine — vendored into the DDDD platform for side-by-side
+Odysseus Deep Research engine — vendored into the platform for side-by-side
 comparison against our own DRT.
 
 The engine (deep_research.py), goal-based extractor, and prompt-injection guard are

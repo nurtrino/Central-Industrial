@@ -319,7 +319,7 @@ def synthesize(harvest, governance: str, client, log=None, progress=None,
                nugget_cache=None, category=None, user_docs="") -> dict:
     """Turn a HarvestResult into the final cited report.
 
-    category: DD report category (Odysseus technique 3) — classified here if None.
+    category: report category (Odysseus technique 3) — classified here if None.
     nugget_cache: dict url->nuggets reused across deepening rounds (technique 2).
     user_docs: text of any supporting documents the user uploaded. Unlike web-page
         text (untrusted DATA), this is trusted material the user supplied directly —

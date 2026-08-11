@@ -1,7 +1,7 @@
 """
 Deep Research — standalone local server.
 
-Extracted from the DDDD due-diligence platform's perf_server.py (port 5002) so the
+Extracted from the original platform's perf_server.py (port 5002) so the
 Deep Research Tool (DRT) lives on its own, as a "Special Projects" tool. Unlike the
 old setup (GitHub-Pages HTTPS frontend → localhost backend, hence CORS), this server
 SERVES ITS OWN UI at / and exposes the DRT API on the SAME origin — like the hub and
@@ -364,7 +364,7 @@ def _backup_then_write(path, content):
         fh.write(content)
 
 
-def _memo_to_docx_bytes(memo_md: str, manager_name: str, images: dict = None) -> bytes:
+def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
     """Convert markdown to a .docx (returned as bytes). Renders GitHub-flavored pipe
     tables as real Word tables, plus headings, bullets, rules, and inline **bold**/*italic*."""
     from docx import Document

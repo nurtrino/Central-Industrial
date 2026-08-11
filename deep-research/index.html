@@ -490,7 +490,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   DEEP RESEARCH — UI (lifted verbatim from the DDDD platform)
+   DEEP RESEARCH — UI (lifted verbatim from the original platform)
    ════════════════════════════════════════════════════════════════════════════ */
   const _dr = { data: null, abort: null, gen: 0, query: '', depth: 'standard', files: [],
                 clarify: null, clarAns: {}, sources: null, srcOpen: false,
@@ -666,7 +666,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
       <div class="dr-query-block">
         <label class="dr-label">Research question</label>
         <textarea id="dr-query" class="dr-textarea" rows="3"
-          placeholder="e.g. What's the background, track record, and any controversies around [a person, company, product, or topic]? Summarize recent developments and any concerns."
+          placeholder=""
           oninput="_dr.query = this.value">${_esc(_dr.query)}</textarea>
 
         <label class="dr-label" style="margin-top:18px">Depth</label>
@@ -1422,7 +1422,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
 
   /* ════════════════════════════════════════════════════════════════════
      ODYSSEUS RESEARCH — sub-tool (A/B comparison engine). Lifted from the
-     DDDD platform. Reuses Deep Research's controls/styles; renders into its
+     original platform. Reuses Deep Research's controls/styles; renders into its
      OWN #or-main-inner so the two views are independent (a run in one view
      keeps updating even while the other is shown).
      ════════════════════════════════════════════════════════════════════ */
@@ -1465,7 +1465,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
           A/B the <em>methodology</em>. Note: it can't log into gated sites or be watched in a browser (that's Deep Research's edge).</div>
         <label class="dr-label">Research question</label>
         <textarea id="or-query" class="dr-textarea" rows="3"
-          placeholder="Same kind of question you'd give Deep Research — e.g. background, reputation, and recent news on [a person, company, or topic]."
+          placeholder="Same kind of question you'd give Deep Research."
           oninput="_or.query = this.value">${_esc(_or.query)}</textarea>
         <label class="dr-label" style="margin-top:18px">Depth (rounds)</label>
         <div class="dr-chips">${chips}</div>
@@ -1655,7 +1655,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
           gated-login sources; stored logins still apply).</div>
         <label class="dr-label">Research question</label>
         <textarea id="vvd-query" class="dr-textarea" rows="3"
-          placeholder="One question drives both passes — e.g. background, track record, and any controversies around [a person, company, or topic]."
+          placeholder="One question drives both passes."
           oninput="_vvd.query = this.value">${_esc(_vvd.query)}</textarea>
 
         <label class="dr-label" style="margin-top:18px">Pass 1 — Odysseus depth (rounds)</label>
@@ -1883,7 +1883,7 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
       fields:[ {k:'id',label:'Job ID',type:'text',required:true} ]},
     { id:'extract', name:'Extract', method:'POST', path:'v2/extract', async:true, statusId:'extract_status', desc:'LLM-structured extraction from pages (async → job id).',
       fields:[ {k:'urls',label:'URLs (one per line)',type:'lines',required:true,ph:'https://example.com'},
-               {k:'prompt',label:'Extraction prompt',type:'textarea',ph:'Extract the company name, founders, and total funding.'},
+               {k:'prompt',label:'Extraction prompt',type:'textarea',ph:'Extract the page title, author, and publication date.'},
                {k:'schema',label:'JSON schema (optional)',type:'json',ph:'{ "type": "object", "properties": { } }'} ]},
     { id:'extract_status', name:'Extract Status', method:'GET', path:'v2/extract/{id}', desc:'Fetch an extract job by id.',
       fields:[ {k:'id',label:'Job ID',type:'text',required:true} ]},

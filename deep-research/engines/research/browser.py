@@ -397,7 +397,7 @@ class DRTBrowser:
 # Manual smoke test:  python -m engines.research.browser "your query"
 if __name__ == "__main__":
     import sys
-    q = " ".join(sys.argv[1:]) or "Renaissance Technologies Medallion fund returns"
+    q = " ".join(sys.argv[1:]) or "James Webb Space Telescope discoveries"
     br = DRTBrowser(log=print).start()
     try:
         for eng in ("duckduckgo", "brave", "google"):

@@ -123,7 +123,7 @@ if __name__ == "__main__":
     import sys
     from .agent import _load_env
     _load_env()
-    q = " ".join(sys.argv[1:]) or "candid practitioner views on Renaissance Technologies culture"
+    q = " ".join(sys.argv[1:]) or "candid user experiences with Starlink in rural areas"
     print("enabled:", is_enabled(), "| key set:", bool(_key()))
     for r in exa_search(q, num=5, log=lambda m: print(m, flush=True)):
         print("  -", r["title"][:70], "|", r["url"][:70])

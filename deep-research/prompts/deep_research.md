@@ -34,7 +34,7 @@ and how to search. Common archetypes and where to look:
 | **Person / background** | Bios, prior roles, departures, interviews, controversies | Name + "background / departure / resigned / controversy / interview / podcast"; professional profiles; news archives; podcast transcripts |
 | **Track record / performance / outcomes** | Primary results, databases, candid forum debate | The subject + "results / record / outcomes / failures"; sector trackers and databases; forum threads debating the numbers (often the most honest) |
 | **Regulatory / legal / enforcement** | PRIMARY documents first | Regulator press releases & enforcement actions, court dockets (PACER/CourtListener), agency databases, state actions — quote the primary, not a summary of it |
-| **Market / competitive landscape** | Analyst notes, trade press, independent newsletters | Compare multiple named analysts; Substack/independent writers; industry-specific trade press |
+| **Market / competitive landscape** | Expert commentary, trade press, independent newsletters | Compare multiple named experts; Substack/independent writers; industry-specific trade press |
 | **"How does X work" / mechanism** | Authoritative explainers, primary docs, practitioner forums | Prefer primary/official docs + practitioner discussion over generic SEO explainers |
 | **Recent event / breaking** | Freshest news, primary statements | Date-bounded queries; search for recency; the subject's own statement as primary |
 | **Niche / obscure** | Specialist forums, niche blogs, primary sources | Insider vocabulary; `site:` on specialist communities; follow citation trails from the few good hits |
@@ -56,7 +56,7 @@ and how to search. Common archetypes and where to look:
 
 - **Discussion forums** — Reddit and specialist communities. Often the most candid, contrarian, and
   current takes. Read the *substantive* threads, skip the noise.
-- **Independent analysts / newsletters** — Substack and similar. One sharp independent writer can
+- **Independent experts / newsletters** — Substack and similar. One sharp independent writer can
   outweigh ten content-farm articles. (Some are paywalled — flag for login.)
 - **Primary documents** — official registries and filings, regulator press releases, court records,
   the subject's own site/statements. Always prefer the primary over a secondhand summary.
@@ -64,7 +64,7 @@ and how to search. Common archetypes and where to look:
 
 ### 1.4 Source quality & skepticism
 
-Rank what you trust, roughly: **primary documents > named, reputable analysts > established press >
+Rank what you trust, roughly: **primary documents > named, reputable experts > established press >
 substantive forum discussion > anonymous anecdote > SEO/content-farm chaff.**
 
 - **Triangulate.** A claim from one source is provisional until a second, independent source agrees.
@@ -114,8 +114,8 @@ draw from.
 
 ### 2.4 Voice & calibration
 
-- **Analyst voice:** precise, quantified, attributed. Prefer "Reuters reported revenue fell to $X in
-  2024 [3]" over "the company has struggled."
+- **Research voice:** precise, quantified, attributed. Prefer "Reuters reported the recall affected
+  2.1 million units in 2024 [3]" over "the product has had problems."
 - **Calibrate confidence to source strength.** Use firm language for well-sourced facts; hedge
   explicitly ("a single forum thread alleges…") for thin ones. Never present a weak claim with false
   certainty, and never both-sides a question the evidence actually settles.
