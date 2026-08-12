@@ -155,7 +155,10 @@ def _tool_defs(include_web_search: bool = True, include_site_search: bool = True
         tools.append({
             "name": "web_search",
             "description": ("Run a query on a general search engine and get ranked organic "
-                            "results (title + url). Vary queries and engines for broad coverage."),
+                            "results (title + url). Use COMPACT KEYWORD queries (2-6 terms — "
+                            "proper nouns, model names, insider jargon), never full-sentence "
+                            "questions: engines rank short keyword strings far better. Vary "
+                            "queries and engines for broad coverage."),
             "input_schema": {"type": "object", "properties": {
                 "engine": {"type": "string", "enum": ["duckduckgo", "brave", "google"]},
                 "query": {"type": "string"}}, "required": ["engine", "query"]},
@@ -186,7 +189,8 @@ def _tool_defs(include_web_search: bool = True, include_site_search: bool = True
         tools.append({
             "name": "site_search",
             "description": ("Search WITHIN a specific domain (forum/Substack/site) via the site: "
-                            "operator. Use for the listed sources and any relevant site you discover. "
+                            "operator. Compact keyword queries here too — 2-5 terms, no question "
+                            "phrasing. Use for the listed sources and any relevant site you discover. "
                             "Prefer forum_search when the site may hold unindexed or gated material."),
             "input_schema": {"type": "object", "properties": {
                 "domain": {"type": "string", "description": "e.g. reddit.com"},
@@ -994,10 +998,14 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
     n_q = {"standard": 5, "deep": 7}.get(depth, 5)
 
     # 1) Broad, varied queries from the model (wide net); fall back to simple variants.
-    q_sys = (f"You are the broad baseline pass of a web-research tool. Output ONLY a JSON "
-             f"array of {n_q} diverse, high-recall web-search queries that together cast a "
-             f"WIDE net over the question — different angles, terms, and stakeholders. "
-             f"No prose. Example: [\"...\", \"...\"]")
+    q_sys = (f"You write ENGINE-OPTIMIZED web-search queries for the broad baseline pass of "
+             f"a research tool. Output ONLY a JSON array of {n_q} queries that together cast "
+             f"a WIDE net over the question — different angles, terms, and stakeholders.\n"
+             f"QUERY CRAFT — this matters: engines rank COMPACT KEYWORD STRINGS far better "
+             f"than sentences. Each query = 2-6 terms; lead with proper nouns / product or "
+             f"model names / insider vocabulary; NO question words or filler (what, how, "
+             f"the, of, are); \"quoted phrases\" only where exact wording matters. "
+             f"Example shape: [\"acme x200 coupling failure\", \"x200 recall 2024 forum\"]")
     q_user = f"QUESTION:\n{query}" + (f"\n\nCONTEXT:\n{clarifications[:800]}" if clarifications else "")
     queries = []
     try:
@@ -1010,8 +1018,15 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
     except Exception as e:  # noqa: BLE001
         log(f"[local-baseline] query-gen failed ({type(e).__name__}); using fallbacks")
     if not queries:
-        queries = [query, f"{query} overview", f"{query} explained", f"{query} risks limitations"]
-    queries = queries[:n_q]
+        # Keyword-compress the question rather than firing it verbatim at the engines.
+        _stop = {"the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "what", "is",
+                 "are", "how", "who", "does", "do", "did", "have", "has", "any", "with", "by",
+                 "most", "their", "them", "its", "been", "was", "were", "which", "that"}
+        words = re.findall(r"[A-Za-z0-9][\w\-.]*", query)
+        base = " ".join(w for w in words if w.lower() not in _stop)[:70].strip() or query[:60]
+        queries = [base, f"{base} problems", f"{base} review", f"{base} forum"]
+    # Hard guard: a question that slipped through gets its punctuation stripped.
+    queries = [q.replace("?", "").strip() for q in queries if q.strip()][:n_q]
     _trace(f"\n=== STAGE 1 — BASELINE BROWSER SWEEP ===\nbroad queries: "
            f"{json.dumps(queries, ensure_ascii=False)}")
 

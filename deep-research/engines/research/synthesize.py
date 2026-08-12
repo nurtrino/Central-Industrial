@@ -124,7 +124,9 @@ def gap_queries(client, question, report, log=None) -> list:
         f"This research report is not finished. List 2-4 targeted web-search queries that "
         f"either (a) fill the most important remaining gap in the SPECIFIC answer to the "
         f"question, or (b) CONTINUE THE HOTTEST TRAIL — the thread/source/angle where the "
-        f"research was closest to the target when it stopped.\n\n"
+        f"research was closest to the target when it stopped. Write ENGINE queries — compact "
+        f"keyword strings (2-6 terms, proper nouns/jargon first), never full-sentence "
+        f"questions.\n\n"
         f"QUESTION:\n{question}\n\nCURRENT REPORT:\n{report}\n\nReturn ONLY a JSON array of strings.")
     try:
         r = client.messages.create(model=_ROUTE_MODEL, max_tokens=400, temperature=0.5,

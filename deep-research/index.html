@@ -555,7 +555,14 @@ async function saveAndOpen(docx_b64, query, label, fallbackName) {
       body: JSON.stringify({ docx_b64, query, label }) });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || ('save failed (' + r.status + ')'));
-    _toast((j.opened ? '✓ Saved & opened in Word:\n' : '✓ Saved (open it manually):\n') + j.path);
+    if (j.opened) {
+      _toast('✓ Saved & opened in Word:\n' + j.path);
+    } else {
+      // Server saved but can't launch Word for you (hosted/headless box, or Word
+      // missing) → hand the document to the browser so it opens HERE.
+      _blobDownload(docx_b64, fallbackName);
+      _toast('✓ Saved on the server — downloading the document to open here:\n' + fallbackName);
+    }
   } catch (e) {
     _blobDownload(docx_b64, fallbackName);
     _toast('Could not save to the reports folder (' + e.message + ').\nDownloaded via the browser instead.', false);

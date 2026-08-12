@@ -166,7 +166,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-11.dar2"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-11.dar3"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -293,9 +293,9 @@ def save_report():
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"could not save the file: {e}"}), 500
     opened = False
-    if do_open:
-        try:
-            os.startfile(path)   # Windows: opens in the registered .docx app (Word)
+    if do_open and hasattr(os, "startfile"):   # Windows only — hosted/Linux reports
+        try:                                   # opened=False and the UI downloads it.
+            os.startfile(path)   # opens in the registered .docx app (Word)
             opened = True
         except Exception:
             opened = False

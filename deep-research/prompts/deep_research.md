@@ -64,6 +64,10 @@ and how to search. Common archetypes and where to look:
 
 ### 1.2 Query craft
 
+- **Write engine queries, not questions.** Search engines rank compact keyword strings far better
+  than full sentences: 2–6 terms, led by proper nouns / product names / jargon, no question words
+  or filler ("what are the most common…" → `x200 coupling failure forum`). A site's own search box
+  wants the same. Full natural-language phrasing is for the report, never the query bar.
 - **Vary phrasing and vocabulary.** Run several angles; use the *insider* terms a practitioner
   would (proper names, technical shorthand, domain jargon), not just the layperson phrasing.
 - **Go adversarial deliberately.** For any reputation or vetting question, explicitly hunt the
