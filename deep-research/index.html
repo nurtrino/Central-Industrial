@@ -809,7 +809,7 @@ function _actAfter(owner) {
     const depths = [
       { id:'standard', label:'Standard', sub:'best outcome in ~5 min' },
       { id:'deep',     label:'Deep',     sub:'best outcome in ~10 min' },
-      { id:'odysseus', label:'Odysseus', sub:'headless engine · 4 rounds' },
+      { id:'odysseus', label:'Deep + Odysseus', sub:'headless pre-research → deep run' },
     ];
     const chips = depths.map(o => `
       <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
@@ -1027,7 +1027,7 @@ function _actAfter(owner) {
     const depths = [
       { id:'standard', label:'Standard', sub:'best outcome in ~5 min' },
       { id:'deep',     label:'Deep',     sub:'best outcome in ~10 min' },
-      { id:'odysseus', label:'Odysseus', sub:'headless engine · 4 rounds' },
+      { id:'odysseus', label:'Deep + Odysseus', sub:'headless pre-research → deep run' },
     ];
     const chips = depths.map(o => `
       <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
@@ -1618,7 +1618,7 @@ function _actAfter(owner) {
     stage2: 'Browser search engines',
     stage3: 'Credentialed sources',
     stage4: 'Gated sources (login)',
-    odysseus: 'Odysseus engine (headless)',
+    odysseus: 'Odysseus pre-research (headless)',
     synthesize: 'Extract & synthesize report',
     report: 'Assemble report',
   };

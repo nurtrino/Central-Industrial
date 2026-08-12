@@ -166,7 +166,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-11.dar1"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-11.dar2"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -1029,28 +1029,26 @@ def deep_research_start():
                 pass
     doc_context = "\n\n".join(doc_parts)
 
-    # ── "Odysseus" depth: route the run through the headless IterResearch engine at
-    # its standard setting (4 rounds) instead of the browser pipeline. Same job shape
-    # as a browser run, so the frontend's progress/results/feed views work unchanged.
+    # ── "Deep + Odysseus" depth: a chained run. Pass 1 = the headless IterResearch
+    # engine (standard, 4 rounds); its report is analyzed by the document-intake
+    # analyst and fed into Pass 2 — the normal DEEP-tier browser pipeline — as a
+    # supporting document. Same job shape/stream, stages list gains the ody row.
     if raw_depth == "odysseus":
-        q_full = query
-        if clarifications:
-            q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
-        if doc_context:
-            q_full += f"\n\nCONTEXT FROM USER DOCUMENTS:\n{doc_context[:8000]}"
         job_id = os.urandom(8).hex()
         with _JOBS_LOCK:
             _JOBS[job_id] = {
-                "stage": "odysseus", "pct": None, "message": "Starting Odysseus engine…",
+                "stage": "odysseus", "pct": None, "message": "Starting Odysseus pre-research…",
                 "done": False, "error": None, "result": None,
                 "awaiting_credentials": None, "submitted_credentials": None,
                 "events": [], "eseq": 0,
             }
         _DR_EVENTS[job_id] = threading.Event()
         _DR_SKIP[job_id] = threading.Event()
-        threading.Thread(target=_ody_depth_worker, args=(job_id, query, q_full),
+        threading.Thread(target=_ody_depth_worker,
+                         args=(job_id, query, clarifications, doc_context,
+                               channel_overrides, provider, doc_parts),
                          daemon=True).start()
-        return jsonify({"job_id": job_id, "stages": ["odysseus", "report"]}), 202
+        return jsonify({"job_id": job_id, "stages": ["odysseus"] + DR_STAGES}), 202
 
     job_id = os.urandom(8).hex()
     with _JOBS_LOCK:
@@ -1472,60 +1470,52 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
             job["done"] = True
 
 
-def _ody_depth_worker(job_id, query, q_full):
-    """Deep Research's "Odysseus" depth choice: run the headless IterResearch engine
-    at its standard setting (4 rounds) through the DR job machinery, returning a
-    DR-shaped result so the normal results view / auto-save / feed all apply."""
+def _ody_depth_worker(job_id, query, clarifications, doc_context, channel_overrides,
+                      provider, doc_parts):
+    """Deep Research's "Deep + Odysseus" depth: PASS 1 runs the headless IterResearch
+    engine at its standard setting (4 rounds); its report is then handed to the normal
+    DEEP-tier pipeline as a supporting document — so the existing document-intake
+    analyst distills it (Fable, standard effort) into search-enhancing grounding for
+    the plan + browser stages, and its full text still reaches synthesis as user_docs.
+    Odysseus failure degrades to a plain deep run, never blocks it."""
     job = _JOBS[job_id]
 
     def prog(ev):
-        msg = _ody_msg(ev)
+        msg = "Pass 1 · Odysseus — " + _ody_msg(ev)
         with _JOBS_LOCK:
             job["message"] = msg
         _push_event(job_id, "ody", msg)
 
+    ody_report = ""
     try:
         import asyncio
         from engines.odysseus.deep_research import DeepResearcher
+        q_full = query
+        if clarifications:
+            q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
         researcher = DeepResearcher(
             llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
             llm_model="claude-fable-5",
             max_rounds=4, max_time=300, progress_callback=prog)
-        report = (asyncio.run(researcher.research(q_full)) or "").strip()
-        try:
-            stats = researcher.get_stats() or {}
-        except Exception:
-            stats = {}
-        with _JOBS_LOCK:
-            job["stage"] = "report"; job["message"] = "Assembling report…"
-        _push_event(job_id, "stage", "Assembling report…")
-        try:
-            docx_b64 = base64.b64encode(_memo_to_docx_bytes(report or "", "Deep Research")).decode()
-        except Exception:
-            docx_b64 = ""
-        sources = []
-        for s in (getattr(researcher, "analyzed_urls", None) or []):
-            if isinstance(s, dict):
-                u = s.get("url") or ""
-                sources.append({"title": s.get("title") or u, "url": u, "type": "web", "chars": 0})
-            else:
-                sources.append({"title": str(s), "url": str(s), "type": "web", "chars": 0})
-        result = {"query": query, "report_md": report, "sources": sources,
-                  "source_count": len(sources) or len(getattr(researcher, "urls_fetched", []) or []),
-                  "docx_b64": docx_b64,
-                  "saved_path": _autosave_report(docx_b64, query, "Deep Research — Odysseus"),
-                  "category": "", "plan": {},
-                  "stats": {"searches": (stats.get("total_searches", 0) if isinstance(stats, dict) else 0),
-                            "pages": (stats.get("total_sources", 0) if isinstance(stats, dict) else 0),
-                            "category": "general", "stopped": "Odysseus engine complete (4 rounds)"}}
-        with _JOBS_LOCK:
-            job["result"] = result
-            job["stage"] = "report"; job["pct"] = 100; job["message"] = "Done"
-            job["done"] = True
-    except Exception:
-        with _JOBS_LOCK:
-            job["error"] = traceback.format_exc()
-            job["done"] = True
+        ody_report = (asyncio.run(researcher.research(q_full)) or "").strip()
+        _push_event(job_id, "ody",
+                    f"[synth] Odysseus pre-research complete — {len(ody_report):,} chars; "
+                    "handing off to Deep Research")
+    except Exception as e:  # noqa: BLE001 — pre-pass is an enhancer, never a blocker
+        _push_event(job_id, "ody",
+                    f"Odysseus pre-pass failed ({type(e).__name__}) — continuing with a plain deep run")
+
+    if ody_report:
+        # Feed the pre-research in EXACTLY like a dropped file: it gets its own
+        # document-intake analysis pass, and its full text reaches synthesis.
+        ody_part = ("[Odysseus pre-research findings]\n"
+                    + _truncate_words(ody_report, _DOC_WORD_CAP))
+        doc_parts = list(doc_parts or []) + [ody_part]
+        doc_context = (doc_context + "\n\n" + ody_part).strip() if doc_context else ody_part
+
+    # PASS 2 — the full browser pipeline at the DEEP tier, same job/stream/result.
+    _dr_worker(job_id, query, "deep", clarifications, doc_context, channel_overrides,
+               provider, doc_parts)
 
 
 @app.route("/api/odysseus_research", methods=["POST", "OPTIONS"])
