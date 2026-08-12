@@ -135,9 +135,6 @@ def _access_gate():
 
 
 # ── UI (served from disk on every request) ───────────────────────────────────
-# The "← Special Projects" back-link points at the hub. Locally that's the hub on
-# :5050; on Render set HUB_URL to the hub service's public URL (the bare index has
-# the __HUB_URL__ placeholder substituted at serve time).
 # Back-link target: prefer HUB_URL, else the shared HOME_URL (the apex home page).
 _HUB_URL = os.environ.get("HUB_URL", "").strip() or HOME_URL
 # Add a scheme if missing (a scheme-less href would be treated as a relative path).
@@ -162,12 +159,6 @@ def fonts(fn):
     return send_from_directory(os.path.join(_ROOT, "fonts"), fn)
 
 
-@app.route("/vvd-egg.mp3")
-def vvd_egg():
-    # little easter egg — plays when the Very Very Deep sidebar button is pressed
-    return send_from_directory(_ROOT, "Boonies Basement Tub (128kbit_AAC)-2.mp3")
-
-
 @app.route("/favicon.ico")
 def favicon():
     return ("", 204)
@@ -175,7 +166,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-11.dar1"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -249,6 +240,27 @@ def _safe_filename(name: str) -> str:
     return name[:140] or "report"
 
 
+def _autosave_report(docx_b64: str, query: str, label: str) -> str:
+    """Write a finished report .docx straight to the reports folder the moment a run
+    completes (same dated filename as /api/save_report), so the report is on disk even
+    if the Save button is never clicked. Does NOT open Word. Never raises — returns
+    the saved path, or '' on failure (the in-browser copy + Save button still work)."""
+    import time as _time
+    try:
+        raw = base64.b64decode(docx_b64 or "")
+        if not raw:
+            return ""
+        os.makedirs(_REPORTS_DIR, exist_ok=True)
+        stamp = _time.strftime("%Y-%m-%d_%H%M%S")
+        fname = _safe_filename(f"{label} — {_slug_from_query(query)} — {stamp}") + ".docx"
+        path = os.path.join(_REPORTS_DIR, fname)
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        return path
+    except Exception:
+        return ""
+
+
 @app.route("/api/save_report", methods=["POST", "OPTIONS"])
 def save_report():
     r"""Save a generated .docx to D:\______Documents\___Deep Research Reports with a
@@ -293,6 +305,49 @@ def save_report():
 # ── Async job registry (standalone — no longer shared with other tools) ──────
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
+
+
+# ── Per-job event stream (the UI's live activity feed) ───────────────────────
+# Each job dict carries "events": [[seq, kind, text], …] and "eseq": <latest seq>.
+# Workers push raw engine log lines here; the status endpoints return the slice
+# with seq > ?after=<n> so the UI can poll incrementally.
+_EVENT_CAP = 3000          # ring buffer: drop oldest beyond this
+_EVENT_TEXT_CAP = 500      # per-event text cap
+
+_EVENT_KIND_MAP = {
+    "search": "search", "open": "open", "forum": "forum",
+    "extension": "ext", "login": "login", "note": "note", "plan": "plan",
+    # High-granularity cascade: every tool call, every hit, every turn, every
+    # extraction verdict, every synthesis/meta step flows to the activity panel.
+    "act": "act", "hit": "hit", "turn": "turn", "extract": "extract", "synth": "synth",
+    "docs": "docs",   # uploaded-document intake analysis
+}
+
+
+def _event_kind(msg):
+    """Derive an event kind from a log line's leading "[xxx]" prefix."""
+    m = re.match(r"\s*\[([a-z_\-]+)\]", str(msg or ""), re.I)
+    if m:
+        return _EVENT_KIND_MAP.get(m.group(1).lower(), "log")
+    return "log"
+
+
+def _push_event(job_id, kind, text):
+    """Append one event to a job's stream. Thread-safe; silently no-ops if the
+    job is gone (finished/popped). Never raises."""
+    try:
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if job is None:
+                return
+            seq = job.get("eseq", 0) + 1
+            job["eseq"] = seq
+            evs = job.setdefault("events", [])
+            evs.append([seq, kind, str(text or "")[:_EVENT_TEXT_CAP]])
+            if len(evs) > _EVENT_CAP:
+                del evs[:len(evs) - _EVENT_CAP]
+    except Exception:
+        pass
 
 
 # ── Shared helpers carried from perf_server.py ───────────────────────────────
@@ -577,7 +632,7 @@ def _dr_clarify(query, provider="claude"):
     from engines.research.llm import make_client
     try:
         client = make_client(provider, os.environ.get("ANTHROPIC_API_KEY", "").strip())
-    except Exception:          # LM Studio down in local mode -> just skip clarification
+    except Exception:          # LM Studio down in local mode → just skip clarification
         client = None
     if client is None:
         return {"needs_clarification": False, "questions": []}
@@ -587,7 +642,8 @@ def _dr_clarify(query, provider="claude"):
              "that would most sharpen the search (scope, entity, timeframe, angle). "
              "Respond with ONLY a JSON object: "
              '{"needs_clarification": boolean, "questions": ["...", "..."]}')
-    r = client.messages.create(model="claude-sonnet-4-6", max_tokens=400,
+    from engines.research.models import get_model
+    r = client.messages.create(model=get_model("route"), max_tokens=400,
                                system=sys_p, messages=[{"role": "user", "content": query}])
     txt = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
     m = re.search(r"\{.*\}", txt, re.S)
@@ -613,7 +669,7 @@ def _dr_harvest_to_md(query, h):
         ns = "on" if plan.get("neural_search", {}).get("use") else "off"
         out.append(
             f"**Research plan** ({'planner' if plan.get('_planned') else 'default'}): "
-            f"Claude API {_w('api_search')} · open engines {_w('web_engines')} · "
+            f"baseline sweep {_w('api_search')} · open engines {_w('web_engines')} · "
             f"curated sites {_w('site_queries')} · neural (Exa) {ns}{et}. "
             f"_{plan.get('rationale', '').strip()}_\n")
     try:
@@ -647,7 +703,7 @@ def _dr_harvest_to_md(query, h):
 
     stage1 = next((it for it in h.items if it.via == "stage1"), None)
     if stage1 and stage1.text.strip():
-        out.append("\n## Stage 1 — Claude's web-search brief\n")
+        out.append("\n## Stage 1 — baseline browser brief\n")
         out.append(stage1.text.strip())
 
     if h.agent_notes:
@@ -668,7 +724,7 @@ def _dr_harvest_to_md(query, h):
                        f"{len(it.text)} chars{flag}{exa_flag}")
 
     if getattr(h, "stage1_sources", None):
-        out.append("\n## Other sources surfaced by Claude's search (not opened)\n")
+        out.append("\n## Other sources surfaced by the baseline sweep (not opened)\n")
         for s in h.stage1_sources[:25]:
             out.append(f"- [{(s.get('title') or s.get('url'))}]({s.get('url')})")
     return "\n".join(out)
@@ -695,8 +751,53 @@ def _dr_wrap_report(query, h, synth_md):
     return display_md, docx_md
 
 
+_DOC_ANALYSIS_CHARS = 40000   # per-file slice fed to the analyst (full text still reaches synthesis)
+
+
+def _analyze_docs(client, query, doc_parts, log=lambda m: None):
+    """Distill each uploaded document against the research question — one call per file
+    through the wrapped client (Fable 5 at the standard effort). Returns a compact
+    combined brief used to ground planning + searching; a file whose analysis fails
+    degrades to a raw excerpt, and the FULL raw text still reaches synthesis either way."""
+    from engines.research.models import get_model
+    briefs = []
+    sys_p = (
+        "You are the document-intake analyst of a deep web-research tool. The user attached "
+        "a file as context for their research question. Distill THIS file against the "
+        "question into a terse brief:\n"
+        "- KEY FACTS / CLAIMS in the file that bear on the question (tight bullets; keep "
+        "specifics — names, numbers, dates; attribute claims as the file does).\n"
+        "- ENTITIES & TERMS worth searching (including any insider vocabulary the file uses).\n"
+        "- OPEN QUESTIONS the file raises or leaves unanswered.\n"
+        "- SEARCH LEADS (2-4) the file suggests pursuing on the live web.\n"
+        "Signal only, no filler. If the file has nothing relevant to the question, say so "
+        "in one line.")
+    for part in doc_parts or []:
+        head, _, body = part.partition("\n")
+        name = head.strip().strip("[]") or "document"
+        if not body.strip():
+            continue
+        log(f"[docs] analyzing {name} ({len(body):,} chars)…")
+        try:
+            r = client.messages.create(
+                model=get_model("route"), max_tokens=1500, system=sys_p,
+                messages=[{"role": "user", "content":
+                           f"RESEARCH QUESTION:\n{query}\n\nFILE: {name}\n\n"
+                           f"FILE CONTENTS:\n{body[:_DOC_ANALYSIS_CHARS]}"}])
+            brief = "".join(getattr(b, "text", "") for b in r.content
+                            if getattr(b, "type", "") == "text").strip()
+            if brief:
+                briefs.append(f"### {name}\n{brief}")
+                log(f"[docs] ✓ {name} distilled → {len(brief):,} chars of brief")
+                continue
+        except Exception as e:  # noqa: BLE001
+            log(f"[docs] ✗ analysis failed for {name} ({type(e).__name__}) — using raw excerpt")
+        briefs.append(f"### {name} (raw excerpt — analysis unavailable)\n{body[:2000]}")
+    return "\n\n".join(briefs)
+
+
 def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overrides=None,
-               provider="claude"):
+               provider="claude", doc_parts=None):
     job = _JOBS[job_id]
     ev = _DR_EVENTS[job_id]
     skip_ev = _DR_SKIP[job_id]
@@ -706,6 +807,9 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             job["stage"] = stage
             job["pct"] = pct
             job["message"] = message
+        _push_event(job_id, "stage", message)
+
+    log_fn = lambda m: _push_event(job_id, _event_kind(m), m)  # noqa: E731
 
     def request_credentials(candidates):
         ev.clear()
@@ -722,11 +826,6 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
 
     try:
         from engines.research.agent import run_search
-        clar = clarifications or ""
-        if doc_context:
-            clar = (clar + "\n\nSUPPORTING DOCUMENT EXCERPTS (user-provided):\n"
-                    + doc_context).strip()
-        import anthropic
         from engines.research.browser import DRTBrowser
         from engines.research.agent import _load_governance, run_gap_round
         from engines.research.synthesize import (synthesize, classify_category,
@@ -742,44 +841,74 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     job["error"] = str(e); job["done"] = True
                 return
         else:
-            client = anthropic.Anthropic(api_key=api_key) if api_key else None
+            client = make_client("claude", api_key)     # Fable 5 + standard effort enforced
+
+        # ── Uploaded documents: extract → parse (done at POST) → ANALYZE here.
+        # Each file is distilled against the question (facts, entities, open questions,
+        # search leads); the brief grounds the planner + browser agent. The FULL raw
+        # text still goes to synthesis as trusted user_docs. Runs before the research
+        # clock starts, so analysis never eats the gathering window.
+        clar = clarifications or ""
+        if doc_context:
+            brief = ""
+            if client and doc_parts:
+                prog("stage1", None, f"Analyzing {len(doc_parts)} uploaded document(s)…")
+                brief = _analyze_docs(client, query, doc_parts, log=log_fn)
+            if brief:
+                clar = (clar + "\n\nSUPPORTING DOCUMENT ANALYSIS (distilled from the user's "
+                        "uploaded files; their full text is applied again at synthesis):\n"
+                        + brief).strip()
+            else:
+                clar = (clar + "\n\nSUPPORTING DOCUMENT EXCERPTS (user-provided):\n"
+                        + doc_context).strip()
 
         prog("stage1", None, "Starting…")
-        br = DRTBrowser(log=lambda m: None).start()
+        br = DRTBrowser(log=log_fn).start()
         report_md_synth = ""
         synth_error = None
         try:
+            # TIME-boxed run: the tier defines the whole run's window; gathering gets
+            # the window minus the synthesis reserve, deepening only runs on leftover time.
+            import time as _time
+            from engines.research.agent import DEPTH_BUDGETS as _DB, normalize_depth as _nd
+            depth = _nd(depth)
+            _b = _DB[depth]
+            run_deadline = _time.time() + _b["seconds"]
             h = run_search(query, depth=depth, clarifications=clar, browser=br,
-                           progress=prog, log=lambda m: None,
+                           progress=prog, log=log_fn,
                            request_credentials=request_credentials, skip_event=skip_ev,
-                           channel_overrides=channel_overrides, client=client, provider=provider)
+                           channel_overrides=channel_overrides, client=client, provider=provider,
+                           deadline=run_deadline - _b["reserve"])
             if client and (h.items or doc_context):
                 try:
                     prog("synthesize", None, "Synthesizing the report…")
                     category = getattr(h, "category", "") or classify_category(client, query)
                     cache = {}
                     synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
-                                       category=category, user_docs=doc_context)
+                                       category=category, user_docs=doc_context, log=log_fn)
                     report_md_synth = synth.get("report_md", "")
                     h.category = category
                     extra = DEEPEN_ROUNDS.get(depth, 1)
                     for rnd in range(1, extra + 1):
                         if skip_ev.is_set():
                             skip_ev.clear(); break
-                        stop, reason = stop_judge(client, query, report_md_synth)
+                        if _time.time() > run_deadline - 75:
+                            log_fn("[synth] time window spent — skipping further deepening")
+                            break
+                        stop, reason = stop_judge(client, query, report_md_synth, log=log_fn)
                         if stop:
                             h.stopped_reason = reason or "report judged comprehensive"
                             break
-                        gaps = gap_queries(client, query, report_md_synth)
+                        gaps = gap_queries(client, query, report_md_synth, log=log_fn)
                         if not gaps:
                             break
                         prog("synthesize", None, f"Deepening (round {rnd}): {gaps[0][:60]}")
                         added = run_gap_round(client, br, h, gaps, governance=gov,
-                                              progress=prog, log=lambda m: None, skip_event=skip_ev)
+                                              progress=prog, log=log_fn, skip_event=skip_ev)
                         if not added:
                             break
                         synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
-                                           category=category, user_docs=doc_context)
+                                           category=category, user_docs=doc_context, log=log_fn)
                         report_md_synth = synth.get("report_md", "")
                 except Exception as e:  # noqa: BLE001 — preserve the harvest
                     synth_error = e
@@ -804,6 +933,19 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                 + (report_md_synth or "")
             )
 
+        # "How to go deeper" assessment — appended to the report (display + docx)
+        # and surfaced separately for the UI's framed panel. Best-effort.
+        go_deeper = ""
+        if client and report_md_synth and synth_error is None:
+            try:
+                from engines.research.synthesize import deeper_assessment
+                go_deeper = (deeper_assessment(client, query, report_md_synth, h,
+                                               log=log_fn) or "").strip()
+            except Exception:
+                go_deeper = ""
+            if go_deeper:
+                report_md_synth = report_md_synth + "\n\n" + go_deeper
+
         prog("report", None, "Assembling report…")
         report_md, docx_md = _dr_wrap_report(query, h, report_md_synth)
         try:
@@ -814,6 +956,9 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     "chars": len(it.text)} for it in h.items if it.via != "stage1"]
         result = {"query": query, "report_md": report_md, "sources": sources,
                   "source_count": len(sources), "docx_b64": docx_b64,
+                  "saved_path": _autosave_report(docx_b64, query, "Deep Research"),
+                  "go_deeper_md": go_deeper,
+                  "discovered_forums": getattr(h, "discovered_forums", []) or [],
                   "category": getattr(h, "category", ""),
                   "plan": getattr(h, "plan", {}),
                   "stats": {"searches": h.searches_used, "pages": h.pages_used,
@@ -836,7 +981,9 @@ def deep_research_start():
     query = (request.form.get("query") or "").strip()
     if not query:
         return jsonify({"error": "query is required"}), 400
-    depth = (request.form.get("depth") or "standard").strip()
+    from engines.research.agent import normalize_depth
+    raw_depth = (request.form.get("depth") or "standard").strip().lower()
+    depth = normalize_depth(raw_depth)
     clarifications = (request.form.get("clarifications") or "").strip()
     provider = (request.form.get("provider") or "claude").strip().lower()
 
@@ -882,18 +1029,42 @@ def deep_research_start():
                 pass
     doc_context = "\n\n".join(doc_parts)
 
+    # ── "Odysseus" depth: route the run through the headless IterResearch engine at
+    # its standard setting (4 rounds) instead of the browser pipeline. Same job shape
+    # as a browser run, so the frontend's progress/results/feed views work unchanged.
+    if raw_depth == "odysseus":
+        q_full = query
+        if clarifications:
+            q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
+        if doc_context:
+            q_full += f"\n\nCONTEXT FROM USER DOCUMENTS:\n{doc_context[:8000]}"
+        job_id = os.urandom(8).hex()
+        with _JOBS_LOCK:
+            _JOBS[job_id] = {
+                "stage": "odysseus", "pct": None, "message": "Starting Odysseus engine…",
+                "done": False, "error": None, "result": None,
+                "awaiting_credentials": None, "submitted_credentials": None,
+                "events": [], "eseq": 0,
+            }
+        _DR_EVENTS[job_id] = threading.Event()
+        _DR_SKIP[job_id] = threading.Event()
+        threading.Thread(target=_ody_depth_worker, args=(job_id, query, q_full),
+                         daemon=True).start()
+        return jsonify({"job_id": job_id, "stages": ["odysseus", "report"]}), 202
+
     job_id = os.urandom(8).hex()
     with _JOBS_LOCK:
         _JOBS[job_id] = {
             "stage": "stage1", "pct": None, "message": "Starting…",
             "done": False, "error": None, "result": None,
             "awaiting_credentials": None, "submitted_credentials": None,
+            "events": [], "eseq": 0,
         }
     _DR_EVENTS[job_id] = threading.Event()
     _DR_SKIP[job_id] = threading.Event()
     threading.Thread(target=_dr_worker,
                      args=(job_id, query, depth, clarifications, doc_context, channel_overrides,
-                           provider),
+                           provider, doc_parts),
                      daemon=True).start()
     return jsonify({"job_id": job_id, "stages": DR_STAGES}), 202
 
@@ -901,6 +1072,10 @@ def deep_research_start():
 @app.route("/api/deep_research/status", methods=["GET"])
 def deep_research_status():
     job_id = request.args.get("job", "")
+    try:
+        after = int(request.args.get("after", 0) or 0)
+    except (TypeError, ValueError):
+        after = 0
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
         if not job:
@@ -909,6 +1084,8 @@ def deep_research_status():
             "stage": job["stage"], "pct": job["pct"], "message": job["message"],
             "done": job["done"], "error": job["error"], "stages": DR_STAGES,
             "awaiting_credentials": job.get("awaiting_credentials"),
+            "events": [e for e in (job.get("events") or []) if e[0] > after],
+            "eseq": job.get("eseq", 0),
         }
         if job["done"] and not job["error"]:
             payload["result"] = job["result"]
@@ -1248,12 +1425,14 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
     job = _JOBS[job_id]
 
     def prog(ev):
+        msg = _ody_msg(ev)
         with _JOBS_LOCK:
             job["phase"] = ev.get("phase", "")
-            job["message"] = _ody_msg(ev)
+            job["message"] = msg
             job["stats"] = {"round": ev.get("round"),
                             "sources": ev.get("total_sources"),
                             "findings": ev.get("total_findings")}
+        _push_event(job_id, "ody", msg)
 
     try:
         import asyncio
@@ -1262,7 +1441,7 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
             job["message"] = "Starting Odysseus engine…"
         researcher = DeepResearcher(
             llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
-            llm_model="claude-sonnet-4-6",
+            llm_model="claude-fable-5",
             max_rounds=max_rounds,
             max_time=max_time,
             progress_callback=prog,
@@ -1279,6 +1458,7 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
             "query": query,
             "report_md": report or "",
             "docx_b64": docx_b64,
+            "saved_path": _autosave_report(docx_b64, query, "Odysseus"),
             "stats": stats,
             "sources": researcher.analyzed_urls,
             "source_count": len(researcher.urls_fetched),
@@ -1286,6 +1466,62 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
         with _JOBS_LOCK:
             job["result"] = result
             job["phase"] = "done"; job["message"] = "Done"; job["done"] = True
+    except Exception:
+        with _JOBS_LOCK:
+            job["error"] = traceback.format_exc()
+            job["done"] = True
+
+
+def _ody_depth_worker(job_id, query, q_full):
+    """Deep Research's "Odysseus" depth choice: run the headless IterResearch engine
+    at its standard setting (4 rounds) through the DR job machinery, returning a
+    DR-shaped result so the normal results view / auto-save / feed all apply."""
+    job = _JOBS[job_id]
+
+    def prog(ev):
+        msg = _ody_msg(ev)
+        with _JOBS_LOCK:
+            job["message"] = msg
+        _push_event(job_id, "ody", msg)
+
+    try:
+        import asyncio
+        from engines.odysseus.deep_research import DeepResearcher
+        researcher = DeepResearcher(
+            llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
+            llm_model="claude-fable-5",
+            max_rounds=4, max_time=300, progress_callback=prog)
+        report = (asyncio.run(researcher.research(q_full)) or "").strip()
+        try:
+            stats = researcher.get_stats() or {}
+        except Exception:
+            stats = {}
+        with _JOBS_LOCK:
+            job["stage"] = "report"; job["message"] = "Assembling report…"
+        _push_event(job_id, "stage", "Assembling report…")
+        try:
+            docx_b64 = base64.b64encode(_memo_to_docx_bytes(report or "", "Deep Research")).decode()
+        except Exception:
+            docx_b64 = ""
+        sources = []
+        for s in (getattr(researcher, "analyzed_urls", None) or []):
+            if isinstance(s, dict):
+                u = s.get("url") or ""
+                sources.append({"title": s.get("title") or u, "url": u, "type": "web", "chars": 0})
+            else:
+                sources.append({"title": str(s), "url": str(s), "type": "web", "chars": 0})
+        result = {"query": query, "report_md": report, "sources": sources,
+                  "source_count": len(sources) or len(getattr(researcher, "urls_fetched", []) or []),
+                  "docx_b64": docx_b64,
+                  "saved_path": _autosave_report(docx_b64, query, "Deep Research — Odysseus"),
+                  "category": "", "plan": {},
+                  "stats": {"searches": (stats.get("total_searches", 0) if isinstance(stats, dict) else 0),
+                            "pages": (stats.get("total_sources", 0) if isinstance(stats, dict) else 0),
+                            "category": "general", "stopped": "Odysseus engine complete (4 rounds)"}}
+        with _JOBS_LOCK:
+            job["result"] = result
+            job["stage"] = "report"; job["pct"] = 100; job["message"] = "Done"
+            job["done"] = True
     except Exception:
         with _JOBS_LOCK:
             job["error"] = traceback.format_exc()
@@ -1316,6 +1552,7 @@ def odysseus_research_start():
         _JOBS[job_id] = {
             "phase": "planning", "message": "Starting…",
             "stats": {}, "done": False, "error": None, "result": None,
+            "events": [], "eseq": 0,
         }
     threading.Thread(target=_ody_worker,
                      args=(job_id, query, max_rounds, max_time, category),
@@ -1326,6 +1563,10 @@ def odysseus_research_start():
 @app.route("/api/odysseus_research/status", methods=["GET"])
 def odysseus_research_status():
     job_id = request.args.get("job", "")
+    try:
+        after = int(request.args.get("after", 0) or 0)
+    except (TypeError, ValueError):
+        after = 0
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
         if not job:
@@ -1333,275 +1574,13 @@ def odysseus_research_status():
         payload = {
             "phase": job.get("phase"), "message": job.get("message"),
             "stats": job.get("stats", {}), "done": job["done"], "error": job["error"],
+            "events": [e for e in (job.get("events") or []) if e[0] > after],
+            "eseq": job.get("eseq", 0),
         }
         if job["done"] and not job["error"]:
             payload["result"] = job["result"]
         if job["done"]:
             _JOBS.pop(job_id, None)
-    return jsonify(payload)
-
-
-# ══════════════════════════════════════════════════════════════
-#  VERY VERY DEEP (sub-tool) — chain Odysseus → Deep Research
-#  Pass 1: a headless Odysseus pre-research pass on the question.
-#  Pass 2: its findings (+ the original query + any uploaded docs) are injected as
-#  grounding context into the full Deep Research pipeline, which verifies/deepens and
-#  writes the final report per the Deep Research governance. Runs unattended: the DR
-#  pass auto-skips NEW gated-login sources (vault Stage-3 logins still apply).
-# ══════════════════════════════════════════════════════════════
-
-def _dr_pipeline(query, depth, clarifications, doc_context, channel_overrides,
-                 prog, request_credentials, skip_ev):
-    """Run the Deep Research gather→synthesize pipeline and RETURN the result dict.
-    Mirrors `_dr_worker`'s pipeline body but without the job-state plumbing, so it can be
-    reused by the Very Very Deep chain. Raises on hard failure (the caller wraps)."""
-    from engines.research.agent import run_search
-    clar = clarifications or ""
-    if doc_context:
-        clar = (clar + "\n\nSUPPORTING DOCUMENT EXCERPTS (user-provided):\n"
-                + doc_context).strip()
-    import anthropic
-    from engines.research.browser import DRTBrowser
-    from engines.research.agent import _load_governance, run_gap_round
-    from engines.research.synthesize import (synthesize, classify_category,
-                                             stop_judge, gap_queries, DEEPEN_ROUNDS)
-    gov = _load_governance()
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    client = anthropic.Anthropic(api_key=api_key) if api_key else None
-
-    prog("stage1", None, "Starting…")
-    br = DRTBrowser(log=lambda m: None).start()
-    report_md_synth = ""
-    synth_error = None
-    try:
-        h = run_search(query, depth=depth, clarifications=clar, browser=br,
-                       progress=prog, log=lambda m: None,
-                       request_credentials=request_credentials, skip_event=skip_ev,
-                       channel_overrides=channel_overrides)
-        if client and (h.items or doc_context):
-            try:
-                prog("synthesize", None, "Synthesizing the report…")
-                category = getattr(h, "category", "") or classify_category(client, query)
-                cache = {}
-                synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
-                                   category=category, user_docs=doc_context)
-                report_md_synth = synth.get("report_md", "")
-                h.category = category
-                extra = DEEPEN_ROUNDS.get(depth, 1)
-                for rnd in range(1, extra + 1):
-                    if skip_ev.is_set():
-                        skip_ev.clear(); break
-                    stop, reason = stop_judge(client, query, report_md_synth)
-                    if stop:
-                        h.stopped_reason = reason or "report judged comprehensive"
-                        break
-                    gaps = gap_queries(client, query, report_md_synth)
-                    if not gaps:
-                        break
-                    prog("synthesize", None, f"Deepening (round {rnd}): {gaps[0][:60]}")
-                    added = run_gap_round(client, br, h, gaps, governance=gov,
-                                          progress=prog, log=lambda m: None, skip_event=skip_ev)
-                    if not added:
-                        break
-                    synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
-                                       category=category, user_docs=doc_context)
-                    report_md_synth = synth.get("report_md", "")
-            except Exception as e:  # noqa: BLE001 — preserve the harvest
-                synth_error = e
-                prog("synthesize", None, "Synthesis interrupted — assembling harvested findings…")
-    finally:
-        try:
-            br.close()
-        except Exception:
-            pass
-
-    if synth_error is not None:
-        detail = str(synth_error).strip()
-        if "credit balance is too low" in detail.lower():
-            hint = ("the Anthropic API account is **out of credits** — top up at "
-                    "console.anthropic.com → Plans & Billing, then re-run")
-        else:
-            hint = "re-run once the API is reachable"
-        report_md_synth = (
-            f"> ⚠️ **Report synthesis was interrupted** ({type(synth_error).__name__}); "
-            f"{hint}. The web harvest completed and the gathered sources are preserved below.\n>\n"
-            f"> _Detail: {detail[:300]}_\n\n"
-            + (report_md_synth or "")
-        )
-
-    prog("report", None, "Assembling report…")
-    report_md, docx_md = _dr_wrap_report(query, h, report_md_synth)
-    try:
-        docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()
-    except Exception:
-        docx_b64 = ""
-    sources = [{"title": it.title, "url": it.url, "type": it.source_type,
-                "chars": len(it.text)} for it in h.items if it.via != "stage1"]
-    return {"query": query, "report_md": report_md, "docx_md": docx_md, "sources": sources,
-            "source_count": len(sources), "docx_b64": docx_b64,
-            "category": getattr(h, "category", ""),
-            "plan": getattr(h, "plan", {}),
-            "stats": {"searches": h.searches_used, "pages": h.pages_used,
-                      "category": getattr(h, "category", "") or "general",
-                      "stopped": h.stopped_reason}}
-
-
-def _vvd_worker(job_id, query, depth, channel_overrides, rounds, doc_context):
-    job = _JOBS[job_id]
-    skip_ev = _DR_SKIP[job_id]
-
-    def ody_prog(ev):
-        with _JOBS_LOCK:
-            job["group"] = "odysseus"
-            job["phase"] = ev.get("phase", "")
-            job["message"] = "Pass 1 · Odysseus — " + _ody_msg(ev)
-            job["stats"] = {"round": ev.get("round"),
-                            "sources": ev.get("total_sources"),
-                            "findings": ev.get("total_findings")}
-
-    def dr_prog(stage, pct, message):
-        with _JOBS_LOCK:
-            job["group"] = "deep_research"
-            job["stage"] = stage
-            job["pct"] = pct
-            job["message"] = message
-
-    # Unattended chain: auto-skip the interactive Stage-4 login prompt (vault Stage-3
-    # logins still apply). Use plain Deep Research when you need to log in mid-run.
-    def auto_skip_credentials(candidates):
-        if candidates:
-            with _JOBS_LOCK:
-                job["message"] = (f"Skipping {len(candidates)} gated-login source(s) "
-                                  f"(Very Very Deep runs unattended)…")
-        return {}
-
-    try:
-        # ── Pass 1 — Odysseus pre-research (headless) ──
-        import asyncio
-        from engines.odysseus.deep_research import DeepResearcher
-        with _JOBS_LOCK:
-            job["group"] = "odysseus"; job["message"] = "Pass 1 · Odysseus — starting…"
-        researcher = DeepResearcher(
-            llm_endpoint="https://api.anthropic.com/v1/messages",
-            llm_model="claude-sonnet-4-6",
-            max_rounds=rounds, max_time=300, progress_callback=ody_prog)
-        ody_report = (asyncio.run(researcher.research(query)) or "").strip()
-        ody_stats = researcher.get_stats()
-
-        # ── Pass 2 — Deep Research, grounded by the Odysseus findings ──
-        with _JOBS_LOCK:
-            job["group"] = "deep_research"; job["stage"] = "stage1"
-            job["message"] = "Handing off to Deep Research…"
-        ody_block = (
-            "[PRE-RESEARCH FINDINGS — from a headless Odysseus/IterResearch pass on the SAME "
-            "question. Treat this as a strong starting brief to verify, deepen, and extend with "
-            "the browser — not as the final answer; confirm its claims against primary sources.]\n\n"
-            + _truncate_words(ody_report, _DOC_WORD_CAP))
-        combined_doc = (ody_block + "\n\n" + doc_context).strip() if doc_context else ody_block
-
-        result = _dr_pipeline(query, depth, "", combined_doc, channel_overrides,
-                              dr_prog, auto_skip_credentials, skip_ev)
-        result.pop("docx_md", None)
-
-        # TWO separate deliverables: (1) the combined/edited Deep Research report (already in
-        # `result` — report_md + docx_b64), and (2) the Odysseus pre-research on its OWN, as a
-        # standalone document (markdown + its own .docx).
-        result["odysseus_stats"] = ody_stats
-        if ody_report:
-            result["odysseus_report_md"] = ody_report
-            try:
-                result["odysseus_docx_b64"] = base64.b64encode(
-                    _memo_to_docx_bytes(ody_report, "Odysseus Research")).decode()
-            except Exception:
-                result["odysseus_docx_b64"] = ""
-
-        with _JOBS_LOCK:
-            job["result"] = result
-            job["group"] = "deep_research"; job["stage"] = "report"; job["pct"] = 100
-            job["message"] = "Done"; job["done"] = True
-    except Exception:
-        with _JOBS_LOCK:
-            job["error"] = traceback.format_exc()
-            job["done"] = True
-
-
-@app.route("/api/very_very_deep", methods=["POST", "OPTIONS"])
-def very_very_deep_start():
-    if request.method == "OPTIONS":
-        return "", 204
-    query = (request.form.get("query") or "").strip()
-    if not query:
-        return jsonify({"error": "query is required"}), 400
-    depth = (request.form.get("depth") or "standard").strip()
-    try:
-        rounds = int(request.form.get("max_rounds") or 4)
-    except (ValueError, TypeError):
-        rounds = 4
-    rounds = min(12, max(1, rounds))
-
-    channel_overrides = {}
-    try:
-        raw = json.loads(request.form.get("channels") or "{}")
-        if isinstance(raw, dict):
-            channel_overrides = {k: bool(raw[k]) for k in
-                                 ("api_search", "web_engines", "site_queries", "neural_search") if k in raw}
-    except Exception:
-        channel_overrides = {}
-
-    doc_parts = []
-    for f in request.files.getlist("files"):
-        if not f or not f.filename:
-            continue
-        ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "tmp"
-        tmp = tempfile.NamedTemporaryFile(suffix="." + ext, delete=False)
-        try:
-            f.save(tmp.name); tmp.close()
-            txt = _extract_file_text(tmp.name, f.filename)
-            if txt:
-                doc_parts.append(f"[{f.filename}]\n{_truncate_words(txt, _DOC_WORD_CAP)}")
-        except Exception as e:  # noqa: BLE001
-            doc_parts.append(f"[{f.filename}] (could not read: {e})")
-        finally:
-            try:
-                os.unlink(tmp.name)
-            except Exception:
-                pass
-    doc_context = "\n\n".join(doc_parts)
-
-    job_id = os.urandom(8).hex()
-    with _JOBS_LOCK:
-        _JOBS[job_id] = {
-            "group": "odysseus", "phase": "planning", "stage": "stage1", "pct": None,
-            "message": "Starting…", "stats": {}, "done": False, "error": None, "result": None,
-            "awaiting_credentials": None, "submitted_credentials": None,
-        }
-    _DR_EVENTS[job_id] = threading.Event()
-    _DR_SKIP[job_id] = threading.Event()
-    threading.Thread(target=_vvd_worker,
-                     args=(job_id, query, depth, channel_overrides, rounds, doc_context),
-                     daemon=True).start()
-    return jsonify({"job_id": job_id, "stages": DR_STAGES}), 202
-
-
-@app.route("/api/very_very_deep/status", methods=["GET"])
-def very_very_deep_status():
-    job_id = request.args.get("job", "")
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if not job:
-            return jsonify({"error": "unknown job"}), 404
-        payload = {
-            "group": job.get("group"), "phase": job.get("phase"),
-            "stage": job.get("stage"), "pct": job.get("pct"), "message": job.get("message"),
-            "stats": job.get("stats", {}), "stages": DR_STAGES,
-            "done": job["done"], "error": job["error"],
-        }
-        if job["done"] and not job["error"]:
-            payload["result"] = job["result"]
-        if job["done"]:
-            _JOBS.pop(job_id, None)
-            _DR_EVENTS.pop(job_id, None)
-            _DR_SKIP.pop(job_id, None)
     return jsonify(payload)
 
 

@@ -23,6 +23,8 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
     && python -m playwright install --with-deps chromium
+# Pre-bake the rerank embedding model (~130 MB) so cold starts skip the download.
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" || true
 
 COPY . .
 

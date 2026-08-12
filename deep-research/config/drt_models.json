@@ -1,10 +1,10 @@
 {
-  "_comment": "Per-role model map for the Deep Research Tool. Edit a value to override the default, then restart the server (in-app 'Restart Server' or POST /api/restart) to apply. Roles: extract = per-page extraction + category classify (highest volume); search = browser agent loop + Stage-1 web search; route = relevance filters, stop-judge, gap-queries; plan = the upfront research planner; synthesize = the cited report (the deliverable). Valid ids include claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-8.",
+  "_comment": "Per-role model map for the Deep Research Tool. Edit a value to override the default, then restart the server (in-app 'Restart Server' or POST /api/restart) to apply. Roles: extract = per-page extraction + category classify; search = browser agent loop + Stage-1 baseline sweep; route = relevance filters, stop-judge, gap-queries; plan = the upfront research planner; synthesize = the cited report (the deliverable). Per user directive all roles run claude-fable-5 at high effort (effort is set in engines/research/llm.py, env override DRT_EFFORT).",
   "models": {
-    "extract": "claude-haiku-4-5-20251001",
-    "search": "claude-sonnet-4-6",
-    "route": "claude-sonnet-4-6",
-    "plan": "claude-opus-4-8",
-    "synthesize": "claude-opus-4-8"
+    "extract": "claude-fable-5",
+    "search": "claude-fable-5",
+    "route": "claude-fable-5",
+    "plan": "claude-fable-5",
+    "synthesize": "claude-fable-5"
   }
 }

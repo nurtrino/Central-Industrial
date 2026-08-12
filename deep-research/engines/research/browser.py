@@ -122,10 +122,17 @@ class PageContent:
 class DRTBrowser:
     """Owns one persistent, visible Chrome context and the tabs inside it."""
 
-    def __init__(self, profile_dir: str = _PROFILE_DIR, headed: bool = None,
-                 slow_mo_ms: int = 250, log=None, login_handler=None):
+    def __init__(self, profile_dir: str = _PROFILE_DIR, headed: Optional[bool] = None,
+                 slow_mo_ms: Optional[int] = None, log=None, login_handler=None):
         self.profile_dir = profile_dir
         self.headed = _HEADED_DEFAULT if headed is None else headed
+        # Pacing is env-tunable (DRT_SLOWMO, ms). Default 80 — deep runs open 100-250
+        # pages and must stay watchable without taking half a day.
+        if slow_mo_ms is None:
+            try:
+                slow_mo_ms = int(os.environ.get("DRT_SLOWMO", "") or 80)
+            except ValueError:
+                slow_mo_ms = 80
         self.slow_mo_ms = slow_mo_ms
         self._log = log or (lambda m: None)
         # login_handler(domain:str, page) -> bool ; resolves a login/paywall wall
@@ -235,6 +242,62 @@ class DRTBrowser:
                     limit: int = 10) -> list[SearchResult]:
         """Search WITHIN a domain via the engine's site: operator."""
         return self.search(engine, f"site:{domain} {query}", limit=limit)
+
+    def site_native_search(self, search_url: str, query: str,
+                           limit: int = 10) -> list[SearchResult]:
+        """Search a site with ITS OWN search function (search_url template with {q}).
+
+        Runs inside the logged-in persistent profile, so a gated forum's native search
+        reaches content no external engine ever indexed. Extraction is generic — result
+        anchors with substantive text, junk/nav filtered. Any failure → [].
+        """
+        from urllib.parse import quote_plus
+        page = self.new_tab()
+        out: list[SearchResult] = []
+        try:
+            url = search_url.replace("{q}", quote_plus(query))
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            self._human_pause()
+            try:
+                page.wait_for_load_state("networkidle", timeout=6000)
+            except PWTimeout:
+                pass
+            anchors = page.evaluate(
+                """() => {
+                    const scope = document.querySelector('article')
+                               || document.querySelector('main')
+                               || document.body;
+                    if (!scope) return [];
+                    return Array.from(scope.querySelectorAll('a[href^=http]'))
+                        .slice(0, 400)
+                        .map(a => ({text:(a.innerText||'').trim().slice(0,140), url:a.href}));
+                }"""
+            ) or []
+            base = url.split("#")[0]
+            seen = set()
+            for a in anchors:
+                href = (a.get("url") or "").strip()
+                text = (a.get("text") or "").strip()
+                if len(text) < 15 or not href.startswith("http"):
+                    continue        # nav chrome / icon links — not results
+                if _JUNK_HOST.search(href):
+                    continue
+                key = href.split("#")[0]        # collapse same-page fragments
+                if not key or key == base or key in seen:
+                    continue
+                seen.add(key)
+                out.append(SearchResult(title=text, url=key, engine="native"))
+                if len(out) >= limit:
+                    break
+            self._log(f"[search] native {url[:80]} -> {len(out)} results")
+        except Exception as e:  # noqa: BLE001 - native search is best-effort by design
+            self._log(f"[search] native search ERROR ({type(e).__name__}: {e}) -> 0 results")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        return out
 
     # ── proactive login ───────────────────────────────────────
     def ensure_logged_in(self, domain: str, creds: dict) -> tuple[bool, str]:
@@ -391,7 +454,7 @@ class DRTBrowser:
                 continue
 
     def _human_pause(self):
-        time.sleep(0.4 + (self.slow_mo_ms / 1000.0))
+        time.sleep(0.15 + (self.slow_mo_ms / 1000.0))
 
 
 # Manual smoke test:  python -m engines.research.browser "your query"

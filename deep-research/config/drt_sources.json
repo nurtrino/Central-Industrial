@@ -10,14 +10,14 @@
     {
       "description": "tech",
       "domain": "news.ycombinator.com",
-      "enabled": true,
+      "enabled": false,
       "name": "hacker news",
       "type": "forum"
     },
     {
       "description": "tech",
       "domain": "avforums.com",
-      "enabled": true,
+      "enabled": false,
       "name": "avforum",
       "type": "forum"
     },
@@ -45,14 +45,14 @@
     {
       "description": "tech",
       "domain": "linustechtips.com",
-      "enabled": true,
+      "enabled": false,
       "name": "linus tech tips",
       "type": "forum"
     },
     {
       "description": "tech",
       "domain": "wilderssecurity.com",
-      "enabled": true,
+      "enabled": false,
       "name": "wilders security",
       "type": "forum"
     },

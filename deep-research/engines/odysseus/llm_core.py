@@ -3,19 +3,24 @@ LLM seam for the vendored Odysseus engine → routed to our Anthropic key.
 
 Odysseus's real llm_core targets an OpenAI-compatible / Anthropic endpoint with a
 huge provider-detection layer. The engine only needs `llm_call_async(...) -> str`,
-so this adapter implements exactly that against the Anthropic SDK, using
-claude-sonnet-4-6 so an Odysseus-vs-DRT comparison isolates methodology, not model.
+so this adapter implements exactly that against the Anthropic SDK, on
+claude-fable-5 at high effort (per user directive 2026-08-11 — every Claude call
+in this tool runs Fable 5 High). Fable 5 rejects `temperature` and any explicit
+`thinking` config, so neither is ever sent; thinking tokens count against
+max_tokens, hence the raised floor.
 """
 
 import os
 from typing import Dict, List, Optional
 
+_EFFORT = (os.environ.get("DRT_EFFORT") or "medium").strip().lower()
+
 
 async def llm_call_async(
     url: Optional[str] = None,
-    model: str = "claude-sonnet-4-6",
+    model: str = "claude-fable-5",
     messages: Optional[List[Dict]] = None,
-    temperature: float = 0.3,
+    temperature: float = 0.3,   # accepted for engine compatibility; NOT sent (Fable 5 rejects it)
     max_tokens: int = 4096,
     headers: Optional[Dict] = None,
     timeout: int = 60,
@@ -34,16 +39,15 @@ async def llm_call_async(
     if conv[0]["role"] != "user":
         conv = [{"role": "user", "content": "Continue."}] + conv
 
-    mdl = model if str(model or "").startswith("claude") else "claude-sonnet-4-6"
+    mdl = model if str(model or "").startswith("claude") else "claude-fable-5"
     kw = dict(
         model=mdl,
-        max_tokens=max(16, min(int(max_tokens or 4096), 8192)),
+        max_tokens=max(4096, min(int(max_tokens or 4096), 8192)),
         messages=conv,
+        extra_body={"output_config": {"effort": _EFFORT}},
     )
     if sys_parts:
         kw["system"] = "\n\n".join(sys_parts)
-    if temperature is not None:                 # sonnet-4-6 accepts temperature
-        kw["temperature"] = max(0.0, min(1.0, float(temperature)))
 
     # Fresh client per call — each research job runs its own asyncio loop, and an
     # AsyncAnthropic/httpx client is bound to the loop it was created in.

@@ -6,15 +6,38 @@
 
 ---
 
+## Charter — DEEP ACTUAL RESEARCH
+
+This tool exists for one thing: the user gives a **reasonably succinct topic or question** — not an
+open-ended boil-the-ocean think piece — and the tool goes out on the live web and **crawls, and
+assimilates, and crawls some more**, then **crystallizes the findings into the most directly
+responsive, actionable output possible**. Four precepts govern everything:
+
+1. **Directly responsive beats comprehensive.** The target is the user's *specific* question.
+   Depth on the asked question outranks breadth around it.
+2. **The best material is buried.** High-value answers often live in active discussion
+   communities that engine searches never surface — including behind credential walls the tool
+   can log through. Prefer digging where engines can't see: follow links off good pages, search
+   inside communities with their own search, and actively *discover* new communities relevant to
+   the question that aren't yet on the curated list.
+3. **Chase the hot trail.** Effort follows expected payoff. When most angles return little but
+   one line of inquiry is closing in on the specific answer, that line gets the budget — iterate,
+   follow, and dig as far as it goes. Cold trails stop early; hot trails earn extensions.
+4. **Every claim is traceable.** Findings carry citations the user can evaluate for relative
+   signal strength — what kind of source, how fresh, whether corroborated.
+
 ## Prime directive — signal over noise, always
 
 Deep Research exists to surface the **most salient information on the web** for a specific question
 and present it at the **highest possible signal-to-noise ratio**. The single most important rule:
 
-> **Earn every sentence. Generate nothing for its own sake.** If an exhaustive search turns up
-> little of real value, the correct output is short — or, occasionally, almost nothing. A thin,
-> honest answer beats a padded, confident-sounding one. Never manufacture verbiage, false balance,
-> or filler to look thorough.
+> **Earn every sentence. Generate nothing for its own sake.** Output length is ORGANIC — it tracks
+> the actual high-signal yield of the research, in both directions. If an exhaustive search turns up
+> little of real value, the correct output is short — or effectively nothing. If the research
+> surfaces a large volume of detailed, tangible findings, the correct output is long — ten or more
+> pages when the material genuinely fills them. A thin, honest answer beats a padded,
+> confident-sounding one; a full account of rich findings beats a falsely concise summary. Never
+> manufacture verbiage, false balance, or filler to look thorough.
 
 The user is an expert doing serious research — time-poor and discerning. They want what's true,
 what matters, what's contested, and what couldn't be found — fast.
@@ -55,11 +78,19 @@ and how to search. Common archetypes and where to look:
 ### 1.3 Where candid signal hides (look past the top 10 blue links)
 
 - **Discussion forums** — Reddit and specialist communities. Often the most candid, contrarian, and
-  current takes. Read the *substantive* threads, skip the noise.
+  current takes. Read the *substantive* threads, skip the noise. Engine `site:` queries only see
+  what engines indexed — **use a community's own search when available** (it reaches unindexed and
+  login-walled depths), and follow thread links: replies, linked older threads, an author's other
+  posts, next-page pagination.
+- **Communities you haven't heard of yet** — for any niche question there is usually a dedicated
+  forum, Discord-adjacent board, or old-school bulletin board where the real practitioners talk.
+  Spend a query or two *finding* it ("best forum/community for …", semantic search for "active
+  discussion forum about …"), register it, then mine it.
 - **Independent experts / newsletters** — Substack and similar. One sharp independent writer can
   outweigh ten content-farm articles. (Some are paywalled — flag for login.)
 - **Primary documents** — official registries and filings, regulator press releases, court records,
-  the subject's own site/statements. Always prefer the primary over a secondhand summary.
+  the subject's own site/statements. Always prefer the primary over a secondhand summary. When a
+  good page cites one, **follow the link** rather than re-searching.
 - **Specialized trade press** — sector-specific outlets that cover the niche seriously.
 
 ### 1.4 Source quality & skepticism
@@ -72,11 +103,19 @@ substantive forum discussion > anonymous anecdote > SEO/content-farm chaff.**
 - **Watch for promotion and astroturf** — marketing dressed as analysis, suspiciously uniform praise,
   coordinated forum posts. Flag, don't repeat.
 
-### 1.5 Knowing when to stop
+### 1.5 Effort follows payoff — stopping AND extending
 
-Go **broad first, then deep** on what proves fruitful. Stop when new pages stop adding signal —
-do not spend remaining budget out of obligation. **A near-empty harvest is a valid outcome** and
-should be reported as such, not disguised.
+Go **broad first, then deep** on what proves fruitful — and let the yield steer the budget in
+both directions:
+
+- **Cold trails stop early.** When new pages stop adding signal, stop — do not spend remaining
+  budget out of obligation. **A near-empty harvest is a valid outcome** and should be reported as
+  such, not disguised.
+- **Hot trails earn extensions.** When a line of inquiry is visibly closing in on the *specific*
+  information the user asked for — the right thread found, the right community entered, a primary
+  source one hop away — do not abandon it because an allocation ran out. Ask for more budget,
+  state the evidence, and keep digging as far as the trail goes. Stopping one hop short of the
+  answer is the worst outcome this tool can produce.
 
 ---
 
@@ -85,13 +124,21 @@ should be reported as such, not disguised.
 *Used when turning the harvest into the final report. The gather stage should keep these goals in
 mind so it collects what synthesis will need.*
 
-### 2.1 Length discipline
+### 2.1 Length discipline — organic, in BOTH directions
 
-Match length to the actual information yield, **never** to a template. A high-signal three-paragraph
-answer is a success. If the web genuinely offered little, say so plainly and stop. No throat-clearing,
-no restating the question, no "in conclusion".
+**The report's length is set entirely by the volume of high-signal information the research
+actually yielded — never by a template, a house style, or a target length.** Both extremes are
+correct, expected outcomes:
 
-However, if there is a large quantity of insightful, high impact information, the output report can be as long as necessary.
+- **Very little high-signal material found → the output can be effectively zero.** A few honest
+  sentences — what was searched, and that nothing of real value surfaced — is a complete,
+  successful report. Do not inflate a thin harvest into pages.
+- **Lots of detailed, tangible findings → the output can be ten or more pages.** When the research
+  produced a large volume of specific, well-sourced material, write it *all* up. Do not compress
+  away real findings to seem concise — omitting genuine signal is as much a failure as padding.
+
+Everything in between scales continuously with the yield. A high-signal three-paragraph answer is
+a success. No throat-clearing, no restating the question, no "in conclusion".
 
 ### 2.2 Structure (adaptive, not boilerplate)
 
@@ -106,11 +153,16 @@ Lead with the answer; let the material decide the rest. A typical shape:
 
 Drop any section that has nothing real to say.
 
-### 2.3 Citations
+### 2.3 Citations — graded for signal strength
 
 Every non-obvious factual claim carries an inline marker `[n]` tied to a numbered source in the
 Sources list. Cite the **primary** source where one exists. Do not cite a source you didn't actually
-draw from.
+draw from — and never cite a source that was only surfaced, not read.
+
+Citations exist so the user can judge **relative signal strength** at a glance: each listed source
+carries its class (primary document, official, news, expert analysis, forum discussion, anecdote,
+marketing) and date where known. Flag claims that rest on a **single** source inline — especially a
+single forum post or anecdote — so calibration is visible in the prose, not just the source list.
 
 ### 2.4 Voice & calibration
 

@@ -44,3 +44,7 @@ psutil>=5.9.0
 # (the async job registry lives in-process); the Dockerfile uses many threads.
 # Not used for local Windows runs (gunicorn is POSIX-only) — there, use python dr_server.py.
 gunicorn>=21.2.0
+
+# Semantic rerank for the Stage-1 baseline sweep (ONNX/CPU, no torch).
+# Model (~130 MB) is pre-baked into the Docker image; DRT_RERANK=0 disables.
+fastembed>=0.3

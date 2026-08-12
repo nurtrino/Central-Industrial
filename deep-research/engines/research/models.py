@@ -2,17 +2,19 @@
 DRT per-role model map — the single source of truth for WHICH Claude model handles
 WHICH task in the Deep Research pipeline.
 
-Tier-optimized by design: put the expensive model only where reasoning quality reaches
-the reader, and keep the high-volume mechanical work cheap.
+Per user directive (2026-08-11): EVERY role runs Claude Fable 5 at medium reasoning
+effort (override via DRT_EFFORT in .env) — no tier-splitting. The effort level is injected client-side in
+engines/research/llm.py (ClaudeClient wrapper), not here; this map only carries
+the model id.
 
-  - extract    : per-page goal extraction (Pass A) + category classify — HIGHEST volume → Haiku
-  - search     : the browser agent tool-use loop + Stage-1 web search — high volume → Sonnet
-  - route      : relevance filters, stop-judge, gap-queries — short judgments → Sonnet
-  - plan       : the upfront research planner — one call, steers the whole run → Opus
-  - synthesize : the cited report (Pass B) — THE deliverable → Opus
+  - extract    : per-page goal extraction (Pass A) + category classify
+  - search     : the browser agent tool-use loop + Stage-1 baseline sweep
+  - route      : relevance filters, stop-judge, gap-queries
+  - plan       : the upfront research planner
+  - synthesize : the cited report (Pass B) — THE deliverable
 
 Override any role in  config/drt_models.json  (edit + restart the server to apply):
-    { "models": { "synthesize": "claude-sonnet-4-6", ... } }
+    { "models": { "synthesize": "claude-fable-5", ... } }
 Unknown roles / blank values are ignored (fall back to the defaults below).
 """
 from __future__ import annotations
@@ -21,11 +23,11 @@ import json
 import os
 
 _DEFAULT_MODELS = {
-    "extract":    "claude-haiku-4-5-20251001",
-    "search":     "claude-sonnet-4-6",
-    "route":      "claude-sonnet-4-6",
-    "plan":       "claude-opus-4-8",
-    "synthesize": "claude-opus-4-8",
+    "extract":    "claude-fable-5",
+    "search":     "claude-fable-5",
+    "route":      "claude-fable-5",
+    "plan":       "claude-fable-5",
+    "synthesize": "claude-fable-5",
 }
 
 _CONFIG_PATH = os.path.join(

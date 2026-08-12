@@ -201,11 +201,52 @@ class LMStudioClient:
         return _Resp(blocks, "tool_use" if tcs else "end_turn")
 
 
+# ── Claude wrapper: Fable 5 at high effort on EVERY call ─────────────────────
+# Per user directive (2026-08-11) all Claude calls in this tool run claude-fable-5
+# with reasoning effort "high". This wrapper is the single choke point that makes
+# a plain anthropic.Anthropic safe for Fable 5:
+#   * injects output_config.effort (via extra_body — version-proof) unless the
+#     caller set one; override the level with DRT_EFFORT in .env
+#   * strips `temperature` (removed on Fable 5 — the API returns a 400)
+#   * never sends a `thinking` param (thinking is always on for Fable 5; an
+#     explicit config is rejected)
+#   * floors max_tokens at 4096 — on Fable 5 thinking tokens count against
+#     max_tokens, so tiny caps (16–400) written for non-thinking models would
+#     truncate before any answer text. A cap costs nothing unless used.
+DRT_EFFORT = (os.environ.get("DRT_EFFORT") or "medium").strip().lower()
+_MAX_TOKENS_FLOOR = 4096
+
+
+class _ClaudeMessages:
+    def __init__(self, inner):
+        self._inner = inner
+
+    def create(self, **kw):
+        kw.pop("temperature", None)
+        kw.pop("thinking", None)
+        if int(kw.get("max_tokens") or 0) < _MAX_TOKENS_FLOOR:
+            kw["max_tokens"] = _MAX_TOKENS_FLOOR
+        extra_body = dict(kw.pop("extra_body", None) or {})
+        extra_body.setdefault("output_config", {"effort": DRT_EFFORT})
+        kw["extra_body"] = extra_body
+        return self._inner.messages.create(**kw)
+
+
+class ClaudeClient:
+    """Drop-in for anthropic.Anthropic with the Fable-5 request shape enforced."""
+
+    def __init__(self, api_key=None):
+        import anthropic
+        self._inner = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        self.messages = _ClaudeMessages(self._inner)
+
+
 def make_client(provider="claude", api_key=None, log=None, base_url=None):
     """Return an AI client for the chosen provider.
 
     local  → LMStudioClient (raises LocalLLMUnavailable if LM Studio is down).
-    claude → anthropic.Anthropic, or None when no api_key (callers guard on `if client`).
+    claude → ClaudeClient (Fable 5 + high effort enforced), or None when no
+             api_key (callers guard on `if client`).
     """
     if is_local(provider):
         return LMStudioClient(base_url=base_url, log=log)
@@ -213,5 +254,4 @@ def make_client(provider="claude", api_key=None, log=None, base_url=None):
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         return None
-    import anthropic
-    return anthropic.Anthropic(api_key=api_key)
+    return ClaudeClient(api_key=api_key)

@@ -1,16 +1,11 @@
 """
-DRT Stage 1 — Claude's own web search.
+DRT Stage 1 — Claude's own web search.  ⚠ RETIRED 2026-08-11.
 
-Before the visible browser does anything, Claude runs the Anthropic API's
-server-side web_search tool: a fast, broad, headless baseline pass. It returns
-a short findings summary plus the source URLs it cited. Later stages use this to
-target gaps, avoid re-treading the same ground, and decide which gated/specialist
-sources are worth chasing.
-
-Server-side tool: the API executes each search and returns the results inline
-(web_search_tool_result blocks) — no client tool-result loop needed. If the
-key/tier lacks web_search, we degrade gracefully (empty result → pipeline skips
-to the browser stages).
+run_api_search is NO LONGER CALLED by the pipeline: per user directive, ALL web
+search runs through the visible Chrome instance (server-side/sandboxed search
+agents respect robots.txt and get blocked). Stage 1 is now agent.run_local_baseline
+for every provider. This module is kept only for _load_blocklist (used by the
+baseline sweep) and as a reference/rollback of the old server-side path.
 """
 
 from __future__ import annotations
