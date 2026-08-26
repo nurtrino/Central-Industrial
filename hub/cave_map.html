@@ -1499,6 +1499,59 @@ search.addTo(map);
 })();
 
 
+/* ---- legend / map key (rebuilt 2026-08-26 after the 2026-07-02 removal — layers have settled) ---- */
+const legend = L.control({ position:'bottomright' });
+legend.onAdd = function(){
+  const d = L.DomUtil.create('div','legend');
+  function sq(c,extra){ return '<span class="ocs-sw" style="background:'+c+';'+(extra||'')+'"></span>'; }
+  function dot(c,extra){ return '<span class="dot" style="background:'+c+';'+(extra||'')+'"></span>'; }
+  function badge(bg,bd,tx){ return '<span class="rank-mini" style="background:'+bg+';border-color:'+bd+';color:'+tx+'">1</span>'; }
+  function row(swatch,label){ return '<div class="row">'+swatch+'<span>'+label+'</span></div>'; }
+  let h = '<div id="legendHead" style="cursor:pointer;font-weight:700">Map key <span id="legendArrow" style="color:#888">&#9662;</span></div>';
+  h += '<div id="legendBody">';
+  h += '<hr><div style="font-weight:600">Caves (&#9632; by state)</div>';
+  h += row(sq('#c2185b'),'Indiana');
+  h += row(sq('#8e44ad'),'Illinois');
+  h += row(sq('#0f8b8d'),'Wisconsin');
+  h += row(sq('#e65100'),'Michigan');
+  h += row(sq('#6d4c41'),'Iowa');
+  h += '<div style="font-weight:600;margin-top:4px">Ohio (by region)</div>';
+  for (const r in ocsRegions) h += row(sq(ocsRegions[r].color), ocsRegions[r].label);
+  h += row(sq('#999','opacity:0.5;border-style:dashed'),'&#9888; approximate location (dashed)');
+  h += row(dot(JAECK),"Jaeck's video-series caves");
+  h += '<hr><div style="font-weight:600">&#9312; Longest caves (ranked by length)</div>';
+  h += row(badge('#e8f5e9','#1b5e20','#14521a'),'Indiana (62)');
+  h += row(badge('#e3f2fd','#1565c0','#0d47a1'),'Illinois (21)');
+  h += row(badge('#f3e5f5','#6a1b9a','#4a148c'),'Ohio (21)');
+  h += row(badge('#efebe9','#5d4037','#4e342e'),'Iowa (11)');
+  h += row(badge('#ffebee','#c62828','#b71c1c'),'Michigan (8)');
+  h += row(badge('#e0f7fa','#00838f','#006064'),'Wisconsin (5)');
+  h += '<hr><div style="font-weight:600">Overlays</div>';
+  h += row(sq('none','border:1.5px dashed #4a4a4a'),'County outlines');
+  h += row('<span class="sw" style="background:rgba(46,125,50,0.35);border:1.5px dashed #1b5e20"></span>','Wayne National Forest');
+  h += row('<span class="sw" style="background:rgba(85,139,47,0.45);border-color:#33691e"></span>','Ohio State Forests');
+  h += row(sq('none','border:1.5px dashed #e67e22'),'OCS cave regions (generalized)');
+  h += row(dot('#d3492b','width:9px;height:9px')+dot('#e69800','width:9px;height:9px;margin-left:-4px')+dot('#e6e600','width:9px;height:9px;margin-left:-4px'),'OH karst features, by confidence &mdash; verified &middot; suspect-visited &middot; suspect (off)');
+  h += row('<span class="sw" style="background:rgba(210,166,121,0.55);border-color:#8a5a1a"></span>','IL sinkhole areas &mdash; ISGS (off)');
+  h += row(dot('#e8590c','width:9px;height:9px;border:none'),'IL sinkholes &mdash; ISGS LiDAR (off)');
+  h += row(dot('#7b1fa2','width:10px;height:10px;border-color:#fff'),'IL industrial mines (off)');
+  h += row(dot('#3b3b3b','width:9px;height:9px;border:none'),'IL coal mine entries (off)');
+  h += row(dot('#1a1a1a','width:10px;height:10px;border-color:#fff'),'IL caves &mdash; ISGS Map 8, approx (off)');
+  h += '<div class="row" style="color:#888;font-size:11px;margin-top:4px">(off) = enable in the layer menu, top-left</div>';
+  h += '</div>';
+  d.innerHTML = h;
+  L.DomEvent.disableClickPropagation(d);
+  L.DomEvent.disableScrollPropagation(d);
+  const head = d.querySelector('#legendHead'), body = d.querySelector('#legendBody'), arrow = d.querySelector('#legendArrow');
+  head.addEventListener('click', function(){
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : '';
+    arrow.innerHTML = open ? '&#9656;' : '&#9662;';
+  });
+  return d;
+};
+legend.addTo(map);
+
 // Default view frames the tri-state expansion (OH · IL · WI). Ohio holds the
 // data for now; IL & WI frames are visible and ready to be populated.
 const triStateBounds = L.latLngBounds([[37.0,-91.6],[47.1,-80.4]]);
