@@ -110,17 +110,9 @@ const points = [
     cat:"lead", approx:true }
 ];
 
-// Video-series anchor points (Source: Jaeck Caves) — all one color; the layer
-// menu now lists them all under one "Jaeck's Caves" layer. Home base is drawn larger.
-const JAECK = "#1565c0";
-const cats = {
-  home:    { label:"🔵 Logan home base",            color:JAECK, radius:10 },
-  hocking: { label:"🔵 Hocking core cluster",       color:JAECK, radius:7 },
-  southern:{ label:"🔵 Southern reach",             color:JAECK, radius:7 },
-  karst:   { label:"🔵 Fort Hill SW-karst alt.",    color:JAECK, radius:7 },
-  approx:  { label:"🔵 Approx. corridor arches",    color:JAECK, radius:6 },
-  lead:    { label:"🔵 Shoemaker / Eagle-Twp lead", color:JAECK, radius:9 }
-};
+// Video-series anchor points (Source: Jaeck Caves) — the separate "Jaeck's Caves"
+// designation/layer was removed 2026-08-27; these render as regular Ohio markers
+// (state color + shape-by-precision) in the loop AFTER shapeIcon is defined.
 
 /* ---- base layers ---- */
 // Esri World Topo as the default basemap — fast & reliable, shows relief + labels.
@@ -147,43 +139,14 @@ const map = L.map('map', { layers: [esriTopo] });
 map.createPane('publiclands');
 map.getPane('publiclands').style.zIndex = 350;
 
-/* ---- all sub-clusters share ONE toggleable "Jaeck's Caves" layer ---- */
-const jaeck = L.layerGroup().addTo(map);
-const groups = {};
-for (const key in cats) groups[key] = jaeck;
-
 const allLatLng = [];
 const searchIndex = [];  // {name, lat, lng, marker, group, color, kind, sub, hay} — powers the search box
-points.forEach(p => {
-  const c = cats[p.cat];
-  const radius = p.strong ? 11 : c.radius;
-  const marker = L.circleMarker([p.lat, p.lng], {
-    radius: radius,
-    color: p.strong ? "#ffffff" : "#333333",
-    weight: p.strong ? 3 : 1,
-    fillColor: c.color,
-    fillOpacity: 0.92,
-    dashArray: p.approx ? "3 3" : null
-  });
-  const coordTxt = p.lat.toFixed(4) + ", " + p.lng.toFixed(4);
-  const flag = p.approx ? '<div class="flag">approx — county/landmark only</div>' : '';
-  marker.bindPopup(
-    '<div class="popup"><b>' + p.name + '</b>'
-    + '<div class="meta">County: ' + p.county + '<br>Bedrock: ' + p.bedrock
-    + '<br>Coords: ' + coordTxt + '</div>'
-    + '<div class="role">' + p.role + '</div>' + flag + '</div>'
-  );
-  marker.bindTooltip(p.name, { direction:"top", offset:[0,-radius] });
-  marker.addTo(groups[p.cat]);
-  searchIndex.push({ name:p.name, lat:p.lat, lng:p.lng, marker:marker, group:groups[p.cat], color:c.color, kind:'circle', sub:p.county + ' County', hay:(p.name + ' ' + p.county + ' ' + p.role).toLowerCase() });
-  allLatLng.push([p.lat, p.lng]);
-});
+/* (the former Jaeck points render further down, once `ohio`/shapeIcon exist) */
 
 /* ---- REFINEMENT 1: Eagle Township focus rectangle (approx, NW Vinton) ---- */
 const eagleTwp = L.rectangle([[39.330,-82.645],[39.435,-82.515]], {
   color:"#e67e22", weight:2, dashArray:"6 5", fillColor:"#e67e22", fillOpacity:0.06
 }).bindTooltip("Eagle Township (approx) — Shoemaker search frame", {sticky:true});
-eagleTwp.addTo(groups.lead);
 
 /* ============================================================ *
  * OHIO CAVE SURVEY caves (SQUARES) — a SEPARATE dataset from the
@@ -424,6 +387,25 @@ ocsCaves.forEach(c => {
   searchIndex.push({ name:c.n, lat:c.lat, lng:c.lng, marker:m, group:ocsGroups[c.reg], color:OHIO_COLOR, kind:'square', sub:ocsRegions[c.reg].label, hay:(c.n + ' ' + c.county + ' ' + ocsRegions[c.reg].label + ' ' + c.d).toLowerCase() });
   allLatLng.push([c.lat,c.lng]);
 });
+
+/* Former Jaeck video-series anchor points — regular Ohio markers since 2026-08-27
+ * (coordinate-bearing anchors = exact; approx/county-road anchors = landmark). */
+points.forEach(p => {
+  const prec = p.approx ? 'landmark' : 'exact';
+  const m = L.marker([p.lat, p.lng], { icon: shapeIcon(OHIO_COLOR, prec, false) });
+  const flag = p.approx ? '<div class="flag">approx — county/landmark only</div>' : '';
+  m.bindPopup('<div class="popup"><b>' + p.name + '</b>'
+    + '<div class="meta">County: ' + p.county + '<br>Bedrock: ' + p.bedrock
+    + '<br>Coords: ' + p.lat.toFixed(4) + ', ' + p.lng.toFixed(4)
+    + '<br>Precision: ' + precLabel[prec] + '</div>'
+    + '<div class="role">' + p.role + '</div>' + flag + '</div>');
+  m.bindTooltip(p.name, { direction:"top", offset:[0,-8] });
+  m.addTo(ohio);
+  searchIndex.push({ name:p.name, lat:p.lat, lng:p.lng, marker:m, group:ohio, color:OHIO_COLOR, kind:'square', sub:p.county + ' County', hay:(p.name + ' ' + p.county + ' ' + p.role).toLowerCase() });
+  allLatLng.push([p.lat, p.lng]);
+});
+/* the Eagle-Township search frame rides with the Ohio caves layer now */
+eagleTwp.addTo(ohio);
 
 /* ============================================================ *
  * KARST — ODNR Division of Geological Survey Map EG-1, "Known and
@@ -1532,7 +1514,6 @@ const baseLayers = {
   "Satellite": sat
 };
 const overlays = {};
-overlays["🔵 Jaeck's Caves"] = jaeck;
 overlays["🟩 Wayne National Forest"] = wayneLayer;
 overlays["🟩 Ohio State Forests"] = stateForestLayer;
 overlays["▦ County Outline"] = countyOutlineLayer;
@@ -1625,7 +1606,6 @@ legend.onAdd = function(){
   h += row(star('#999'),'&#9733; exact coordinates');
   h += row(dm('#999'),'&#9670; landmark anchor (cave is nearby)');
   h += row(sq('#999','opacity:0.55;border-style:dashed'),'&#9632; county-level approximation (faded/dashed)');
-  h += row(dot(JAECK),"Jaeck's video-series caves");
   h += '<hr><div style="font-weight:600">&#9312; Longest caves (ranked by length)</div>';
   h += row(badge('#e8f5e9','#1b5e20','#14521a'),'Indiana (62)');
   h += row(badge('#e3f2fd','#1565c0','#0d47a1'),'Illinois (21)');
