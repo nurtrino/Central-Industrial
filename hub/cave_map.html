@@ -25,6 +25,7 @@
   .legend .ocs-sw { width:12px; height:12px; border-radius:2px; margin-right:7px; flex:0 0 auto; border:1px solid rgba(0,0,0,0.45); }
   .ocs-icon { background:transparent; border:none; }
   .ocs-sq { display:block; width:11px; height:11px; border:1.5px solid rgba(0,0,0,0.55); border-radius:2px; box-shadow:0 0 2px rgba(0,0,0,0.35); }
+  .ocs-dm { display:block; width:10px; height:10px; margin:2px; border:1.5px solid rgba(0,0,0,0.55); box-shadow:0 0 2px rgba(0,0,0,0.35); transform:rotate(45deg); }
   .rank-icon { background:transparent; border:none; }
   .rank-badge { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%;
     background:#fffbe6; border:2px solid #b8860b; color:#7a5200; font:700 12px -apple-system, Segoe UI, sans-serif; box-shadow:0 1px 3px rgba(0,0,0,0.45); }
@@ -190,10 +191,11 @@ eagleTwp.addTo(groups.lead);
  * minutes + "Underground Ohio" newsletters, then geolocated via web
  * research (USGS GNIS, park pages, Wikipedia, the OCS "Top-Ten
  * Longest" list, and Warren Luther's Pholeos articles).
- * Solid square  = exact public feature / good landmark.
- * Faded+dashed  = county-level approx, or exact site not yet pinned
- *                 (most wild caves are private-land; anchored to the
- *                 nearest public landmark / county seat).
+ * Marker SHAPE = precision (2026-08-27): star = exact coordinates ·
+ * diamond = landmark anchor (cave nearby) · square = county-level.
+ * Faded+dashed still marks county/undisclosed. All Ohio markers share
+ * ONE state color (OHIO_COLOR) — per-region colors removed 2026-08-27;
+ * ocsRegions labels are kept for popups only.
  * ============================================================ */
 const ocsRegions = {
   ne:      { label:"NE — Sharon Conglomerate",      color:"#8d6e63" },
@@ -390,16 +392,28 @@ const ocsCaves = [
 const ohio = L.layerGroup().addTo(map);
 const ocsGroups = {};
 for (const r in ocsRegions) ocsGroups[r] = ohio;
-function ocsIcon(reg, faded){
-  const c = ocsRegions[reg].color;
+const OHIO_COLOR = "#bb0000";   /* one color for ALL Ohio cave markers (per-region colors removed) */
+/* shape = precision: star (exact) · diamond (landmark) · square (county / everything else) */
+function shapeIcon(color, prec, faded){
+  const op = faded ? 0.55 : 0.95;
+  if (prec === 'exact') {
+    return L.divIcon({ className:'ocs-icon',
+      html:'<svg width="17" height="17" viewBox="0 0 17 17" style="opacity:'+op+';filter:drop-shadow(0 0 1.5px rgba(0,0,0,0.5))"><path d="M8.5 1 L10.6 6.1 L16.1 6.5 L11.9 10 L13.2 15.4 L8.5 12.5 L3.8 15.4 L5.1 10 L0.9 6.5 L6.4 6.1 Z" fill="'+color+'" stroke="rgba(0,0,0,0.55)" stroke-width="1"/></svg>',
+      iconSize:[17,17], iconAnchor:[8,8] });
+  }
+  if (prec === 'landmark') {
+    return L.divIcon({ className:'ocs-icon',
+      html:'<span class="ocs-dm" style="background:'+color+';opacity:'+op+';border-style:'+(faded?'dashed':'solid')+'"></span>',
+      iconSize:[14,14], iconAnchor:[7,7] });
+  }
   return L.divIcon({ className:'ocs-icon',
-    html:'<span class="ocs-sq" style="background:'+c+';opacity:'+(faded?0.5:0.95)+';border-style:'+(faded?'dashed':'solid')+'"></span>',
+    html:'<span class="ocs-sq" style="background:'+color+';opacity:'+op+';border-style:'+(faded?'dashed':'solid')+'"></span>',
     iconSize:[13,13], iconAnchor:[6,6] });
 }
 const precLabel = { exact:"exact public feature", landmark:"landmark anchor (cave is nearby)", county:"county-level approximation", undisclosed:"exact location not yet pinned (anchored to a landmark)", frame:"geological frame feature" };
 ocsCaves.forEach(c => {
   const faded = (c.prec==='county' || c.prec==='undisclosed');
-  const m = L.marker([c.lat,c.lng], { icon: ocsIcon(c.reg, faded) });
+  const m = L.marker([c.lat,c.lng], { icon: shapeIcon(OHIO_COLOR, c.prec, faded) });
   m.bindPopup('<div class="popup"><b>'+c.n+'</b>'
     + '<div class="meta">Region: '+ocsRegions[c.reg].label+' &middot; '+c.county
     + '<br>Coords: '+c.lat.toFixed(4)+', '+c.lng.toFixed(4)
@@ -407,7 +421,7 @@ ocsCaves.forEach(c => {
     + '<div class="role">'+c.d+'</div></div>');
   m.bindTooltip(c.n, {direction:"top", offset:[0,-6]});
   m.addTo(ocsGroups[c.reg]);
-  searchIndex.push({ name:c.n, lat:c.lat, lng:c.lng, marker:m, group:ocsGroups[c.reg], color:ocsRegions[c.reg].color, kind:'square', sub:ocsRegions[c.reg].label, hay:(c.n + ' ' + c.county + ' ' + ocsRegions[c.reg].label + ' ' + c.d).toLowerCase() });
+  searchIndex.push({ name:c.n, lat:c.lat, lng:c.lng, marker:m, group:ocsGroups[c.reg], color:OHIO_COLOR, kind:'square', sub:ocsRegions[c.reg].label, hay:(c.n + ' ' + c.county + ' ' + ocsRegions[c.reg].label + ' ' + c.d).toLowerCase() });
   allLatLng.push([c.lat,c.lng]);
 });
 
@@ -557,11 +571,7 @@ const expansionRegions = {
 const expansionGroups = {};
 for (const r in expansionRegions) expansionGroups[r] = L.layerGroup().addTo(map);
 
-function expIcon(color, faded){
-  return L.divIcon({ className:'ocs-icon',
-    html:'<span class="ocs-sq" style="background:'+color+';opacity:'+(faded?0.5:0.95)+';border-style:'+(faded?'dashed':'solid')+'"></span>',
-    iconSize:[13,13], iconAnchor:[6,6] });
-}
+/* expansion markers use the shared shapeIcon (star/diamond/square by precision) */
 
 /* Populated from USA_Long_Cave_List.xlsx (OH/IL/IN/WI). Only caves with an
  * accurate public location are included: show caves, state parks, preserves,
@@ -1316,7 +1326,7 @@ const expansionCaves = [
 ];
 expansionCaves.forEach(c => {
   const faded = (c.prec==='county' || c.prec==='undisclosed');
-  const m = L.marker([c.lat,c.lng], { icon: expIcon(expansionRegions[c.reg].color, faded) });
+  const m = L.marker([c.lat,c.lng], { icon: shapeIcon(expansionRegions[c.reg].color, c.prec, faded) });
   m.bindPopup('<div class="popup"><b>'+c.n+'</b>'
     + '<div class="meta">'+expansionRegions[c.reg].label+' &middot; '+(c.county||'')
     + '<br>Coords: '+c.lat.toFixed(4)+', '+c.lng.toFixed(4)
@@ -1602,15 +1612,19 @@ legend.onAdd = function(){
   function row(swatch,label){ return '<div class="row">'+swatch+'<span>'+label+'</span></div>'; }
   let h = '<div id="legendHead" style="cursor:pointer;font-weight:700">Map key <span id="legendArrow" style="color:#888">&#9662;</span></div>';
   h += '<div id="legendBody">';
-  h += '<hr><div style="font-weight:600">Caves (&#9632; by state)</div>';
+  function dm(c,extra){ return '<span class="ocs-sw" style="background:'+c+';width:10px;height:10px;border-radius:0;transform:rotate(45deg);margin:1px 8px 1px 2px;'+(extra||'')+'"></span>'; }
+  function star(c){ return '<svg width="15" height="15" viewBox="0 0 17 17" style="margin-right:6px;flex:0 0 auto"><path d="M8.5 1 L10.6 6.1 L16.1 6.5 L11.9 10 L13.2 15.4 L8.5 12.5 L3.8 15.4 L5.1 10 L0.9 6.5 L6.4 6.1 Z" fill="'+c+'" stroke="rgba(0,0,0,0.55)" stroke-width="1"/></svg>'; }
+  h += '<hr><div style="font-weight:600">Cave color = state</div>';
+  h += row(sq(OHIO_COLOR),'Ohio');
   h += row(sq('#c2185b'),'Indiana');
   h += row(sq('#8e44ad'),'Illinois');
   h += row(sq('#0f8b8d'),'Wisconsin');
   h += row(sq('#e65100'),'Michigan');
   h += row(sq('#6d4c41'),'Iowa');
-  h += '<div style="font-weight:600;margin-top:4px">Ohio (by region)</div>';
-  for (const r in ocsRegions) h += row(sq(ocsRegions[r].color), ocsRegions[r].label);
-  h += row(sq('#999','opacity:0.5;border-style:dashed'),'&#9888; approximate location (dashed)');
+  h += '<div style="font-weight:600;margin-top:4px">Marker shape = precision</div>';
+  h += row(star('#999'),'&#9733; exact coordinates');
+  h += row(dm('#999'),'&#9670; landmark anchor (cave is nearby)');
+  h += row(sq('#999','opacity:0.55;border-style:dashed'),'&#9632; county-level approximation (faded/dashed)');
   h += row(dot(JAECK),"Jaeck's video-series caves");
   h += '<hr><div style="font-weight:600">&#9312; Longest caves (ranked by length)</div>';
   h += row(badge('#e8f5e9','#1b5e20','#14521a'),'Indiana (62)');
