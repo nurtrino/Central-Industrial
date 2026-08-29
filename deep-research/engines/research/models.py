@@ -38,7 +38,9 @@ _CONFIG_PATH = os.path.join(
 def _load_overrides() -> dict:
     """Read config/drt_models.json; keep only known roles with non-empty string values."""
     try:
-        with open(_CONFIG_PATH, encoding="utf-8") as fh:
+        # utf-8-sig tolerates a BOM (e.g. from a PowerShell `Set-Content -Encoding utf8`
+        # edit) — without it json.load throws and every override is silently ignored.
+        with open(_CONFIG_PATH, encoding="utf-8-sig") as fh:
             data = json.load(fh)
         m = data.get("models", data) if isinstance(data, dict) else {}
         return {k: v.strip() for k, v in m.items()
