@@ -266,6 +266,15 @@
     .dr-stop-q { font-size: 13.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
     .dr-stop-actions { display: flex; gap: 10px; flex-wrap: wrap; }
     .dr-stop-note { margin-top: 16px; font-size: 12.5px; color: var(--ws-color, var(--admin-color)); }
+    /* Claude-refusal → local-model fall-over panel */
+    .dr-refusal-panel {
+      margin-top: 8px; padding: 18px 20px; border-radius: 12px;
+      background: rgba(224,179,65,.07); border: 1px solid #7a6320;
+    }
+    .dr-refusal-head { font-size: 14.5px; font-weight: 600; color: #e0b341; }
+    .dr-refusal-cat { font-size: 12px; color: var(--text-secondary); margin: 4px 0 14px; }
+    .dr-refusal-confirm { font-size: 13.5px; color: var(--text-primary); margin-bottom: 4px; }
+    .dr-refusal-sub { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 14px; }
     /* refine box */
     .dr-refine-box { margin-top: 26px; padding: 16px 18px; border-radius: 12px; background: var(--bg-surface); border: 1px solid var(--border-dim); }
     .dr-refine-head { font-size: 14px; font-weight: 600; color: var(--text-primary); }
@@ -693,6 +702,7 @@ function _actAfter(owner) {
     _dr.credInputs = {};
     _dr.skipReqStage = null;
     _dr.stopPrompt = false; _dr.stopChoice = false;
+    _dr.refusalShown = false; _dr.refusalResolved = null; _dr.refusalLocal = null; _dr.refusalDetails = null;
     _dr.deeperOpen = false;
     _dr.deeperFiles = [];
     _dr.deeperQuery = '';
@@ -1516,6 +1526,7 @@ function _actAfter(owner) {
     const myGen = _dr.gen;
     _dr.credShown = false; _dr.credInputs = {}; _dr.skipReqStage = null;
     _dr.stopPrompt = false; _dr.stopChoice = false;
+    _dr.refusalShown = false; _dr.refusalResolved = null; _dr.refusalLocal = null; _dr.refusalDetails = null;
     const q = (_dr.query || '').trim();
     const main = document.getElementById('ws-main-inner');
 
@@ -1568,10 +1579,22 @@ function _actAfter(owner) {
       if (st.error) { _dr.abort = null; _drErrorNote(st.error); return; }
       if (st.done && st.aborted) { _dr.abort = null; return; }   // user discarded — form already shown
       if (st.done)  { _dr.abort = null; _dr.data = st.result; renderContent(activeTool); return; }
-      // Stash the latest render args so the Stop panel can redraw from them.
+      // Stash the latest render args so the Stop / refusal panels can redraw from them.
       _dr._stages = stages; _dr._cur = st.stage; _dr._pct = st.pct; _dr._msg = st.message; _dr._t0 = t0;
       const el = document.getElementById('ws-main-inner');
       if (!el) continue;
+      // Highest priority: Claude declined and is waiting on the user's choice.
+      if (st.awaiting_refusal_choice) {
+        if (!_dr.refusalShown) {
+          _dr.refusalShown = true; _dr.refusalDetails = st.awaiting_refusal_choice;
+          el.innerHTML = _drShell(_drRefusalHtml(st.awaiting_refusal_choice));
+        }
+        continue;
+      } else if (_dr.refusalShown) {
+        // Server cleared the flag → worker resumed (or stopped). Drop the panel.
+        _dr.refusalShown = false; _dr.refusalResolved = null;
+        _dr.refusalLocal = null; _dr.refusalDetails = null;
+      }
       if (st.awaiting_credentials && st.awaiting_credentials.length && !_dr.stopPrompt && !_dr.stopChoice) {
         if (!_dr.credShown) {
           _dr.credShown = true;
@@ -1740,6 +1763,75 @@ function _actAfter(owner) {
     try { await fetch(`${PERF_SERVER}/api/deep_research/stop?job=${_dr.jobId}`, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ mode:'assemble' }) }); } catch (_) {}
+  }
+
+  /* ── Claude refusal → offer the local model, confirm it's up, then resume ── */
+  function _drRefusalHtml(d) {
+    const cat = (d && d.category) || 'safety';
+    const local = _dr.refusalLocal;   // {ok, model} after a probe
+    let body;
+    if (_dr.refusalResolved === 'abort') {
+      body = `<div class="dr-stop-note">Stopping — assembling the report from what was gathered…</div>`;
+    } else if (_dr.refusalResolved === 'local') {
+      body = `<div class="dr-stop-note">Switched to your local model${local && local.model ? ' (' + _esc(local.model) + ')' : ''} — resuming the research from where Claude declined…</div>`;
+    } else if (local && local.ok) {
+      body = `
+        <div class="dr-refusal-confirm">Local model detected: <strong>${_esc(local.model)}</strong>.</div>
+        <div class="dr-refusal-sub">Continue this research on your local model, picking up from the point Claude declined?</div>
+        <div class="dr-stop-actions">
+          <button class="dr-run-btn" onclick="drRefusalConfirmLocal()">Continue on local model →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drRefusalAbort()">Stop &amp; assemble what we have</button>
+        </div>`;
+    } else if (local && !local.ok) {
+      body = `
+        <div class="dr-refusal-sub" style="color:#ffb37a">No local model detected. Start LM Studio, load a model, and turn on its local server (Developer tab), then re-check.</div>
+        <div class="dr-stop-actions">
+          <button class="dr-run-btn" onclick="drRefusalSwitchLocal()">Re-check for a local model</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drRefusalAbort()">Stop &amp; assemble what we have</button>
+        </div>`;
+    } else {
+      body = `
+        <div class="dr-refusal-sub">Continue with your local model instead? It must be running in LM Studio with a model loaded.</div>
+        <div class="dr-stop-actions">
+          <button class="dr-run-btn" onclick="drRefusalSwitchLocal()">Switch to local model →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drRefusalAbort()">Stop &amp; assemble what we have</button>
+        </div>`;
+    }
+    return `
+      <div class="mn-progress">
+        <div class="dr-refusal-panel">
+          <div class="dr-refusal-head">⚠ Claude declined part of this research</div>
+          <div class="dr-refusal-cat">Safety refusal${cat ? ' · ' + _esc(cat) : ''}. The research is paused at that step so nothing is lost.</div>
+          ${body}
+        </div>
+      </div>`;
+  }
+  function _drRefusalRerender() {
+    const el = document.getElementById('ws-main-inner');
+    if (el) el.innerHTML = _drShell(_drRefusalHtml(_dr.refusalDetails || {}));
+  }
+  async function drRefusalSwitchLocal() {
+    // Confirm a local model is actually loaded before offering to continue on it.
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/local_model`);
+      const j = await r.json();
+      _dr.refusalLocal = { ok: !!j.ok, model: j.model || '' };
+    } catch (_) { _dr.refusalLocal = { ok: false, model: '' }; }
+    _drRefusalRerender();
+  }
+  async function drRefusalConfirmLocal() {
+    _dr.refusalResolved = 'local';
+    _drRefusalRerender();
+    try { await fetch(`${PERF_SERVER}/api/deep_research/refusal_choice?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'local' }) }); } catch (_) {}
+  }
+  async function drRefusalAbort() {
+    _dr.refusalResolved = 'abort';
+    _drRefusalRerender();
+    try { await fetch(`${PERF_SERVER}/api/deep_research/refusal_choice?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'abort' }) }); } catch (_) {}
   }
 
   /* ════════════════════════════════════════════════════════════════════

@@ -157,7 +157,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.stop"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.refuse"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -595,6 +595,7 @@ DR_STAGES = ["stage1", "stage2", "stage3", "stage4", "synthesize", "report"]
 _DR_EVENTS = {}     # job_id -> threading.Event (for batched Stage-4 credential prompt)
 _DR_SKIP = {}       # job_id -> threading.Event (user "skip this stage" signal)
 _DR_STOP = {}       # job_id -> threading.Event (user "STOP the whole run" signal)
+_DR_REFUSAL = {}    # job_id -> threading.Event (user's answer to a Claude-refusal prompt)
 _DR_SOURCES_PATH = os.path.join(_ROOT, "config", "drt_sources.json")
 
 _MEMO_WORD_CAP = 6000
@@ -823,6 +824,36 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         from engines.research.llm import make_client, is_local, LocalLLMUnavailable
         gov = _load_governance()
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        # Refusal hook: if Claude declines (safety refusal), pause the pipeline right
+        # there, flag the UI, and wait (up to 10 min) for the user's choice. "local"
+        # → the wrapper swaps to LM Studio and RESUMES from the refused call; "abort"
+        # → stop gathering and assemble what we have. Reuses the local-model wiring.
+        refusal_ev = _DR_REFUSAL[job_id]
+
+        def _refusal_hook(details):
+            # Pause: flag the UI, block for the user's decision. UI-only — the wrapper
+            # decides whether to stop (via _on_stop) based on the actual swap result.
+            refusal_ev.clear()
+            with _JOBS_LOCK:
+                job["awaiting_refusal_choice"] = details
+                job["refusal_decision"] = None
+            log_fn(f"[refusal] Claude declined ({details.get('category')}) — "
+                   f"awaiting your choice (switch to local model / stop)")
+            ok = refusal_ev.wait(timeout=600)
+            with _JOBS_LOCK:
+                dec = (job.get("refusal_decision") or "abort") if ok else "abort"
+                job["awaiting_refusal_choice"] = None
+            log_fn("[refusal] switching to the local model and resuming…" if dec == "local"
+                   else "[refusal] stopping — assembling from what was gathered")
+            return dec
+
+        def _refusal_stop():
+            # The wrapper calls this only when the run must halt (abort, or a local
+            # swap that failed). Assemble a report from what was already gathered.
+            stop_ev.set()
+            with _JOBS_LOCK:
+                job["stop_mode"] = "assemble"
+
         if is_local(provider):
             try:
                 client = make_client("local")           # LMStudioClient (whatever model is loaded)
@@ -831,7 +862,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     job["error"] = str(e); job["done"] = True
                 return
         else:
-            client = make_client("claude", api_key)     # Fable 5 + standard effort enforced
+            client = make_client("claude", api_key, refusal_hook=_refusal_hook,
+                                 on_stop=_refusal_stop)
 
         # ── Uploaded documents: extract → parse (done at POST) → ANALYZE here.
         # Each file is distilled against the question (facts, entities, open questions,
@@ -1045,6 +1077,7 @@ def deep_research_start():
         _DR_EVENTS[job_id] = threading.Event()
         _DR_SKIP[job_id] = threading.Event()
         _DR_STOP[job_id] = threading.Event()
+        _DR_REFUSAL[job_id] = threading.Event()
         threading.Thread(target=_ody_depth_worker,
                          args=(job_id, query, clarifications, doc_context,
                                channel_overrides, provider, doc_parts),
@@ -1062,6 +1095,7 @@ def deep_research_start():
     _DR_EVENTS[job_id] = threading.Event()
     _DR_SKIP[job_id] = threading.Event()
     _DR_STOP[job_id] = threading.Event()
+    _DR_REFUSAL[job_id] = threading.Event()
     threading.Thread(target=_dr_worker,
                      args=(job_id, query, depth, clarifications, doc_context, channel_overrides,
                            provider, doc_parts),
@@ -1084,6 +1118,7 @@ def deep_research_status():
             "stage": job["stage"], "pct": job["pct"], "message": job["message"],
             "done": job["done"], "error": job["error"], "stages": DR_STAGES,
             "awaiting_credentials": job.get("awaiting_credentials"),
+            "awaiting_refusal_choice": job.get("awaiting_refusal_choice"),
             "events": [e for e in (job.get("events") or []) if e[0] > after],
             "eseq": job.get("eseq", 0),
         }
@@ -1095,6 +1130,7 @@ def deep_research_status():
             _DR_EVENTS.pop(job_id, None)
             _DR_SKIP.pop(job_id, None)
             _DR_STOP.pop(job_id, None)
+            _DR_REFUSAL.pop(job_id, None)
     return jsonify(payload)
 
 
@@ -1136,6 +1172,30 @@ def deep_research_stop():
     cred = _DR_EVENTS.get(job_id)   # unblock a pending Stage-4 credential wait
     if cred:
         cred.set()
+    return jsonify({"ok": True, "mode": mode})
+
+
+@app.route("/api/deep_research/refusal_choice", methods=["POST", "OPTIONS"])
+def deep_research_refusal_choice():
+    """Answer a Claude-refusal prompt. Body/query `mode`:
+      • 'local' — switch to the local model and RESUME from the refused call (the UI
+        confirms a local model is loaded, via /local_model, before sending this).
+      • 'abort' — stop and assemble a report from what was already gathered.
+    Unblocks the paused worker thread."""
+    if request.method == "OPTIONS":
+        return "", 204
+    job_id = request.args.get("job", "") or (request.form.get("job") or "")
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or request.args.get("mode") or "abort").strip().lower()
+    if mode not in ("local", "abort"):
+        mode = "abort"
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is not None:
+            job["refusal_decision"] = mode
+    ev = _DR_REFUSAL.get(job_id)
+    if ev:
+        ev.set()
     return jsonify({"ok": True, "mode": mode})
 
 

@@ -219,11 +219,23 @@ DRT_EFFORT = (os.environ.get("DRT_EFFORT") or "medium").strip().lower()
 _MAX_TOKENS_FLOOR = 4096
 
 
+def _refusal_details(resp) -> dict:
+    """Pull the category/explanation off a Claude safety refusal for the UI."""
+    sd = getattr(resp, "stop_details", None)
+    cat = getattr(sd, "category", None) if sd else None
+    expl = getattr(sd, "explanation", None) if sd else None
+    return {"category": cat or "safety", "explanation": (expl or "")[:400]}
+
+
 class _ClaudeMessages:
-    def __init__(self, inner):
-        self._inner = inner
+    def __init__(self, owner):        # owner = ClaudeClient (so it can fall over to local)
+        self._o = owner
 
     def create(self, **kw):
+        # Once this run has fallen over to the local model (after a refusal the user
+        # chose to route around), EVERY subsequent call goes to local for consistency.
+        if self._o._local is not None:
+            return self._o._local.messages.create(**kw)
         kw.pop("temperature", None)
         kw.pop("thinking", None)
         if int(kw.get("max_tokens") or 0) < _MAX_TOKENS_FLOOR:
@@ -231,23 +243,84 @@ class _ClaudeMessages:
         extra_body = dict(kw.pop("extra_body", None) or {})
         extra_body.setdefault("output_config", {"effort": DRT_EFFORT})
         kw["extra_body"] = extra_body
-        return self._inner.messages.create(**kw)
+        resp = self._o._inner.messages.create(**kw)
+        # Claude safety refusal → HTTP 200 with stop_reason 'refusal' and empty content.
+        # Left unhandled these silently no-op the whole pipeline. Give the owner a chance
+        # to pause, ask the user, and (if they confirm) swap to the local model, then
+        # RETRY this exact call so the pipeline continues from the point of refusal.
+        if getattr(resp, "stop_reason", "") == "refusal":
+            self._o._on_refusal(resp)
+            if self._o._local is not None:
+                return self._o._local.messages.create(**kw)   # resume on local
+        return resp
 
 
 class ClaudeClient:
-    """Drop-in for anthropic.Anthropic with the house request shape enforced."""
+    """Drop-in for anthropic.Anthropic with the house request shape enforced, plus
+    optional refusal-driven fall-over to the local model.
 
-    def __init__(self, api_key=None):
+    refusal_hook(details) -> "local" | "abort":  provided by the job layer. Called
+    (blocking) the first time Claude refuses; on "local" this client swaps to an
+    LMStudioClient for the rest of the run. Parallel callers that refuse at the same
+    time honor the first decision rather than re-prompting."""
+
+    def __init__(self, api_key=None, refusal_hook=None, on_stop=None):
         import anthropic
         self._inner = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-        self.messages = _ClaudeMessages(self._inner)
+        self._refusal_hook = refusal_hook   # pause + return "local"|"abort" (UI only)
+        self._on_stop = on_stop             # called to halt the run (abort / local-unavailable)
+        self._local = None            # set to an LMStudioClient after a confirmed switch
+        self._decision = None         # remembered so repeats don't re-prompt
+        self._lock = __import__("threading").Lock()
+        self.messages = _ClaudeMessages(self)
+
+    def _stop(self):
+        if self._on_stop:
+            try:
+                self._on_stop()
+            except Exception:
+                pass
+
+    def _on_refusal(self, resp):
+        with self._lock:
+            if self._local is not None:
+                return "local"                       # already switched by another call
+            if self._decision == "abort":
+                self._stop()                         # keep the run halted; no re-prompt
+                return "abort"
+            details = _refusal_details(resp)
+            pref = self._refusal_hook(details) if self._refusal_hook else "abort"
+            if pref == "local":
+                try:
+                    self._local = LMStudioClient()   # the user confirmed it's up
+                    self._decision = "local"
+                    return "local"                   # resume on local; run is NOT stopped
+                except Exception:                    # went away between confirm and swap
+                    self._local = None
+            # abort, or a local swap that failed → halt and assemble what we have.
+            self._decision = "abort"
+            self._stop()
+            return "abort"
 
 
-def make_client(provider="claude", api_key=None, log=None, base_url=None):
+def switch_client_to_local(client) -> bool:
+    """Force a ClaudeClient over to the local model outside the refusal path (unused
+    by the pipeline today, but handy for tests/tools). True on success."""
+    try:
+        client._local = LMStudioClient()
+        return True
+    except Exception:
+        return False
+
+
+def make_client(provider="claude", api_key=None, log=None, base_url=None,
+                refusal_hook=None, on_stop=None):
     """Return an AI client for the chosen provider.
 
     local  → LMStudioClient (raises LocalLLMUnavailable if LM Studio is down).
-    claude → ClaudeClient (house model + effort enforced), or None when no
+    claude → ClaudeClient (house model + effort enforced; refusal_hook lets the job
+             layer offer a local-model fall-over on a safety refusal, on_stop halts
+             the run when the user aborts or local is unavailable), or None when no
              api_key (callers guard on `if client`).
     """
     if is_local(provider):
@@ -256,4 +329,4 @@ def make_client(provider="claude", api_key=None, log=None, base_url=None):
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         return None
-    return ClaudeClient(api_key=api_key)
+    return ClaudeClient(api_key=api_key, refusal_hook=refusal_hook, on_stop=on_stop)
