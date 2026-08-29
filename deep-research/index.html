@@ -225,6 +225,12 @@
     .dr-src-save { background: var(--admin-color); color: #fff; border-color: var(--admin-color); }
     .dr-src-msg { font-size: 11.5px; }
     .dr-src-note { font-size: 11px; color: var(--text-muted); margin-top: 10px; }
+    .dr-src-hosted-note {
+      font-size: 12px; line-height: 1.5; color: #e0b341;
+      background: rgba(224,179,65,.08); border: 1px solid #7a6320;
+      border-radius: 8px; padding: 10px 13px; margin-bottom: 14px;
+    }
+    .dr-src-hosted-note strong { color: #f0c869; }
     /* Stage-4 credential panel */
     .dr-cred-list { margin: 6px 0 4px; }
     .dr-cred-row { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border-dim); }
@@ -1304,6 +1310,13 @@ function _actAfter(owner) {
       </div>`);
   }
 
+  // Hosted (www) vs local (127.0.0.1) — the vault + logged-in profile only exist locally,
+  // so credentialed research is a local-only capability. Used to flag the hosted Sources panel.
+  function _drIsHosted() {
+    const h = (location.hostname || '').toLowerCase();
+    return !(h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '');
+  }
+
   function _drSourcesPanel() {
     const open = _dr.srcOpen;
     let inner;
@@ -1349,6 +1362,7 @@ function _actAfter(owner) {
       }).join('');
       inner = `
         <div class="dr-src-body">
+          ${_drIsHosted() ? `<div class="dr-src-hosted-note">🔒 <strong>Credentialed research runs on the local app.</strong> You're on the hosted site — it has no access to your saved vault, logins entered here are temporary, and a cloud server rarely gets past bot-protection on gated forums. For logged-in, deep-forum research, run Deep Research locally.</div>` : ''}
           <table class="dr-src-table">
             <thead><tr><th>Name</th><th>Domain</th><th>Type</th><th>Description</th><th title="The site's own search page — lets the agent search INSIDE the forum (works behind logins). {q} = query.">Search URL</th><th>On</th><th>Login</th><th></th></tr></thead>
             <tbody>${rows || '<tr><td colspan="8" style="color:var(--text-muted);padding:10px">No sources yet.</td></tr>'}</tbody>
