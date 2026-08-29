@@ -166,7 +166,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-11.dar3"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.opus"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -841,7 +841,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     job["error"] = str(e); job["done"] = True
                 return
         else:
-            client = make_client("claude", api_key)     # Fable 5 + standard effort enforced
+            client = make_client("claude", api_key)     # house model + effort enforced
 
         # ── Uploaded documents: extract → parse (done at POST) → ANALYZE here.
         # Each file is distilled against the question (facts, entities, open questions,
@@ -1439,7 +1439,7 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
             job["message"] = "Starting Odysseus engine…"
         researcher = DeepResearcher(
             llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
-            llm_model="claude-fable-5",
+            llm_model="claude-opus-4-8",
             max_rounds=max_rounds,
             max_time=max_time,
             progress_callback=prog,
@@ -1495,7 +1495,7 @@ def _ody_depth_worker(job_id, query, clarifications, doc_context, channel_overri
             q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
         researcher = DeepResearcher(
             llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
-            llm_model="claude-fable-5",
+            llm_model="claude-opus-4-8",
             max_rounds=4, max_time=300, progress_callback=prog)
         ody_report = (asyncio.run(researcher.research(q_full)) or "").strip()
         _push_event(job_id, "ody",

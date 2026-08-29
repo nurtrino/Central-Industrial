@@ -201,18 +201,20 @@ class LMStudioClient:
         return _Resp(blocks, "tool_use" if tcs else "end_turn")
 
 
-# ── Claude wrapper: Fable 5 at high effort on EVERY call ─────────────────────
-# Per user directive (2026-08-11) all Claude calls in this tool run claude-fable-5
-# with reasoning effort "high". This wrapper is the single choke point that makes
-# a plain anthropic.Anthropic safe for Fable 5:
+# ── Claude wrapper: one model + one effort on EVERY call ─────────────────────
+# The model id lives in config/drt_models.json + models.py (currently
+# claude-opus-4-8 — switched from claude-fable-5 on 2026-08-29 because Fable's
+# elevated cyber classifiers were refusing legitimate research topics, silently
+# no-op'ing the whole pipeline; Opus 4.8 lacks those extra classifiers). This
+# wrapper is the single choke point that normalizes the request shape for the
+# Opus-4.x / Fable-class API (all identical on these points):
 #   * injects output_config.effort (via extra_body — version-proof) unless the
 #     caller set one; override the level with DRT_EFFORT in .env
-#   * strips `temperature` (removed on Fable 5 — the API returns a 400)
-#   * never sends a `thinking` param (thinking is always on for Fable 5; an
-#     explicit config is rejected)
-#   * floors max_tokens at 4096 — on Fable 5 thinking tokens count against
-#     max_tokens, so tiny caps (16–400) written for non-thinking models would
-#     truncate before any answer text. A cap costs nothing unless used.
+#   * strips `temperature` (removed on these models — the API returns a 400)
+#   * never sends a `thinking` param (rejected / not needed here)
+#   * floors max_tokens at 4096 — cheap insurance so tiny caps (16–400) written
+#     for older models can't truncate before any answer. A cap costs nothing
+#     unless used.
 DRT_EFFORT = (os.environ.get("DRT_EFFORT") or "medium").strip().lower()
 _MAX_TOKENS_FLOOR = 4096
 
@@ -233,7 +235,7 @@ class _ClaudeMessages:
 
 
 class ClaudeClient:
-    """Drop-in for anthropic.Anthropic with the Fable-5 request shape enforced."""
+    """Drop-in for anthropic.Anthropic with the house request shape enforced."""
 
     def __init__(self, api_key=None):
         import anthropic
@@ -245,7 +247,7 @@ def make_client(provider="claude", api_key=None, log=None, base_url=None):
     """Return an AI client for the chosen provider.
 
     local  → LMStudioClient (raises LocalLLMUnavailable if LM Studio is down).
-    claude → ClaudeClient (Fable 5 + high effort enforced), or None when no
+    claude → ClaudeClient (house model + effort enforced), or None when no
              api_key (callers guard on `if client`).
     """
     if is_local(provider):

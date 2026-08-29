@@ -14,7 +14,7 @@ the model id.
   - synthesize : the cited report (Pass B) — THE deliverable
 
 Override any role in  config/drt_models.json  (edit + restart the server to apply):
-    { "models": { "synthesize": "claude-fable-5", ... } }
+    { "models": { "synthesize": "claude-opus-4-8", ... } }
 Unknown roles / blank values are ignored (fall back to the defaults below).
 """
 from __future__ import annotations
@@ -23,11 +23,11 @@ import json
 import os
 
 _DEFAULT_MODELS = {
-    "extract":    "claude-fable-5",
-    "search":     "claude-fable-5",
-    "route":      "claude-fable-5",
-    "plan":       "claude-fable-5",
-    "synthesize": "claude-fable-5",
+    "extract":    "claude-opus-4-8",
+    "search":     "claude-opus-4-8",
+    "route":      "claude-opus-4-8",
+    "plan":       "claude-opus-4-8",
+    "synthesize": "claude-opus-4-8",
 }
 
 _CONFIG_PATH = os.path.join(
