@@ -58,8 +58,6 @@ def _load_dotenv():
 
 _load_dotenv()
 
-# Access gate: trust the shared, apex-scoped auth cookie the hub mints at login.
-# No valid cookie → page requests redirect to the home page; API requests get 401.
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 HOME_URL = (os.environ.get("HOME_URL", "").strip()
             or os.environ.get("HUB_URL", "http://127.0.0.1:5050/").strip())
@@ -80,11 +78,11 @@ def _headers(resp):
     return resp
 
 
-SESS_TTL = 8 * 3600     # tool session granted after a hub handshake (8 hours)
+# ── UI (served from disk on every request) ───────────────────────────────────
+SESS_TTL = 8 * 3600
 
 
 def _verify(purpose, tok):
-    """Verify an HMAC token '<exp>.<sig>' for the given purpose (scheme shared with the hub)."""
     try:
         exp_s, sig = (tok or "").split(".", 1)
         exp = int(exp_s)
@@ -103,16 +101,11 @@ def _make_sess():
 
 
 def _authed():
-    """Authorized ONLY via a host-only session cookie established by a hub SSO handshake.
-    The shared apex ci_auth cookie is deliberately NOT trusted here: it travels to this
-    subdomain on direct visits too, so honoring it would let people bypass the hub."""
     return _verify("sess", request.cookies.get("ci_sess", ""))
 
 
 @app.before_request
 def _access_gate():
-    # Entry must come THROUGH the hub: it hands us a short-lived ?t= token we swap for a
-    # host session cookie. No token and no session → bounce to the hub. /api/health open.
     if not GATE_ON or request.method == "OPTIONS":
         return
     p = request.path
@@ -124,7 +117,7 @@ def _access_gate():
         rest.pop("t", None)
         clean = p + ("?" + urlencode(rest) if rest else "")
         resp = redirect(clean, code=302)
-        resp.set_cookie("ci_sess", _make_sess(), max_age=None,   # session cookie (host-only)
+        resp.set_cookie("ci_sess", _make_sess(), max_age=None,
                         httponly=True, secure=True, samesite="Lax")
         return resp
     if _authed():
@@ -134,10 +127,8 @@ def _access_gate():
     return redirect(HOME_URL, code=302)
 
 
-# ── UI (served from disk on every request) ───────────────────────────────────
-# Back-link target: prefer HUB_URL, else the shared HOME_URL (the apex home page).
+# ── UI (served from disk on every request) ──────────────────────────────
 _HUB_URL = os.environ.get("HUB_URL", "").strip() or HOME_URL
-# Add a scheme if missing (a scheme-less href would be treated as a relative path).
 if _HUB_URL and not re.match(r"^https?://", _HUB_URL, re.I):
     _HUB_URL = "https://" + _HUB_URL
 
@@ -166,7 +157,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.opus"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.stop"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -217,9 +208,6 @@ def restart_endpoint():
 
 
 # ── Save a generated report (.docx) to disk + open it in Word ────────────────
-# Where "Save & open in Word" writes .docx files. Configurable via DRT_REPORTS_DIR;
-# defaults to a folder beside the app so it is cross-platform. On Render's ephemeral
-# filesystem this still works for the session — the UI also offers a direct download.
 _REPORTS_DIR = os.environ.get("DRT_REPORTS_DIR", os.path.join(_ROOT, "reports"))
 _FN_STOPWORDS = {"the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "what",
                  "is", "are", "how", "who", "whom", "does", "do", "did", "about", "any",
@@ -606,6 +594,7 @@ def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
 DR_STAGES = ["stage1", "stage2", "stage3", "stage4", "synthesize", "report"]
 _DR_EVENTS = {}     # job_id -> threading.Event (for batched Stage-4 credential prompt)
 _DR_SKIP = {}       # job_id -> threading.Event (user "skip this stage" signal)
+_DR_STOP = {}       # job_id -> threading.Event (user "STOP the whole run" signal)
 _DR_SOURCES_PATH = os.path.join(_ROOT, "config", "drt_sources.json")
 
 _MEMO_WORD_CAP = 6000
@@ -801,6 +790,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
     job = _JOBS[job_id]
     ev = _DR_EVENTS[job_id]
     skip_ev = _DR_SKIP[job_id]
+    stop_ev = _DR_STOP[job_id]
 
     def prog(stage, pct, message):
         with _JOBS_LOCK:
@@ -841,7 +831,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     job["error"] = str(e); job["done"] = True
                 return
         else:
-            client = make_client("claude", api_key)     # house model + effort enforced
+            client = make_client("claude", api_key)     # Fable 5 + standard effort enforced
 
         # ── Uploaded documents: extract → parse (done at POST) → ANALYZE here.
         # Each file is distilled against the question (facts, entities, open questions,
@@ -878,7 +868,15 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                            progress=prog, log=log_fn,
                            request_credentials=request_credentials, skip_event=skip_ev,
                            channel_overrides=channel_overrides, client=client, provider=provider,
-                           deadline=run_deadline - _b["reserve"])
+                           deadline=run_deadline - _b["reserve"], stop_event=stop_ev)
+            # User pressed STOP and chose "start a new query" → discard, no report.
+            if stop_ev.is_set() and (job.get("stop_mode") == "abort"):
+                with _JOBS_LOCK:
+                    job["aborted"] = True; job["message"] = "Stopped — discarded."
+                    job["done"] = True
+                return
+            if stop_ev.is_set():
+                log_fn("[stop] assembling report from what was gathered before stop…")
             if client and (h.items or doc_context):
                 try:
                     prog("synthesize", None, "Synthesizing the report…")
@@ -890,6 +888,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     h.category = category
                     extra = DEEPEN_ROUNDS.get(depth, 1)
                     for rnd in range(1, extra + 1):
+                        if stop_ev.is_set():
+                            break     # user stopped — no extra gathering, just synthesize
                         if skip_ev.is_set():
                             skip_ev.clear(); break
                         if _time.time() > run_deadline - 75:
@@ -1044,6 +1044,7 @@ def deep_research_start():
             }
         _DR_EVENTS[job_id] = threading.Event()
         _DR_SKIP[job_id] = threading.Event()
+        _DR_STOP[job_id] = threading.Event()
         threading.Thread(target=_ody_depth_worker,
                          args=(job_id, query, clarifications, doc_context,
                                channel_overrides, provider, doc_parts),
@@ -1060,6 +1061,7 @@ def deep_research_start():
         }
     _DR_EVENTS[job_id] = threading.Event()
     _DR_SKIP[job_id] = threading.Event()
+    _DR_STOP[job_id] = threading.Event()
     threading.Thread(target=_dr_worker,
                      args=(job_id, query, depth, clarifications, doc_context, channel_overrides,
                            provider, doc_parts),
@@ -1085,12 +1087,14 @@ def deep_research_status():
             "events": [e for e in (job.get("events") or []) if e[0] > after],
             "eseq": job.get("eseq", 0),
         }
+        payload["aborted"] = bool(job.get("aborted"))
         if job["done"] and not job["error"]:
             payload["result"] = job["result"]
         if job["done"]:
             _JOBS.pop(job_id, None)
             _DR_EVENTS.pop(job_id, None)
             _DR_SKIP.pop(job_id, None)
+            _DR_STOP.pop(job_id, None)
     return jsonify(payload)
 
 
@@ -1104,6 +1108,35 @@ def deep_research_skip_stage():
     if ev:
         ev.set()
     return jsonify({"ok": True})
+
+
+@app.route("/api/deep_research/stop", methods=["POST", "OPTIONS"])
+def deep_research_stop():
+    """STOP the whole run. Body/query `mode`:
+      • 'assemble' (default) — halt gathering, synthesize a report from what's harvested.
+      • 'abort' — halt gathering and discard (no report; the UI returns to a new query).
+    Also unblocks a Stage-4 credential wait so the worker doesn't sit for 10 min."""
+    if request.method == "OPTIONS":
+        return "", 204
+    job_id = request.args.get("job", "") or (request.form.get("job") or "")
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or request.args.get("mode") or "assemble").strip().lower()
+    if mode not in ("assemble", "abort"):
+        mode = "assemble"
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is not None:
+            job["stop_mode"] = mode
+    ev = _DR_STOP.get(job_id)
+    if ev:
+        ev.set()
+    skip = _DR_SKIP.get(job_id)     # break the current stage promptly too
+    if skip:
+        skip.set()
+    cred = _DR_EVENTS.get(job_id)   # unblock a pending Stage-4 credential wait
+    if cred:
+        cred.set()
+    return jsonify({"ok": True, "mode": mode})
 
 
 @app.route("/api/deep_research/credentials", methods=["POST", "OPTIONS"])
@@ -1582,8 +1615,6 @@ def _port_already_serving(port: int) -> bool:
 
 
 if __name__ == "__main__":
-    # HOST: bind 0.0.0.0 by default so it works in containers/Render; the loopback
-    # duplicate-guard still catches a second local instance on the same port.
     host = os.environ.get("HOST", "0.0.0.0")
     if _port_already_serving(PORT):
         print(f"dr_server: already serving on port {PORT} — refusing to start a duplicate.")

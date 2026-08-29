@@ -250,6 +250,22 @@
     }
     .dr-skip-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
     .dr-skip-note { margin-top: 16px; font-size: 12px; color: var(--text-muted); }
+    /* stop control + two-choice panel */
+    .dr-run-controls { margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .dr-run-controls .dr-skip-btn { margin-top: 0; }
+    .dr-stop-btn {
+      padding: 8px 18px; border-radius: 8px; background: rgba(255,107,107,.12);
+      color: #ff8f8f; border: 1px solid #7a2e2e; font-family: inherit; font-size: 12.5px;
+      cursor: pointer; transition: border-color .15s, color .15s, background .15s;
+    }
+    .dr-stop-btn:hover { border-color: #ff6b6b; color: #ffb3b3; background: rgba(255,107,107,.2); }
+    .dr-stop-panel {
+      margin-top: 18px; padding: 16px 18px; border-radius: 12px;
+      background: var(--bg-surface); border: 1px solid var(--border-mid);
+    }
+    .dr-stop-q { font-size: 13.5px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+    .dr-stop-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .dr-stop-note { margin-top: 16px; font-size: 12.5px; color: var(--ws-color, var(--admin-color)); }
     /* refine box */
     .dr-refine-box { margin-top: 26px; padding: 16px 18px; border-radius: 12px; background: var(--bg-surface); border: 1px solid var(--border-dim); }
     .dr-refine-head { font-size: 14px; font-weight: 600; color: var(--text-primary); }
@@ -676,6 +692,7 @@ function _actAfter(owner) {
     _dr.credShown = false;
     _dr.credInputs = {};
     _dr.skipReqStage = null;
+    _dr.stopPrompt = false; _dr.stopChoice = false;
     _dr.deeperOpen = false;
     _dr.deeperFiles = [];
     _dr.deeperQuery = '';
@@ -1498,6 +1515,7 @@ function _actAfter(owner) {
   async function drStartJob(clarifications, extra) {
     const myGen = _dr.gen;
     _dr.credShown = false; _dr.credInputs = {}; _dr.skipReqStage = null;
+    _dr.stopPrompt = false; _dr.stopChoice = false;
     const q = (_dr.query || '').trim();
     const main = document.getElementById('ws-main-inner');
 
@@ -1548,10 +1566,13 @@ function _actAfter(owner) {
       if (myGen !== _dr.gen) return;
       actIngest(jobId, st);
       if (st.error) { _dr.abort = null; _drErrorNote(st.error); return; }
+      if (st.done && st.aborted) { _dr.abort = null; return; }   // user discarded — form already shown
       if (st.done)  { _dr.abort = null; _dr.data = st.result; renderContent(activeTool); return; }
+      // Stash the latest render args so the Stop panel can redraw from them.
+      _dr._stages = stages; _dr._cur = st.stage; _dr._pct = st.pct; _dr._msg = st.message; _dr._t0 = t0;
       const el = document.getElementById('ws-main-inner');
       if (!el) continue;
-      if (st.awaiting_credentials && st.awaiting_credentials.length) {
+      if (st.awaiting_credentials && st.awaiting_credentials.length && !_dr.stopPrompt && !_dr.stopChoice) {
         if (!_dr.credShown) {
           _dr.credShown = true;
           _dr.credInputs = {};
@@ -1559,6 +1580,8 @@ function _actAfter(owner) {
         }
       } else {
         _dr.credShown = false;
+        // _drProgressHtml reads _dr.stopPrompt/stopChoice, so a live poll re-render
+        // preserves the Stop choice panel rather than clobbering it.
         el.innerHTML = _drShell(_drProgressHtml(stages, st.stage, st.pct, st.message, t0));
       }
     }
@@ -1652,13 +1675,33 @@ function _actAfter(owner) {
     const skipBtn = canSkip
       ? `<button class="dr-skip-btn" onclick="drSkipStage('${cur}')">Skip this stage →</button>`
       : (_dr.skipReqStage === cur ? `<div class="dr-skip-note">Wrapping up this stage…</div>` : '');
+    // Stop control: once pressed, the two-choice panel replaces the buttons; while
+    // assembling-after-stop it shows a note. Not offered during final synthesis/report.
+    const inGather = !['synthesize','report'].includes(cur);
+    let controls;
+    if (_dr.stopChoice) {
+      controls = `<div class="dr-stop-note">Stopped — assembling the report from what was gathered…</div>`;
+    } else if (_dr.stopPrompt) {
+      controls = `
+        <div class="dr-stop-panel">
+          <div class="dr-stop-q">Stopped. What next?</div>
+          <div class="dr-stop-actions">
+            <button class="dr-run-btn" onclick="drStopChoose('assemble')">Assemble report from what's gathered →</button>
+            <button class="dr-run-btn dr-run-secondary" onclick="drStopChoose('abort')">Discard &amp; start a new query</button>
+          </div>
+        </div>`;
+    } else {
+      const stopBtn = inGather
+        ? `<button class="dr-stop-btn" onclick="drStopRun()">⏹ Stop</button>` : '';
+      controls = `<div class="dr-run-controls">${stopBtn}${skipBtn}</div>`;
+    }
     return `
       <div class="mn-progress">
         <div class="mn-progress-title">Researching…</div>
         <div class="mn-stages">${rows}</div>
         <div class="mn-bar">${bar}</div>
         <div class="mn-elapsed">elapsed ${elapsed}</div>
-        ${skipBtn}
+        ${controls}
       </div>`;
   }
   async function drSkipStage(stage) {
@@ -1670,6 +1713,33 @@ function _actAfter(owner) {
     try {
       await fetch(`${PERF_SERVER}/api/deep_research/skip_stage?job=${_dr.jobId}`, { method:'POST' });
     } catch (_) {}
+  }
+  // Stop pressed → show the two-choice panel (client-side; nothing sent to the
+  // server until the user picks — so the run keeps going until they decide).
+  function drStopRun() {
+    if (!_dr.jobId) return;
+    _dr.stopPrompt = true;
+    const el = document.getElementById('ws-main-inner');
+    if (el) el.innerHTML = _drShell(_drProgressHtml(_dr._stages || DR_STAGES, _dr._cur || 'stage2', _dr._pct, _dr._msg || '', _dr._t0 || Date.now()));
+  }
+  async function drStopChoose(mode) {
+    if (!_dr.jobId) return;
+    if (mode === 'abort') {
+      // Discard: tell the worker to stop + drop, cancel polling, return to a fresh form.
+      try { await fetch(`${PERF_SERVER}/api/deep_research/stop?job=${_dr.jobId}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ mode:'abort' }) }); } catch (_) {}
+      _dr.gen++;                        // invalidate the in-flight poll loop
+      drClear();                        // reset to the query form
+      return;
+    }
+    // Assemble: stop gathering, let the worker synthesize the partial harvest.
+    _dr.stopPrompt = false; _dr.stopChoice = true;
+    const el = document.getElementById('ws-main-inner');
+    if (el) el.innerHTML = _drShell(_drProgressHtml(_dr._stages || DR_STAGES, 'synthesize', null, 'Assembling…', _dr._t0 || Date.now()));
+    try { await fetch(`${PERF_SERVER}/api/deep_research/stop?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ mode:'assemble' }) }); } catch (_) {}
   }
 
   /* ════════════════════════════════════════════════════════════════════

@@ -420,7 +420,8 @@ def _page_links_section(links, page_url, seen_urls, limit: int = 20) -> str:
 # ── one browser stage (shared loop) ───────────────────────────
 def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, task,
                        tools, cap, progress, log, notes, skip_event=None, question="",
-                       sources=None, pool=None, deadline=None, hard_deadline=None):
+                       sources=None, pool=None, deadline=None, hard_deadline=None,
+                       stop_event=None):
     # Soft stage allocation (grows via request_extension) vs. the hard global pool.
     # No pool passed → private pool equal to the allocation (fixed-cap behavior).
     # `deadline` = this stage's soft time share; `hard_deadline` = the run's gathering
@@ -631,6 +632,12 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
     _trace(f"\n{'-' * 64}\n### STAGE {stage_name} — task: {task[:160].strip()}")
     messages = [{"role": "user", "content": task}]
     for _turn in range(cap.get("max_turns", 40)):
+        # User pressed STOP → halt the whole run here (do NOT clear — the signal is
+        # pipeline-level, so every later stage is skipped too). Harvest is preserved.
+        if stop_event is not None and stop_event.is_set():
+            notes.append(f"[{stage_name}] stopped by user.")
+            log(f"[stop] {stage_name}: halted by user — preserving harvest")
+            break
         # User asked to end this stage early → stop, keep what's harvested, roll forward.
         if skip_event is not None and skip_event.is_set():
             skip_event.clear()
@@ -986,7 +993,7 @@ def _listing(items) -> str:
 
 # ── orchestrator ──────────────────────────────────────────────
 def run_local_baseline(browser, client, query, clarifications="", depth="standard",
-                       log=None) -> dict:
+                       log=None, stop_event=None) -> dict:
     """Stage 1 for ALL providers: the broad baseline browser sweep. The model generates
     a few BROAD queries, runs them through the browser search engines (real Chrome —
     never a sandboxed/server-side search agent), collects the surfaced URLs, and writes
@@ -1038,6 +1045,9 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
         blocked = []
     seen, pool = set(), []
     for i, q in enumerate(queries):
+        if stop_event is not None and stop_event.is_set():
+            log("[stop] baseline sweep halted by user")
+            break
         engine = "brave" if (i % 2) else "duckduckgo"
         try:
             results = browser.search(engine, q, limit=8)
@@ -1092,10 +1102,14 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                browser: DRTBrowser | None = None, log=None, progress=None,
                request_credentials=None, vault=None, skip_event=None,
                channel_overrides=None, client=None, provider="claude",
-               deadline=None) -> HarvestResult:
+               deadline=None, stop_event=None) -> HarvestResult:
     """Run the deterministic 4-stage pipeline. Returns a HarvestResult.
 
     progress(stage, pct, msg): UI hook (stages: stage1..stage4).
+    stop_event: a threading.Event the job layer sets when the user presses STOP —
+        halts gathering wherever it is and returns the PARTIAL harvest (the worker
+        then either synthesizes it or discards it, per the user's choice). Unlike
+        skip_event it is pipeline-level: once set, all remaining stages are skipped.
     request_credentials(candidates) -> {domain: {username,password,login_url} | None}:
         provided by the job layer; collects logins in-app (batched). None → Stage 4 skipped.
     skip_event: a threading.Event the job layer sets to end the CURRENT browser stage early
@@ -1173,10 +1187,13 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
     def _guarded_stage(stage_name, **kw):
         """Run one browser stage; a stage-level failure (e.g. a transient API
         connection error) is logged and the pipeline rolls forward rather than
-        losing the whole run — Stage 1's brief and any prior harvest survive."""
+        losing the whole run — Stage 1's brief and any prior harvest survive.
+        Once the user has pressed STOP, later stages are no-ops."""
+        if stop_event is not None and stop_event.is_set():
+            return
         try:
             _run_browser_stage(client, br, result, seen_urls,
-                               stage_name=stage_name, **kw)
+                               stage_name=stage_name, stop_event=stop_event, **kw)
         except Exception as e:  # noqa: BLE001
             msg = f"[{stage_name}] aborted: {type(e).__name__}: {e}"
             notes.append(msg)
@@ -1190,7 +1207,8 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         api_ch = plan.get("api_search", {})
         if api_ch.get("use", True) and api_ch.get("weight", 0.34) > 0:
             progress("stage1", None, f"{plan_msg} — broad baseline browser sweep…")
-            s1 = run_local_baseline(br, client, query, clarifications, depth, log=log)
+            s1 = run_local_baseline(br, client, query, clarifications, depth, log=log,
+                                    stop_event=stop_event)
         else:
             log("[plan] Stage 1 (baseline sweep) de-prioritised for this question; skipping")
             s1 = {"findings_md": "", "sources": [], "used": False}
