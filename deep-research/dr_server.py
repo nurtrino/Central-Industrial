@@ -157,7 +157,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.noneural"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.githubapi"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])

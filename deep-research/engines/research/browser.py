@@ -489,14 +489,36 @@ class DRTBrowser:
         return out
 
     def _github_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
-        """GitHub's own repo search via its GET results URL — delegate to the JS-aware
-        generic scraper (the proven path); [] on throttle falls back to the site: engine."""
-        res = self.site_native_search("https://github.com/search?q={q}&type=repositories",
-                                      query, limit)
-        for r in res:
-            r.engine = "github"
-        self._log(f"[search] github q={query!r} -> {len(res)} results")
-        return res
+        """GitHub public repo search via the REST API — anonymous (no login needed for
+        public search), returns real repos as clean JSON. The web /search page is a React
+        SPA whose HTML scrape yields nav tabs/footer junk, so we avoid it entirely. On a
+        non-200 (anon search is ~10 req/min) we return [] so the caller falls back to site:."""
+        import requests
+        from urllib.parse import quote_plus
+        out: list[SearchResult] = []
+        try:
+            r = requests.get(
+                f"https://api.github.com/search/repositories?q={quote_plus(query)}"
+                f"&sort=stars&per_page={max(limit, 5)}",
+                headers={"Accept": "application/vnd.github+json",
+                         "User-Agent": "deep-research-tool"},
+                timeout=12)
+            if r.status_code == 200:
+                for it in (r.json().get("items") or [])[:limit]:
+                    name = it.get("full_name") or ""
+                    desc = (it.get("description") or "").strip()
+                    stars = it.get("stargazers_count")
+                    label = name + (f" — {desc}" if desc else "")
+                    if isinstance(stars, int):
+                        label += f"  (★{stars:,})"
+                    out.append(SearchResult(title=label[:180],
+                                            url=it.get("html_url") or "", engine="github"))
+            else:
+                self._log(f"[search] github api HTTP {r.status_code} (rate-limited?) -> site: fallback")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] github api ERROR ({type(e).__name__})")
+        self._log(f"[search] github q={query!r} -> {len(out)} results")
+        return out
 
     def _reddit_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
         """old.reddit.com/search is server-rendered — no JS gymnastics."""
