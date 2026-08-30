@@ -1227,7 +1227,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         web_ch = plan.get("web_engines", {})
         use_sites = site_ch.get("use", True)        # hard on/off (planner skip OR user toggle)
         use_engines = web_ch.get("use", True)
-        use_neural = bool(plan.get("neural_search", {}).get("use"))   # own channel, already Exa-gated
+        use_neural = False   # neural/Exa search removed as an option (2026-08-29)
         if use_engines or use_sites or use_neural:
             if use_neural:
                 log("[plan] neural search (Exa) enabled for Stage 2")
@@ -1373,8 +1373,7 @@ def run_gap_round(client, browser, harvest, gaps, governance=None, sources=None,
     # through synthesize) — sized with one extension worth of headroom so a hot trail
     # can still request_extension once. Modest by design.
     pool = {"searches": cap["searches"] + 4, "pages": cap["pages"] + 6}
-    # Honor the run's neural setting (set on the harvest's plan), still gated on Exa availability.
-    use_neural = bool(getattr(harvest, "plan", {}).get("neural_search", {}).get("use")) and exa_enabled()
+    use_neural = False   # neural/Exa search removed as an option (2026-08-29)
     browser.login_handler = _record_skip_handler(harvest, log)
     gap_text = "\n".join(gaps)
     seed_for_browser = _select_relevant_seed_sources(client, gap_text, "", sources, log)

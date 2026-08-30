@@ -696,7 +696,7 @@ function _actAfter(owner) {
                 extractOpen: false, extractUrl: '', extractMode: 'scrape', extractLimit: 25,
                 extractBusy: false, extractResult: null, extractError: null,
                 extractMsg: '', extractPct: null, _extractGen: 0,
-                channels: { api_search: true, web_engines: true, site_queries: true, neural_search: false },
+                channels: { api_search: true, web_engines: true, site_queries: true },
                 prefs: { open: false, loaded: false, prompt: '', name: '', status: '' } };
 
   function drReset() {
@@ -915,7 +915,6 @@ function _actAfter(owner) {
       { k:'api_search',    label:'Baseline sweep',     sub:'fast broad browser search · no page opens' },
       { k:'web_engines',   label:'Open web engines',   sub:'DuckDuckGo · Brave · Google' },
       { k:'site_queries',  label:'Curated sites',      sub:'your forum / blog source list + logins' },
-      { k:'neural_search', label:'Neural search (Exa)', sub:'semantic discovery + find-similar · needs EXA_API_KEY + DRT_EXA=1' },
     ];
     const rows = items.map(it => `
       <label class="dr-toggle ${_dr.channels[it.k] ? 'on' : 'off'}">
