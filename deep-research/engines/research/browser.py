@@ -155,6 +155,44 @@ _PLATFORM_HINTS = {
     "github.com": "github",
 }
 
+# Chrome major version to advertise in the stealth UA. Bump occasionally; a slightly-off
+# version is far less of a tell than the literal string "HeadlessChrome".
+_STEALTH_CHROME_VER = "131.0.0.0"
+
+
+def _stealth_ua() -> str:
+    """A normal, OS-matched Chrome User-Agent (never 'HeadlessChrome'). Matching the host OS
+    keeps it consistent with navigator.platform, which naive UA spoofing gets wrong."""
+    import platform as _p
+    sysname = _p.system()
+    if sysname == "Windows":
+        ospart = "Windows NT 10.0; Win64; x64"
+    elif sysname == "Darwin":
+        ospart = "Macintosh; Intel Mac OS X 10_15_7"
+    else:
+        ospart = "X11; Linux x86_64"
+    return (f"Mozilla/5.0 ({ospart}) AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{_STEALTH_CHROME_VER} Safari/537.36")
+
+
+# Injected before any page script runs — neutralizes the cheapest, most-checked automation
+# fingerprints. Not a full anti-detect suite; enough to pass simple headless gates.
+_STEALTH_JS = """
+try {
+  Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+  if (!window.chrome) { window.chrome = { runtime: {} }; }
+  Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+  Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+  const _q = window.navigator.permissions && window.navigator.permissions.query;
+  if (_q) {
+    window.navigator.permissions.query = (p) =>
+      (p && p.name === 'notifications')
+        ? Promise.resolve({state: (window.Notification && Notification.permission) || 'default'})
+        : _q(p);
+  }
+} catch (e) {}
+"""
+
 
 class DRTBrowser:
     """Owns one persistent, visible Chrome context and the tabs inside it."""
@@ -198,12 +236,24 @@ class DRTBrowser:
             viewport={"width": 1380, "height": 900},
             args=args,
         )
+        # Stealth: headless bundled Chromium advertises a "HeadlessChrome" User-Agent that
+        # many forums (XenForo etc.) bot-block. Present a normal, OS-matched Chrome UA so a
+        # logged-OUT public search works from the hosted (headless) instance the same as it
+        # does locally. Headed real Chrome already has a genuine UA — leave it alone.
+        if not self.headed:
+            launch_kwargs["user_agent"] = _stealth_ua()
         # Use the locally installed Chrome only when a channel is configured;
         # on Render DRT_BROWSER_CHANNEL="" → Playwright's bundled Chromium.
         if _BROWSER_CHANNEL:
             launch_kwargs["channel"] = _BROWSER_CHANNEL
         self._ctx = self._pw.chromium.launch_persistent_context(
             self.profile_dir, **launch_kwargs)
+        # Blunt the most common automation tells (navigator.webdriver, empty plugins, the
+        # missing window.chrome object). Applied to every page in the context, headed or not.
+        try:
+            self._ctx.add_init_script(_STEALTH_JS)
+        except Exception:
+            pass
         # Tabs the agent opens are pages on this context.
         if not self._ctx.pages:
             self._ctx.new_page()
