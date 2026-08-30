@@ -10,14 +10,14 @@
     {
       "description": "tech",
       "domain": "news.ycombinator.com",
-      "enabled": false,
+      "enabled": true,
       "name": "hacker news",
       "type": "forum"
     },
     {
       "description": "tech",
       "domain": "avforums.com",
-      "enabled": false,
+      "enabled": true,
       "name": "avforum",
       "type": "forum"
     },
@@ -31,35 +31,35 @@
     {
       "description": "business",
       "domain": "techcrunch.com",
-      "enabled": false,
+      "enabled": true,
       "name": "techcrunch",
       "type": "news"
     },
     {
       "description": "tech",
       "domain": "forums.tomshardware.com",
-      "enabled": false,
+      "enabled": true,
       "name": "tom's hardware",
       "type": "forum"
     },
     {
       "description": "tech",
       "domain": "linustechtips.com",
-      "enabled": false,
+      "enabled": true,
       "name": "linus tech tips",
       "type": "forum"
     },
     {
       "description": "tech",
       "domain": "wilderssecurity.com",
-      "enabled": false,
+      "enabled": true,
       "name": "wilders security",
       "type": "forum"
     },
     {
       "description": "tech",
       "domain": "rivianforums.com",
-      "enabled": false,
+      "enabled": true,
       "name": "rivian forums",
       "type": "forum"
     },

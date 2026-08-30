@@ -119,6 +119,27 @@ class PageContent:
     error: str = ""
 
 
+# Cookie names that specifically mean "this visitor is AUTHENTICATED" on common
+# forum/platform stacks. Deliberately excludes guest/session cookies (xf_session,
+# bare *session*, analytics) — those exist for logged-out visitors too, and counting
+# them was the source of the false "already authenticated" verdict.
+_AUTH_COOKIE_NAMES = {
+    "xf_user",                    # XenForo (avforums, rivian, wilders, wiim)
+    "user_session", "logged_in", "dotcom_user",  # GitHub
+    "reddit_session", "token_v2",  # Reddit
+    "auth_token", "twid",          # X / Twitter
+    "flarum_remember",             # Flarum
+    "sapu",                        # Seeking Alpha
+    "li_at",                       # LinkedIn
+    "bb_userid", "vbulletin_user",  # vBulletin
+}
+# Substrings that reliably indicate an authenticated cookie across stacks. Kept narrow
+# on purpose — no bare "session"/"sessionid" (guests have those). Under-reporting a
+# login is safe (falls back to public search); over-reporting is the bug we're fixing.
+_AUTH_COOKIE_PATTERNS = ("_user", "auth_token", "remember_", "logged_in", "loggedin",
+                         "wordpress_logged_in", "phpbb3_sid")
+
+
 class DRTBrowser:
     """Owns one persistent, visible Chrome context and the tabs inside it."""
 
@@ -299,15 +320,54 @@ class DRTBrowser:
                 pass
         return out
 
+    # ── login-state detection ─────────────────────────────────
+    def _domain_cookies(self, domain: str) -> list:
+        try:
+            cks = self._ctx.cookies()
+        except Exception:
+            return []
+        d = domain.lstrip(".").lower()
+        out = []
+        for c in cks:
+            cd = (c.get("domain") or "").lstrip(".").lower()
+            if cd == d or d.endswith("." + cd) or cd.endswith("." + d):
+                out.append(c)
+        return out
+
+    def _has_auth_cookie(self, domain: str) -> bool:
+        """True only if a STRONG 'you are authenticated' cookie exists for this domain.
+        Guest/visitor cookies (xf_session, generic *session*, analytics) deliberately do
+        NOT count — treating those as 'logged in' is the exact false-positive we fix here.
+        Biased to UNDER-report: a missed login just falls back to public search + reactive
+        login, whereas a false 'logged in' silently harvests public content while claiming
+        success."""
+        for c in self._domain_cookies(domain):
+            name = (c.get("name") or "")
+            low = name.lower()
+            if not (c.get("value") or "").strip():
+                continue
+            if name in _AUTH_COOKIE_NAMES or any(p in low for p in _AUTH_COOKIE_PATTERNS):
+                return True
+        return False
+
     # ── proactive login ───────────────────────────────────────
     def ensure_logged_in(self, domain: str, creds: dict) -> tuple[bool, str]:
-        """Proactively log into `domain` with stored creds BEFORE searching it (rather than
-        waiting to hit a wall). Returns (ok, detail). Marks the domain auth-handled so open()
-        won't re-attempt. If the login page shows no password field we treat the persistent
-        profile as already authenticated (success) rather than a failure."""
+        """Establish a logged-in session for `domain` before searching it. Returns
+        (logged_in, detail). `logged_in` is True ONLY when an authenticated session is
+        actually verified (a strong auth cookie, or an autofill that cleared the login
+        form). A benign 'not logged in — public content only' is a soft state, NOT a
+        failure: many forums are fully searchable logged out, and a real wall later
+        still triggers the reactive login handler (we only mark the domain auth-handled
+        on a confirmed login, so failures don't suppress that retry)."""
         from .login import try_autofill
-        if not creds:
-            return False, "no stored credentials"
+        creds = creds or {}
+        # 1) Already have a live authenticated session in the persistent profile?
+        if self._has_auth_cookie(domain):
+            self._auth_handled.add(domain)
+            return True, "already logged in (session in profile)"
+        # 2) Nothing to log in with → proceed logged out; a wall (if any) handled later.
+        if not (creds.get("username") or "").strip():
+            return False, "not logged in — no stored credentials (public content only)"
         page = self.new_tab()
         try:
             target = (creds.get("login_url") or "").strip() or f"https://{domain}/"
@@ -315,19 +375,36 @@ class DRTBrowser:
                 page.goto(target, wait_until="domcontentloaded", timeout=30000)
                 self._human_pause()
             except Exception as e:  # noqa: BLE001
-                self._auth_handled.add(domain)
                 return False, f"could not open login page ({type(e).__name__})"
-            self._auth_handled.add(domain)
             try:
                 has_pw = page.locator("input[type=password]").count() > 0
             except Exception:
-                has_pw = True
+                has_pw = False
             if not has_pw:
-                # No login form on the login URL → already signed in via the persistent profile.
-                return True, "already authenticated (persistent profile)"
-            ok = try_autofill(page, creds, self._log)
-            return (True, "logged in via stored credentials") if ok else \
-                   (False, "stored login did not go through (wrong password, 2FA, or captcha)")
+                # No form here and no auth cookie → we are NOT authenticated. Don't pretend.
+                # (Usually means no login_url is configured, so the form was never reached.)
+                return False, "not logged in — no login form at login URL (public content only)"
+            try_autofill(page, creds, self._log)
+            try:
+                page.wait_for_load_state("networkidle", timeout=6000)
+            except Exception:
+                pass
+            # 3) Verify: a strong auth cookie appeared …
+            if self._has_auth_cookie(domain):
+                self._auth_handled.add(domain)
+                return True, "logged in via stored credentials"
+            # … or the login form is gone and we're off the login page (sites we lack a
+            #    known cookie name for).
+            still_pw = False
+            try:
+                still_pw = page.locator("input[type=password]").count() > 0
+            except Exception:
+                pass
+            if not still_pw and "login" not in (page.url or "").lower() \
+                    and "signin" not in (page.url or "").lower():
+                self._auth_handled.add(domain)
+                return True, "logged in via stored credentials (form cleared)"
+            return False, "stored login did not establish a session (2FA, captcha, or selector mismatch)"
         finally:
             try:
                 page.close()

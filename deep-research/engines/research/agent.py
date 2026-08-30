@@ -1273,23 +1273,28 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 # ── Proactive login: use the stored credentials for every relevant credentialed
                 # site up front (not only when a wall is hit). Warn on any that fail. Sites with no
                 # stored login_url fall back to the reactive handler set below.
-                progress("stage3", None, f"Logging into credentialed sources: {', '.join(doms)}")
+                progress("stage3", None, f"Preparing credentialed sources: {', '.join(doms)}")
                 for dom in doms:
                     creds = vault.get(dom) if vault else None
-                    if not creds or not (creds.get("login_url") or "").strip():
-                        log(f"[stage3] {dom}: no stored login_url — will log in reactively if a wall appears")
-                        continue
+                    # Always check — ensure_logged_in is cheap (verifies the profile's auth
+                    # cookie first, no navigation) and honest about the outcome.
                     try:
-                        ok, detail = br.ensure_logged_in(dom, creds)
+                        ok, detail = br.ensure_logged_in(dom, creds or {})
                     except Exception as e:  # noqa: BLE001
                         ok, detail = False, f"login error: {type(e).__name__}"
                     if ok:
                         if dom not in result.logged_in:
                             result.logged_in.append(dom)
-                        log(f"[stage3] proactive login OK: {dom} ({detail})")
+                        log(f"[stage3] logged in: {dom} ({detail})")
+                    elif "public content only" in detail:
+                        # Not a failure — many forums are fully searchable logged out, and a
+                        # real wall later still triggers the reactive vault login handler.
+                        log(f"[stage3] {dom}: searching public content (not logged in) — "
+                            f"reactive login will fire on any wall")
                     else:
+                        # A genuine login attempt that couldn't complete — worth surfacing.
                         _record_login_warning(result, dom, detail)
-                        log(f"[stage3] proactive login FAILED: {dom} — {detail}")
+                        log(f"[stage3] login could not be completed: {dom} — {detail}")
                 progress("stage3", None, f"Searching credentialed sources: {', '.join(doms)}")
                 br.login_handler = _vault_handler(vault, result, log, "stage3")
                 _guarded_stage(
