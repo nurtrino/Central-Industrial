@@ -519,20 +519,22 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                 else:
                     dom = normalize_domain(inp.get("domain", "")) or \
                           (inp.get("domain") or "").strip().lower()
-                    # forum_search: prefer the site's OWN search when the source table
-                    # registered a search_url template; otherwise engine site: fallback.
-                    surl = ""
                     if name == "forum_search":
+                        # The site's OWN search — platform adapter (Discourse/XenForo/Reddit/…)
+                        # or a registered {q} template, run in the logged-in browser so it
+                        # reaches unindexed/gated threads. Falls back to the site: engine when
+                        # native search yields nothing (JS-blocked, rate-limited, exotic CMS).
                         surl = next((str(s.get("search_url") or "").strip() for s in srcs
                                      if normalize_domain(s.get("domain", "")) == dom), "")
-                    if surl and "{q}" in surl:
-                        res = br.site_native_search(surl, inp["query"], limit=10)
-                        via = f"native:{dom} {inp['query']}"
+                        res = br.native_search(dom, inp["query"], search_url=surl, limit=10)
+                        if res:
+                            via = f"native:{dom} {inp['query']}"
+                        else:
+                            res = br.site_search(inp["query"], dom, limit=10)
+                            via = f"site:{dom} {inp['query']} (native empty — engine fallback)"
                     else:
                         res = br.site_search(inp["query"], dom, limit=10)
                         via = f"site:{dom} {inp['query']}"
-                        if name == "forum_search":
-                            via += " (no native search — engine fallback)"
                     if dom and dom not in result.curated_searched:
                         result.curated_searched.append(dom)
             except Exception as e:  # noqa: BLE001

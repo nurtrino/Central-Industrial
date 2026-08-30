@@ -139,6 +139,22 @@ _AUTH_COOKIE_NAMES = {
 _AUTH_COOKIE_PATTERNS = ("_user", "auth_token", "remember_", "logged_in", "loggedin",
                          "wordpress_logged_in", "phpbb3_sid")
 
+# Forum platform per domain — drives which native-search adapter to use. Unknown domains
+# fall through to the {q} template / search-box path. Extend as the catalog grows.
+_PLATFORM_HINTS = {
+    "avforums.com": "xenforo",
+    "rivianforums.com": "xenforo",
+    "wilderssecurity.com": "xenforo",
+    "forum.wiimhome.com": "xenforo",
+    "teslamotorsclub.com": "xenforo",
+    "head-fi.org": "xenforo",
+    "audiosciencereview.com": "xenforo",
+    "forum.openwrt.org": "discourse",
+    "forum.bambulab.com": "discourse",
+    "reddit.com": "reddit",
+    "github.com": "github",
+}
+
 
 class DRTBrowser:
     """Owns one persistent, visible Chrome context and the tabs inside it."""
@@ -283,14 +299,21 @@ class DRTBrowser:
                 page.wait_for_load_state("networkidle", timeout=6000)
             except PWTimeout:
                 pass
+            # JS-aware: many forums/SPAs render results AFTER load — wait for result rows
+            # to appear (or the anchor set to settle) before reading the LIVE DOM.
+            self._wait_for_results(page)
             anchors = page.evaluate(
                 """() => {
-                    const scope = document.querySelector('article')
-                               || document.querySelector('main')
-                               || document.body;
+                    // Prefer a real results container; fall back to main/body.
+                    const sel = ['.search-results','.fps-results','#search-results',
+                                 '[data-testid="search-results"]','ol.search-results',
+                                 '.block-body','.contentRow','main','article'];
+                    let scope = null;
+                    for (const s of sel) { const el = document.querySelector(s); if (el) { scope = el; break; } }
+                    scope = scope || document.body;
                     if (!scope) return [];
                     return Array.from(scope.querySelectorAll('a[href^=http]'))
-                        .slice(0, 400)
+                        .slice(0, 500)
                         .map(a => ({text:(a.innerText||'').trim().slice(0,140), url:a.href}));
                 }"""
             ) or []
@@ -313,6 +336,319 @@ class DRTBrowser:
             self._log(f"[search] native {url[:80]} -> {len(out)} results")
         except Exception as e:  # noqa: BLE001 - native search is best-effort by design
             self._log(f"[search] native search ERROR ({type(e).__name__}: {e}) -> 0 results")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        return out
+
+    def _wait_for_results(self, page, budget_ms: int = 8000):
+        """Wait for a JS-rendered results list to appear, OR for the link set to settle.
+        Cheap poll — returns as soon as known result rows show up or the DOM stops growing."""
+        import time as _t
+        deadline = _t.time() + budget_ms / 1000.0
+        prev = -1
+        stable = 0
+        while _t.time() < deadline:
+            try:
+                found = page.evaluate(
+                    """() => {
+                        const rows = document.querySelectorAll(
+                          '.fps-result, .search-result, li.search-result, .contentRow, '
+                          + '.block-row, [data-testid="post-container"], article.search-result, '
+                          + '.search-results li, .SearchResult, div[data-testid="search-post-unit"]');
+                        const links = document.querySelectorAll('a[href]');
+                        return {rows: rows.length, links: links.length};
+                    }"""
+                ) or {"rows": 0, "links": 0}
+            except Exception:
+                found = {"rows": 0, "links": 0}
+            if found.get("rows", 0) >= 3:
+                return
+            n = found.get("links", 0)
+            stable = stable + 1 if n == prev else 0
+            prev = n
+            if stable >= 2 and n > 0:   # link set settled → JS likely done
+                return
+            _t.sleep(0.6)
+
+    # ── smart native search (platform adapters) ───────────────
+    def native_search(self, domain: str, query: str, search_url: str = "",
+                       limit: int = 10) -> list[SearchResult]:
+        """Search a site's OWN search, choosing the most reliable method for its platform:
+        Discourse → JSON API; Reddit → server-rendered old.reddit; XenForo → drive the
+        search box; else an explicit {q} template (JS-aware) or the search box. Returns []
+        on failure; callers fall back to the engine site: operator."""
+        dom = (domain or "").lstrip(".").lower()
+        try:
+            plat = self._platform_of(dom)
+            if plat == "discourse":
+                r = self._discourse_search(dom, query, limit)
+                if r:
+                    return r
+            elif plat == "reddit":
+                r = self._reddit_search(dom, query, limit)
+                if r:
+                    return r
+            elif plat == "xenforo":
+                r = self._xenforo_search(dom, query, limit)
+                if r:
+                    return r
+            elif plat == "github":
+                r = self._github_search(dom, query, limit)
+                if r:
+                    return r
+            # Explicit template (JS-aware) next, then the universal search-box driver.
+            if search_url and "{q}" in search_url:
+                r = self.site_native_search(search_url, query, limit)
+                if r:
+                    return r
+            return self._search_box(dom, query, limit)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] native_search {dom} ERROR ({type(e).__name__}: {e})")
+            return []
+
+    def _platform_of(self, domain: str) -> str:
+        """Best-effort forum-platform id from a small domain map plus generic hints."""
+        d = domain.lstrip(".").lower()
+        if d in _PLATFORM_HINTS:
+            return _PLATFORM_HINTS[d]
+        if "reddit.com" in d:
+            return "reddit"
+        return "generic"
+
+    def _discourse_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """Discourse. The /search.json API is heavily rate-limited for anonymous users
+        ('performed this action too many times'), so use the HTML full-page search and read
+        the Ember-rendered result links. (Being logged in raises the limit; where login
+        failed we still get public results here until the HTML limit bites, then the caller
+        falls back to the site: engine.)"""
+        import json as _json
+        from urllib.parse import quote_plus
+        page = self.new_tab()
+        out: list[SearchResult] = []
+        try:
+            # Try the JSON API once (clean when not rate-limited)…
+            page.goto(f"https://{domain}/search.json?q={quote_plus(query)}",
+                      wait_until="domcontentloaded", timeout=30000)
+            raw = page.evaluate("() => document.body ? document.body.innerText : ''") or ""
+            data = {}
+            try:
+                data = _json.loads(raw)
+            except Exception:
+                data = {}
+            if isinstance(data, dict) and (data.get("posts") or data.get("topics")) and not data.get("failed"):
+                topics = {t.get("id"): t for t in (data.get("topics") or [])}
+                seen = set()
+                ordered = [topics.get(p.get("topic_id")) for p in (data.get("posts") or [])]
+                ordered += (data.get("topics") or [])
+                for t in ordered:
+                    if not t or t.get("id") in seen or len(out) >= limit:
+                        continue
+                    seen.add(t.get("id"))
+                    out.append(SearchResult(title=(t.get("title") or "").strip(),
+                               url=f"https://{domain}/t/{t.get('slug','t')}/{t.get('id')}",
+                               engine="discourse"))
+                self._log(f"[search] discourse(json) {domain} q={query!r} -> {len(out)} results")
+                return out
+            # …else the HTML search page (Ember renders result rows we then read).
+            page.goto(f"https://{domain}/search?q={quote_plus(query)}",
+                      wait_until="domcontentloaded", timeout=30000)
+            self._human_pause()
+            self._wait_for_results(page)
+            try:
+                page.wait_for_timeout(1800)   # Ember renders the result list after settle
+            except Exception:
+                pass
+            anchors = page.evaluate(
+                """() => Array.from(document.querySelectorAll(
+                        '.fps-result a.search-link, .search-results a[href*="/t/"], '
+                        + '.search-results-page a[href*="/t/"], .topic-list-item a.title, '
+                        + 'a.search-link, a[href*="/t/"]'))
+                        .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))"""
+            ) or []
+            seen = set()
+            for a in anchors:
+                href = (a.get("url") or "").split("?")[0]
+                text = (a.get("text") or "").strip()
+                if "/t/" not in href or href in seen or len(text) < 8:
+                    continue
+                seen.add(href)
+                out.append(SearchResult(title=text, url=href, engine="discourse"))
+                if len(out) >= limit:
+                    break
+            self._log(f"[search] discourse(html) {domain} q={query!r} -> {len(out)} results")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] discourse {domain} ERROR ({type(e).__name__})")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        return out
+
+    def _github_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """GitHub's own repo search via its GET results URL — delegate to the JS-aware
+        generic scraper (the proven path); [] on throttle falls back to the site: engine."""
+        res = self.site_native_search("https://github.com/search?q={q}&type=repositories",
+                                      query, limit)
+        for r in res:
+            r.engine = "github"
+        self._log(f"[search] github q={query!r} -> {len(res)} results")
+        return res
+
+    def _reddit_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """old.reddit.com/search is server-rendered — no JS gymnastics."""
+        from urllib.parse import quote_plus
+        page = self.new_tab()
+        out: list[SearchResult] = []
+        try:
+            url = f"https://old.reddit.com/search?q={quote_plus(query)}&sort=relevance"
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            self._human_pause()
+            anchors = page.evaluate(
+                """() => Array.from(document.querySelectorAll('a.search-title, .search-result-link a.search-title'))
+                        .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))"""
+            ) or []
+            seen = set()
+            for a in anchors:
+                href = (a.get("url") or "").split("?")[0]
+                text = (a.get("text") or "").strip()
+                if not href.startswith("http") or href in seen or len(text) < 8:
+                    continue
+                seen.add(href)
+                out.append(SearchResult(title=text, url=href, engine="reddit"))
+                if len(out) >= limit:
+                    break
+            self._log(f"[search] reddit {domain} q={query!r} -> {len(out)} results")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] reddit {domain} ERROR ({type(e).__name__})")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        return out
+
+    def _xenforo_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """XenForo search is POST-driven; the reliable path is to type into the header
+        search box and submit, landing on a server-rendered results page."""
+        from urllib.parse import quote_plus
+        page = self.new_tab()
+        out: list[SearchResult] = []
+        try:
+            # 1) The GET quick-search renders results directly on most XenForo installs.
+            page.goto(f"https://{domain}/search/?q={quote_plus(query)}&o=relevance",
+                      wait_until="domcontentloaded", timeout=30000)
+            self._human_pause()
+            self._wait_for_results(page)
+            _extract = ("""() => Array.from(document.querySelectorAll(
+                    '.p-body-content a[href*="/threads/"], .contentRow-title a[href*="/threads/"], '
+                    + '.contentRow-title a[href*="/posts/"], .block-body a[href*="/threads/"], '
+                    + '.discussionListItem h3.title a[href*="/threads/"], '   /* XenForo 1.x */
+                    + '.titleText a[href*="/threads/"], #content a[href*="/threads/"]'))
+                    .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))""")
+            anchors = page.evaluate(_extract) or []
+            # Only if the GET produced nothing, submit via the VISIBLE keywords input
+            # (XenForo renders TWO name=keywords fields; the first is hidden).
+            if not anchors:
+                try:
+                    box = page.locator("input[name='keywords']:visible").first
+                    box.fill(query, timeout=5000)
+                    box.press("Enter")
+                    page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    self._human_pause()
+                    self._wait_for_results(page)
+                    anchors = page.evaluate(_extract) or []
+                except Exception as e:  # noqa: BLE001
+                    self._log(f"[search] xenforo {domain} box-submit failed ({type(e).__name__})")
+            # Tier 2 (XenForo 1.x / exotic skins): if the container selectors found nothing
+            # but the page clearly IS results (not the empty form), take any thread links.
+            if not anchors:
+                try:
+                    on_results = page.locator(".searchResult, .discussionListItem, .contentRow").count() > 0
+                except Exception:
+                    on_results = False
+                if on_results:
+                    anchors = page.evaluate(
+                        """() => Array.from(document.querySelectorAll('a[href*="/threads/"]'))
+                                .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))"""
+                    ) or []
+            seen = set()
+            _skip = ("/whats-new/", "/forums/", "/members/", "/search/", "/login", "/tags/",
+                     "/latest-activity", "/recent-activity")
+            for a in anchors:
+                href = (a.get("url") or "").split("#")[0]
+                text = (a.get("text") or "").strip()
+                if not href.startswith("http") or href in seen or len(text) < 10:
+                    continue
+                if any(s in href for s in _skip):
+                    continue
+                if "/threads/" not in href and "/posts/" not in href:
+                    continue
+                seen.add(href)
+                out.append(SearchResult(title=text, url=href, engine="xenforo"))
+                if len(out) >= limit:
+                    break
+            self._log(f"[search] xenforo {domain} q={query!r} -> {len(out)} results")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] xenforo {domain} ERROR ({type(e).__name__})")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        return out
+
+    def _search_box(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """Universal fallback: load the site, find its search input, type + submit, read
+        the rendered results. Works on many CMSes where no clean URL/JSON search exists."""
+        page = self.new_tab()
+        out: list[SearchResult] = []
+        try:
+            page.goto(f"https://{domain}/", wait_until="domcontentloaded", timeout=30000)
+            self._human_pause()
+            box = None
+            for sel in ("input[type='search']", "input[name='q']", "input[name='query']",
+                        "input[name='keywords']", "input[aria-label*='earch' i]",
+                        "input[placeholder*='earch' i]"):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() > 0:
+                        box = loc
+                        break
+                except Exception:
+                    continue
+            if box is None:
+                return out
+            box.fill(query, timeout=4000)
+            box.press("Enter")
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            self._wait_for_results(page)
+            base = f"https://{domain}"
+            anchors = page.evaluate(
+                """() => {
+                    const scope = document.querySelector('main')||document.querySelector('#content')||document.body;
+                    return Array.from(scope.querySelectorAll('a[href^=http]'))
+                        .slice(0,400).map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}));
+                }"""
+            ) or []
+            seen = set()
+            for a in anchors:
+                href = (a.get("url") or "").split("#")[0]
+                text = (a.get("text") or "").strip()
+                if not href.startswith("http") or href in seen or len(text) < 15:
+                    continue
+                if _JUNK_HOST.search(href) or href.rstrip("/") == base:
+                    continue
+                seen.add(href)
+                out.append(SearchResult(title=text, url=href, engine="searchbox"))
+                if len(out) >= limit:
+                    break
+            self._log(f"[search] searchbox {domain} q={query!r} -> {len(out)} results")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] searchbox {domain} ERROR ({type(e).__name__})")
         finally:
             try:
                 page.close()
