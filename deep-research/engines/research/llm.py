@@ -46,21 +46,62 @@ def is_local(provider) -> bool:
     return (provider or "claude").strip().lower() in _LOCAL_ALIASES
 
 
+def _is_embedding_model(mid: str, mtype: str = "") -> bool:
+    return "embed" in (mid or "").lower() or (mtype or "").lower().startswith("embed")
+
+
 def detect_local_model(base_url=None, timeout=6) -> str:
-    """Return the id of the model currently loaded in LM Studio (first one)."""
+    """Return the id of the LM Studio CHAT model to use — preferring one that is actually
+    LOADED in memory, not merely downloaded.
+
+    LM Studio's OpenAI-compatible /v1/models lists every *downloaded* model regardless of
+    whether it's loaded, so the old 'take the first one' logic would silently name an
+    unloaded model and lean on just-in-time loading (and could pick a different model than
+    the one you loaded). This now:
+      1. asks LM Studio's native /api/v0/models (which reports state) and returns the first
+         LOADED chat model;
+      2. if that API is reachable and shows chat models but NONE loaded, raises a clear
+         'no model loaded' error rather than guessing;
+      3. falls back to the first available chat model from /v1/models only when the
+         state-aware API is unavailable (older LM Studio);
+      4. raises LocalLLMUnavailable when LM Studio is unreachable or has no chat model.
+    """
     import requests
     base = (base_url or LMSTUDIO_URL).rstrip("/")
+    root = base[:-3] if base.endswith("/v1") else base   # strip /v1 for the native API
+
+    # 1) State-aware path: LM Studio's native REST API reports loaded/not-loaded + type.
     try:
-        r = requests.get(base + "/models", timeout=timeout)
+        r = requests.get(f"{root}/api/v0/models", timeout=timeout)
+        if r.ok:
+            models = (r.json() or {}).get("data") or []
+            chat = [m for m in models if not _is_embedding_model(m.get("id", ""), m.get("type", ""))]
+            loaded = [m for m in chat if (m.get("state") or "").lower() in ("loaded", "loading")]
+            if loaded:
+                return loaded[0].get("id") or "local-model"
+            if chat:
+                raise LocalLLMUnavailable(
+                    f"LM Studio is running at {base} but no model is loaded — "
+                    f"load a model in LM Studio (Developer tab → select a model), then retry. "
+                    f"(available but unloaded: {', '.join(m.get('id','?') for m in chat[:3])})")
+    except LocalLLMUnavailable:
+        raise
+    except Exception:
+        pass  # older LM Studio without /api/v0 — fall through to the /v1 list
+
+    # 2) Fallback (no state info): first available chat model from the OpenAI-compatible API.
+    try:
+        r = requests.get(f"{base}/models", timeout=timeout)
         r.raise_for_status()
         data = r.json().get("data") or []
     except Exception as e:  # noqa: BLE001
         raise LocalLLMUnavailable(
             f"LM Studio not reachable at {base}. Start LM Studio, load a model, and turn on "
             f"its local server (Developer tab). [{type(e).__name__}: {e}]")
-    if not data:
-        raise LocalLLMUnavailable(f"LM Studio is running at {base} but no model is loaded.")
-    return data[0].get("id") or "local-model"
+    chat = [m for m in data if not _is_embedding_model(m.get("id", ""))]
+    if not chat:
+        raise LocalLLMUnavailable(f"LM Studio is running at {base} but no chat model is loaded.")
+    return chat[0].get("id") or "local-model"
 
 
 # ── Anthropic-shaped response objects ────────────────────────────────────────
