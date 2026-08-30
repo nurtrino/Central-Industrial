@@ -231,6 +231,17 @@
       border-radius: 8px; padding: 10px 13px; margin-bottom: 14px;
     }
     .dr-src-hosted-note strong { color: #f0c869; }
+    /* source-access probe results */
+    .dr-probe-note { font-size: 12px; color: var(--text-muted); margin: 10px 0; }
+    .dr-probe-box { margin: 12px 0 4px; border: 1px solid var(--border-dim); border-radius: 8px; overflow: hidden; }
+    .dr-probe-head { font-size: 12.5px; color: var(--text-secondary); padding: 9px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-dim); }
+    .dr-probe-head strong { color: var(--text-primary); }
+    .dr-probe-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border-dim); }
+    .dr-probe-row:last-child { border-bottom: 0; }
+    .dr-probe-dom { font-family: ui-monospace, monospace; color: var(--text-secondary); }
+    .dr-probe-row.ok .dr-probe-v { color: #4ade80; }
+    .dr-probe-row.no .dr-probe-v { color: #ff9d6b; }
+    .dr-probe-row.err .dr-probe-v { color: var(--text-muted); }
     /* Stage-4 credential panel */
     .dr-cred-list { margin: 6px 0 4px; }
     .dr-cred-row { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border-dim); }
@@ -1316,6 +1327,50 @@ function _actAfter(owner) {
     return !(h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '');
   }
 
+  // Source-access self-probe: run each site's logged-out native search from the SERVER that
+  // served this page, so on the hosted site it reports what actually works from Render.
+  function _drProbeLabel() { return '🛰 Test access from ' + (_drIsHosted() ? 'this server' : 'a headless guest'); }
+  async function drProbeSources() {
+    const btn = document.getElementById('dr-probe-btn');
+    const panel = document.getElementById('dr-probe-panel');
+    if (!panel) return;
+    const doms = (_dr.sources || []).map(s => (s.domain || '').trim().toLowerCase()).filter(Boolean);
+    if (!doms.length) { panel.innerHTML = '<div class="dr-probe-note">No sources to test.</div>'; return; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+    panel.innerHTML = '<div class="dr-probe-note">Launching a logged-out browser and searching each site — a few seconds each…</div>';
+    let pid;
+    try {
+      const j = await (await fetch(`${PERF_SERVER}/api/deep_research/probe_sources`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: doms }) })).json();
+      pid = j.probe_id;
+    } catch (e) { panel.innerHTML = '<div class="dr-probe-note">Could not start the probe.</div>'; if (btn) btn.disabled = false; return; }
+    for (let i = 0; i < 800; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      let st;
+      try { st = await (await fetch(`${PERF_SERVER}/api/deep_research/probe_status?probe=${pid}`)).json(); }
+      catch (e) { continue; }
+      if (st.error && !(st.results || []).length) { panel.innerHTML = `<div class="dr-probe-note">Probe error: ${_esc(st.error)}</div>`; break; }
+      panel.innerHTML = _drProbeHtml(st.results || [], st.total || doms.length, st.done);
+      if (st.done) break;
+    }
+    if (btn) { btn.disabled = false; btn.textContent = _drProbeLabel(); }
+  }
+  function _drProbeHtml(results, total, done) {
+    const ok = results.filter(r => r.ok).length;
+    const rows = results.map(r => {
+      const cls = r.ok ? 'ok' : (r.count === 0 ? 'no' : 'err');
+      const verdict = r.ok ? `✓ searchable (${r.count})`
+        : (r.count === 0 ? '✗ blocked / login needed here' : '⚠ error');
+      return `<div class="dr-probe-row ${cls}"><span class="dr-probe-dom">${_esc(r.domain)}</span><span class="dr-probe-v">${verdict}</span></div>`;
+    }).join('');
+    const where = _drIsHosted() ? ' — from this server’s datacenter IP (true hosted picture)' : ' — headless guest';
+    const head = done
+      ? `<div class="dr-probe-head"><strong>${ok}/${results.length}</strong> searchable here without a login${where}.</div>`
+      : `<div class="dr-probe-head">Testing… ${results.length}/${total}</div>`;
+    return `<div class="dr-probe-box">${head}${rows}</div>`;
+  }
+
   function _drSourcesPanel() {
     const open = _dr.srcOpen;
     let inner;
@@ -1369,10 +1424,14 @@ function _actAfter(owner) {
           <div class="dr-src-actions">
             <button class="dr-src-btn" onclick="drAddSource()">+ Add source</button>
             <button class="dr-src-btn dr-src-save" onclick="drSaveSources()">Save sources</button>
+            <button class="dr-src-btn" id="dr-probe-btn" onclick="drProbeSources()"
+                    title="Run each site's logged-out search from THIS server, to see which work here without a login.">🛰 Test access from ${_drIsHosted() ? 'this server' : 'a headless guest'}</button>
             <span id="dr-src-msg" class="dr-src-msg"></span>
           </div>
+          <div id="dr-probe-panel"></div>
           <div class="dr-src-note">A seed list, not a fence — the agent also follows relevant forums/sites it discovers.
-            🔑 = store a login (saved encrypted; becomes a Stage 3 credentialed source). 🔒 = login stored.</div>
+            🔑 = store a login (saved encrypted; becomes a Stage 3 credentialed source). 🔒 = login stored.
+            🛰 = test which sites are searchable here WITHOUT a login${_drIsHosted() ? ' (this is Render’s datacenter IP — the true hosted picture)' : ' (headless guest, ≈ the hosted environment)'}.</div>
         </div>`;
     }
     return `

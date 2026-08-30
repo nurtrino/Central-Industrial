@@ -157,7 +157,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.stealth"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.probe"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -596,6 +596,7 @@ _DR_EVENTS = {}     # job_id -> threading.Event (for batched Stage-4 credential 
 _DR_SKIP = {}       # job_id -> threading.Event (user "skip this stage" signal)
 _DR_STOP = {}       # job_id -> threading.Event (user "STOP the whole run" signal)
 _DR_REFUSAL = {}    # job_id -> threading.Event (user's answer to a Claude-refusal prompt)
+_PROBE = {}         # probe_id -> {done, total, results:[{domain,count,ok}]} (source-access probe)
 _DR_SOURCES_PATH = os.path.join(_ROOT, "config", "drt_sources.json")
 
 _MEMO_WORD_CAP = 6000
@@ -1197,6 +1198,98 @@ def deep_research_refusal_choice():
     if ev:
         ev.set()
     return jsonify({"ok": True, "mode": mode})
+
+
+# ── source-access self-probe ────────────────────────────────────────────────
+# Runs each site's PUBLIC (logged-out) native search from THIS server's own browser
+# environment. On the hosted instance that is a headless bundled Chromium on Render's
+# datacenter IP — i.e. ground truth for "will this site's search work on centralindustrial.ai
+# without a login", which browser stealth alone can't guarantee against datacenter-IP blocks.
+_PROBE_QUERIES = {
+    # a benign, likely-to-hit query per domain; default used for anything not listed
+    "avforums.com": "receiver", "rivianforums.com": "update", "wilderssecurity.com": "firewall",
+    "forum.openwrt.org": "firmware", "forum.wiimhome.com": "firmware", "github.com": "cli",
+    "reddit.com": "review", "seekingalpha.com": "earnings", "x.com": "news",
+}
+
+
+def _probe_worker(probe_id, domains):
+    import shutil
+    import tempfile
+    from engines.research.browser import DRTBrowser
+    tmp = tempfile.mkdtemp(prefix="drt-probe-")
+    try:
+        # Guest context (throwaway profile, no vault) + headless — matches what the hosted
+        # instance can do for a logged-out visitor.
+        br = DRTBrowser(profile_dir=tmp, headed=False, log=lambda m: None).start()
+        try:
+            for dom in domains:
+                q = _PROBE_QUERIES.get(dom, "guide")
+                try:
+                    n = len(br.native_search(dom, q, limit=5))
+                except Exception:  # noqa: BLE001
+                    n = -1
+                with _JOBS_LOCK:
+                    p = _PROBE.get(probe_id)
+                    if p is None:
+                        break
+                    p["results"].append({"domain": dom, "count": n, "ok": n > 0})
+        finally:
+            try:
+                br.close()
+            except Exception:
+                pass
+    except Exception as e:  # noqa: BLE001
+        with _JOBS_LOCK:
+            if _PROBE.get(probe_id) is not None:
+                _PROBE[probe_id]["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        with _JOBS_LOCK:
+            if _PROBE.get(probe_id) is not None:
+                _PROBE[probe_id]["done"] = True
+
+
+@app.route("/api/deep_research/probe_sources", methods=["POST", "OPTIONS"])
+def deep_research_probe_sources():
+    """Start a source-access probe from THIS server. Body: {domains?: [...]}. Defaults to the
+    catalog's domains. Returns {probe_id}; poll /probe_status."""
+    if request.method == "OPTIONS":
+        return "", 204
+    data = request.get_json(silent=True) or {}
+    domains = data.get("domains")
+    if not isinstance(domains, list) or not domains:
+        from engines.research.agent import load_sources
+        domains = [(s.get("domain") or "").strip().lower()
+                   for s in load_sources() if (s.get("domain") or "").strip()]
+    # de-dup, cap, sanitize
+    seen, clean = set(), []
+    for d in domains:
+        d = str(d).strip().lower()
+        if d and d not in seen and re.match(r"^[a-z0-9.\-]+\.[a-z]{2,}$", d):
+            seen.add(d)
+            clean.append(d)
+        if len(clean) >= 40:
+            break
+    probe_id = os.urandom(6).hex()
+    with _JOBS_LOCK:
+        _PROBE[probe_id] = {"done": False, "total": len(clean), "results": [], "error": None}
+    threading.Thread(target=_probe_worker, args=(probe_id, clean), daemon=True).start()
+    return jsonify({"probe_id": probe_id, "total": len(clean)}), 202
+
+
+@app.route("/api/deep_research/probe_status", methods=["GET"])
+def deep_research_probe_status():
+    pid = request.args.get("probe", "")
+    with _JOBS_LOCK:
+        p = _PROBE.get(pid)
+        if not p:
+            return jsonify({"error": "unknown probe"}), 404
+        payload = {"done": p["done"], "total": p["total"],
+                   "results": list(p["results"]), "error": p.get("error")}
+        if p["done"]:
+            _PROBE.pop(pid, None)
+    return jsonify(payload)
 
 
 @app.route("/api/deep_research/credentials", methods=["POST", "OPTIONS"])
