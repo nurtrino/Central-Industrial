@@ -252,14 +252,19 @@ class DRTBrowser:
         # local runs keep the persistent profile — that is where the logins live.)
         if not self.headed and _bd.browser_enabled():
             try:
-                self._remote = self._pw.chromium.connect_over_cdp(_bd.browser_wss(), timeout=60000)
-                ctxs = self._remote.contexts
-                self._ctx = ctxs[0] if ctxs else self._remote.new_context(
-                    viewport={"width": 1380, "height": 900})
-                if not self._ctx.pages:
-                    self._ctx.new_page()
+                # Validate the credentials with one probe session, then release it:
+                # Bright Data sessions are one-domain and time out after 5 idle minutes,
+                # so nothing long-lived is kept — new_tab() opens a session per tab.
+                probe = self._pw.chromium.connect_over_cdp(_bd.browser_wss(), timeout=60000)
+                try:
+                    probe.close()
+                except Exception:
+                    pass
+                self._ctx = None
+                self._remote = None
                 self.remote_browser = True
-                self._log("[browser] Bright Data Scraping Browser connected (CDP, headless)")
+                self._log("[browser] Bright Data Scraping Browser connected (CDP, headless; "
+                          "one session per tab)")
                 return self
             except Exception as e:  # noqa: BLE001
                 self._log(f"[browser] Bright Data Scraping Browser connect failed "
@@ -325,6 +330,27 @@ class DRTBrowser:
 
     # ── tabs ──────────────────────────────────────────────────
     def new_tab(self):
+        # Bright Data Browser API sessions are scoped: one session may navigate only a
+        # handful of domains (`navigate_domains_limit`) before it refuses. Our harness
+        # visits engines + dozens of sites per run, so in remote mode EVERY tab is its
+        # own session: connect → use → the page's close() also closes the session.
+        if self.remote_browser:
+            b = self._pw.chromium.connect_over_cdp(_bd.browser_wss(), timeout=60000)
+            ctx = b.contexts[0] if b.contexts else b.new_context(
+                viewport={"width": 1380, "height": 900})
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            _orig_close = page.close
+
+            def _close(*a, **kw):
+                try:
+                    _orig_close(*a, **kw)
+                finally:
+                    try:
+                        b.close()
+                    except Exception:
+                        pass
+            page.close = _close
+            return page
         return self._ctx.new_page()
 
     @property
@@ -779,6 +805,8 @@ class DRTBrowser:
 
     # ── login-state detection ─────────────────────────────────
     def _domain_cookies(self, domain: str) -> list:
+        if self.remote_browser:
+            return []     # remote sessions are ephemeral — nothing persists, never "logged in"
         try:
             cks = self._ctx.cookies()
         except Exception:
