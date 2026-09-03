@@ -34,7 +34,7 @@ _MAX_NUGGET_CHARS = 1400                 # cap a single page's surviving nuggets
 
 # Evolving-report + stop-judge deepening loop (Odysseus technique 2): how many
 # extra gap-driven gather→re-synthesize rounds, by depth tier. Kept small to bound cost.
-DEEPEN_ROUNDS = {"standard": 1, "deep": 2}   # time-gated by the job layer as well
+DEEPEN_ROUNDS = {"standard": 1, "deep": 2, "exhaustive": 8}   # time-gated by the job layer as well
 
 
 # ── category → format templates (Odysseus technique 3, category-tailored) ──

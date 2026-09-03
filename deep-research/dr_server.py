@@ -157,8 +157,13 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.publish",
-                    "sources_hash": _sources_hash()})
+    try:
+        from engines.research import brightdata as _bd, tavily_search as _tv, exa_search as _ex
+        providers = {"brightdata": _bd.status(), "tavily": _tv.is_enabled(), "exa": _ex.is_enabled()}
+    except Exception:
+        providers = {}
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.lanes",
+                    "sources_hash": _sources_hash(), "providers": providers})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -229,19 +234,60 @@ def _safe_filename(name: str) -> str:
     return name[:140] or "report"
 
 
-def _autosave_report(docx_b64: str, query: str, label: str) -> str:
+def _report_title(query: str, report_md: str = "", client=None) -> str:
+    """A subject-appropriate document title for the report — one cheap model call
+    ("4-9 words, Title Case, specific to what the report actually found"), through the
+    wrapped client. Falls back to the keyword slug on any failure, so a filename always
+    exists. Result is filename-safe."""
+    title = ""
+    try:
+        if client is None:
+            from engines.research.llm import make_client
+            client = make_client("claude", os.environ.get("ANTHROPIC_API_KEY", "").strip())
+        if client is not None:
+            from engines.research.models import get_model
+            body = (report_md or "")[:6000]
+            sys_p = ("You title finished research reports for a document library. Reply with "
+                     "ONLY the title: 4-9 words, Title Case, specific to the subject and what "
+                     "the report actually established (name the entity/product/version/topic — "
+                     "not the question's phrasing), no quotes, no trailing period, no colon, "
+                     "no 'Report on' / 'Analysis of' filler.")
+            r = client.messages.create(
+                model=get_model("route"), max_tokens=60, system=sys_p,
+                messages=[{"role": "user", "content":
+                           f"RESEARCH QUESTION:\n{query}\n\nREPORT (opening):\n{body}"}])
+            title = "".join(getattr(b, "text", "") for b in r.content
+                            if getattr(b, "type", "") == "text").strip()
+            title = title.splitlines()[0].strip().strip('"\'*#').rstrip(".:").strip()
+            if len(title.split()) > 12 or len(title) < 4:
+                title = ""
+    except Exception:
+        title = ""
+    if not title:
+        title = _slug_from_query(query).title()
+    return _safe_filename(title)[:90] or "Report"
+
+
+def _report_filename(title: str, label: str, when=None) -> str:
+    """'<Title> — 2026-09-03 1347.docx' (label appended only for non-default tools,
+    e.g. '<Title> (Odysseus) — …'). The date stamp keeps same-day re-runs distinct."""
+    import time as _time
+    stamp = _time.strftime("%Y-%m-%d %H%M", _time.localtime(when) if when else _time.localtime())
+    suffix = "" if (label or "").strip().lower() in ("", "deep research") else f" ({label.strip()})"
+    return _safe_filename(f"{title}{suffix} — {stamp}") + ".docx"
+
+
+def _autosave_report(docx_b64: str, query: str, label: str, title: str = "") -> str:
     """Write a finished report .docx straight to the reports folder the moment a run
-    completes (same dated filename as /api/save_report), so the report is on disk even
+    completes (same titled filename as /api/save_report), so the report is on disk even
     if the Save button is never clicked. Does NOT open Word. Never raises — returns
     the saved path, or '' on failure (the in-browser copy + Save button still work)."""
-    import time as _time
     try:
         raw = base64.b64decode(docx_b64 or "")
         if not raw:
             return ""
         os.makedirs(_REPORTS_DIR, exist_ok=True)
-        stamp = _time.strftime("%Y-%m-%d_%H%M%S")
-        fname = _safe_filename(f"{label} — {_slug_from_query(query)} — {stamp}") + ".docx"
+        fname = _report_filename(title or _report_title(query), label)
         path = os.path.join(_REPORTS_DIR, fname)
         with open(path, "wb") as fh:
             fh.write(raw)
@@ -252,16 +298,18 @@ def _autosave_report(docx_b64: str, query: str, label: str) -> str:
 
 @app.route("/api/save_report", methods=["POST", "OPTIONS"])
 def save_report():
-    r"""Save a generated .docx to D:\______Documents\___Deep Research Reports with a
-    topic-keyword filename, then open it in Word. Body: {docx_b64, query, label, open?}.
+    r"""Save a generated .docx to D:\______Documents\___Deep Research Reports as
+    '<subject title> — <date stamp>.docx', then open it in Word.
+    Body: {docx_b64, query, label, title?, report_md?, open?}. `title` (the run's
+    generated title) is used when given; otherwise one is generated from the report.
     Returns {ok, path, filename, opened}. (open=false skips the Word launch.)"""
     if request.method == "OPTIONS":
         return "", 204
-    import time as _time
     data = request.get_json(silent=True) or {}
     b64 = data.get("docx_b64") or ""
     query = (data.get("query") or "").strip()
     label = (data.get("label") or "Deep Research").strip()
+    title = _safe_filename((data.get("title") or "").strip())[:90]
     do_open = data.get("open", True)
     if not b64:
         return jsonify({"error": "no document to save"}), 400
@@ -273,8 +321,9 @@ def save_report():
         os.makedirs(_REPORTS_DIR, exist_ok=True)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"could not create the reports folder: {e}"}), 500
-    stamp = _time.strftime("%Y-%m-%d_%H%M%S")
-    fname = _safe_filename(f"{label} — {_slug_from_query(query)} — {stamp}") + ".docx"
+    if not title:
+        title = _report_title(query, data.get("report_md") or "")
+    fname = _report_filename(title, label)
     path = os.path.join(_REPORTS_DIR, fname)
     try:
         with open(path, "wb") as fh:
@@ -310,6 +359,9 @@ _EVENT_KIND_MAP = {
     # extraction verdict, every synthesis/meta step flows to the activity panel.
     "act": "act", "hit": "hit", "turn": "turn", "extract": "extract", "synth": "synth",
     "docs": "docs",   # uploaded-document intake analysis
+    "lane": "lane",   # parallel-lane planning / lead review / hot-trail dig
+    "brightdata": "search", "tavily": "search", "exa": "search", "local-baseline": "search",
+    "deepen": "synth", "stage2": "stage", "stage3": "stage", "stage4": "stage",
 }
 
 
@@ -662,7 +714,7 @@ def _dr_harvest_to_md(query, h):
         out.append(
             f"**Research plan** ({'planner' if plan.get('_planned') else 'default'}): "
             f"baseline sweep {_w('api_search')} · open engines {_w('web_engines')} · "
-            f"curated sites {_w('site_queries')} · neural (Exa) {ns}{et}. "
+            f"curated sites {_w('site_queries')} · API discovery (Tavily/Exa) {ns}{et}. "
             f"_{plan.get('rationale', '').strip()}_\n")
     try:
         from engines.research.models import all_models
@@ -672,6 +724,21 @@ def _dr_harvest_to_md(query, h):
             f"extract `{mm['extract']}` · synthesize `{mm['synthesize']}`\n")
     except Exception:
         pass
+    lanes = getattr(h, "lanes", None) or []
+    if lanes:
+        reps = {r.get("lane"): r.get("reason", "") for r in (getattr(h, "lane_reports", None) or [])}
+        out.append(f"**Parallel research lanes ({len(lanes)}):**\n")
+        for i, ln in enumerate(lanes, 1):
+            fin = reps.get(f"L{i}", "")
+            out.append(f"- **L{i} · {ln.get('name', '')}** — {ln.get('mission', '')}"
+                       + (f"\n  _finished: {fin[:300]}_" if fin else ""))
+        if reps.get("dig"):
+            out.append(f"- **Hot-trail dig** — _finished: {reps['dig'][:300]}_")
+        out.append("")
+    fbs = getattr(h, "fallback_fetches", None) or []
+    if fbs:
+        out.append(f"**Pages Chrome could not read, fetched via unblocking providers ({len(fbs)}):** "
+                   + "; ".join(f"{f.get('url', '')[:70]} ({f.get('via')})" for f in fbs[:12]) + "\n")
     if getattr(h, "curated_searched", None):
         out.append(f"**Curated sites searched ({len(h.curated_searched)}):** "
                    f"{', '.join(h.curated_searched)}\n")
@@ -938,7 +1005,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                             break
                         prog("synthesize", None, f"Deepening (round {rnd}): {gaps[0][:60]}")
                         added = run_gap_round(client, br, h, gaps, governance=gov,
-                                              progress=prog, log=log_fn, skip_event=skip_ev)
+                                              progress=prog, log=log_fn, skip_event=skip_ev,
+                                              deadline=run_deadline - 75, stop_event=stop_ev)
                         if not added:
                             break
                         synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
@@ -986,11 +1054,15 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()
         except Exception:
             docx_b64 = ""
+        # Subject-appropriate document title (one cheap call) → the saved filename,
+        # the Save & open button, and the results header.
+        title = _report_title(query, report_md_synth, client) if client else _report_title(query)
+        log_fn(f"[synth] title: {title}")
         sources = [{"title": it.title, "url": it.url, "type": it.source_type,
                     "chars": len(it.text)} for it in h.items if it.via != "stage1"]
-        result = {"query": query, "report_md": report_md, "sources": sources,
+        result = {"query": query, "title": title, "report_md": report_md, "sources": sources,
                   "source_count": len(sources), "docx_b64": docx_b64,
-                  "saved_path": _autosave_report(docx_b64, query, "Deep Research"),
+                  "saved_path": _autosave_report(docx_b64, query, "Deep Research", title=title),
                   "go_deeper_md": go_deeper,
                   "discovered_forums": getattr(h, "discovered_forums", []) or [],
                   "category": getattr(h, "category", ""),
@@ -1734,11 +1806,13 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
                 _memo_to_docx_bytes(report or "", "Odysseus Research")).decode()
         except Exception:
             docx_b64 = ""
+        title = _report_title(query, report or "")
         result = {
             "query": query,
+            "title": title,
             "report_md": report or "",
             "docx_b64": docx_b64,
-            "saved_path": _autosave_report(docx_b64, query, "Odysseus"),
+            "saved_path": _autosave_report(docx_b64, query, "Odysseus", title=title),
             "stats": stats,
             "sources": researcher.analyzed_urls,
             "source_count": len(researcher.urls_fetched),

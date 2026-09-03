@@ -15,8 +15,11 @@ No Claude / API code lives here — keep the mechanics isolated and testable.
 
 from __future__ import annotations
 
+import concurrent.futures as _cf
+import functools
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -24,6 +27,7 @@ from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 from .login import detect_login_wall, host_of
+from . import brightdata as _bd
 
 # Persistent profile lives beside the backend, gitignored. Logins persist here.
 _PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -117,6 +121,33 @@ class PageContent:
     used_screenshot: bool = False
     screenshot_b64: str = ""
     error: str = ""
+    blocked: bool = False      # a bot-check / challenge page that never cleared
+
+
+# ── bot-challenge interstitials (Cloudflare "Just a moment…", etc.) ──────────
+# These render as a SHORT page whose text is the challenge copy. The login-wall
+# detector never matched this wording, so the agent used to receive the
+# interstitial AS the page and burn opens on it. We now recognise it, wait for the
+# challenge to clear (headed Chrome usually passes a managed challenge on its own
+# in a few seconds), and if it doesn't, flag the page as blocked so the caller's
+# fallback chain (Bright Data → Tavily → Exa) takes over.
+_CHALLENGE_TITLES = ("just a moment", "attention required", "access denied",
+                     "please wait", "checking your browser", "security verification")
+_CHALLENGE_TEXT = ("performing security verification", "verify you are human",
+                   "verifying you are human", "verifying you are not a bot",
+                   "checking your browser before accessing", "checking if the site connection is secure",
+                   "enable javascript and cookies to continue", "cf-chl", "ray id:",
+                   "needs to review the security of your connection", "press & hold",
+                   "complete the security check", "unusual traffic from your computer network")
+_CHALLENGE_WAIT_MS = 9000
+
+
+def _is_challenge(title: str, text: str) -> bool:
+    t = (title or "").lower()
+    x = (text or "").lower()
+    if any(k in t for k in _CHALLENGE_TITLES) and len(x) < 2500:
+        return True
+    return len(x) < 2500 and any(k in x for k in _CHALLENGE_TEXT)
 
 
 # Cookie names that specifically mean "this visitor is AUTHENTICATED" on common
@@ -155,47 +186,28 @@ _PLATFORM_HINTS = {
     "github.com": "github",
 }
 
-# Chrome major version to advertise in the stealth UA. Bump occasionally; a slightly-off
-# version is far less of a tell than the literal string "HeadlessChrome".
-_STEALTH_CHROME_VER = "131.0.0.0"
-
-
-def _stealth_ua() -> str:
-    """A normal, OS-matched Chrome User-Agent (never 'HeadlessChrome'). Matching the host OS
-    keeps it consistent with navigator.platform, which naive UA spoofing gets wrong."""
-    import platform as _p
-    sysname = _p.system()
-    if sysname == "Windows":
-        ospart = "Windows NT 10.0; Win64; x64"
-    elif sysname == "Darwin":
-        ospart = "Macintosh; Intel Mac OS X 10_15_7"
-    else:
-        ospart = "X11; Linux x86_64"
-    return (f"Mozilla/5.0 ({ospart}) AppleWebKit/537.36 (KHTML, like Gecko) "
-            f"Chrome/{_STEALTH_CHROME_VER} Safari/537.36")
-
-
-# Injected before any page script runs — neutralizes the cheapest, most-checked automation
-# fingerprints. Not a full anti-detect suite; enough to pass simple headless gates.
-_STEALTH_JS = """
-try {
-  Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-  if (!window.chrome) { window.chrome = { runtime: {} }; }
-  Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-  Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-  const _q = window.navigator.permissions && window.navigator.permissions.query;
-  if (_q) {
-    window.navigator.permissions.query = (p) =>
-      (p && p.name === 'notifications')
-        ? Promise.resolve({state: (window.Notification && Notification.permission) || 'default'})
-        : _q(p);
-  }
-} catch (e) {}
-"""
+# ── browser-owner thread ─────────────────────────────────────────────────────
+# Playwright's sync API is thread-bound (greenlet-based): every call must come from
+# the thread that started it. The research agent now runs several LANES in parallel
+# threads (see agent.py), so the browser owns ONE dedicated thread and every public
+# action from any other thread is queued to it and awaited. Model turns overlap
+# freely; browser actions serialize. Internal calls made while already on the owner
+# thread run directly (no re-queue, no deadlock).
+def _on_browser_thread(fn):
+    @functools.wraps(fn)
+    def _wrapped(self, *a, **kw):
+        return self._call(lambda: fn(self, *a, **kw))
+    return _wrapped
 
 
 class DRTBrowser:
-    """Owns one persistent, visible Chrome context and the tabs inside it."""
+    """Owns one persistent, visible Chrome context and the tabs inside it.
+
+    Anti-bot stance (2026-09-03): no UA spoofing / fingerprint shims. The local headed
+    Chrome is a real browser with the user's real profile; anything it still cannot read
+    (Cloudflare challenges, 403s) is fetched through Bright Data's Web Unlocker by the
+    caller, and the headless/hosted mode connects to Bright Data's Scraping Browser
+    (BRIGHTDATA_BROWSER_WSS) instead of the bundled Chromium when configured."""
 
     def __init__(self, profile_dir: str = _PROFILE_DIR, headed: Optional[bool] = None,
                  slow_mo_ms: Optional[int] = None, log=None, login_handler=None):
@@ -216,11 +228,43 @@ class DRTBrowser:
         self._auth_handled: set[str] = set()   # domains already attempted this run
         self._pw = None
         self._ctx = None
+        self._remote = None          # Bright Data Scraping Browser (CDP) when in use
+        self.remote_browser = False
+        self._exec = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="drt-browser")
+        self._thread: Optional[threading.Thread] = None
+
+    def _call(self, fn):
+        """Run fn on the browser-owner thread (directly if we're already on it)."""
+        if self._thread is None or threading.current_thread() is self._thread:
+            return fn()
+        return self._exec.submit(fn).result()
 
     # ── lifecycle ─────────────────────────────────────────────
     def start(self):
+        return self._exec.submit(self._start_impl).result()
+
+    def _start_impl(self):
+        self._thread = threading.current_thread()
         os.makedirs(self.profile_dir, exist_ok=True)
         self._pw = sync_playwright().start()
+        # Headless + Bright Data Scraping Browser configured → connect to the remote,
+        # unblocking Chrome over CDP instead of launching the bundled Chromium. (Headed
+        # local runs keep the persistent profile — that is where the logins live.)
+        if not self.headed and _bd.browser_enabled():
+            try:
+                self._remote = self._pw.chromium.connect_over_cdp(_bd.browser_wss(), timeout=60000)
+                ctxs = self._remote.contexts
+                self._ctx = ctxs[0] if ctxs else self._remote.new_context(
+                    viewport={"width": 1380, "height": 900})
+                if not self._ctx.pages:
+                    self._ctx.new_page()
+                self.remote_browser = True
+                self._log("[browser] Bright Data Scraping Browser connected (CDP, headless)")
+                return self
+            except Exception as e:  # noqa: BLE001
+                self._log(f"[browser] Bright Data Scraping Browser connect failed "
+                          f"({type(e).__name__}: {e}) — launching local Chromium instead")
+                self._remote = None
         # Container/headless hosts (Render) need --no-sandbox and a non-/dev/shm
         # temp dir; --start-maximized only matters when headed.
         args = [
@@ -236,24 +280,12 @@ class DRTBrowser:
             viewport={"width": 1380, "height": 900},
             args=args,
         )
-        # Stealth: headless bundled Chromium advertises a "HeadlessChrome" User-Agent that
-        # many forums (XenForo etc.) bot-block. Present a normal, OS-matched Chrome UA so a
-        # logged-OUT public search works from the hosted (headless) instance the same as it
-        # does locally. Headed real Chrome already has a genuine UA — leave it alone.
-        if not self.headed:
-            launch_kwargs["user_agent"] = _stealth_ua()
         # Use the locally installed Chrome only when a channel is configured;
         # on Render DRT_BROWSER_CHANNEL="" → Playwright's bundled Chromium.
         if _BROWSER_CHANNEL:
             launch_kwargs["channel"] = _BROWSER_CHANNEL
         self._ctx = self._pw.chromium.launch_persistent_context(
             self.profile_dir, **launch_kwargs)
-        # Blunt the most common automation tells (navigator.webdriver, empty plugins, the
-        # missing window.chrome object). Applied to every page in the context, headed or not.
-        try:
-            self._ctx.add_init_script(_STEALTH_JS)
-        except Exception:
-            pass
         # Tabs the agent opens are pages on this context.
         if not self._ctx.pages:
             self._ctx.new_page()
@@ -264,12 +296,26 @@ class DRTBrowser:
 
     def close(self):
         try:
+            self._call(self._close_impl)
+        finally:
+            try:
+                self._exec.shutdown(wait=False)
+            except Exception:
+                pass
+
+    def _close_impl(self):
+        try:
             if self._ctx:
                 self._ctx.close()
+            if self._remote:
+                try:
+                    self._remote.close()
+                except Exception:
+                    pass
         finally:
             if self._pw:
                 self._pw.stop()
-        self._ctx = self._pw = None
+        self._ctx = self._pw = self._remote = None
 
     def __enter__(self):
         return self.start()
@@ -286,6 +332,7 @@ class DRTBrowser:
         return len(self._ctx.pages) if self._ctx else 0
 
     # ── search ────────────────────────────────────────────────
+    @_on_browser_thread
     def search(self, engine: str, query: str, limit: int = 10) -> list[SearchResult]:
         """Run one query on one engine in a fresh tab; return organic results."""
         engine = engine.lower()
@@ -330,6 +377,7 @@ class DRTBrowser:
         """Search WITHIN a domain via the engine's site: operator."""
         return self.search(engine, f"site:{domain} {query}", limit=limit)
 
+    @_on_browser_thread
     def site_native_search(self, search_url: str, query: str,
                            limit: int = 10) -> list[SearchResult]:
         """Search a site with ITS OWN search function (search_url template with {q}).
@@ -424,6 +472,7 @@ class DRTBrowser:
             _t.sleep(0.6)
 
     # ── smart native search (platform adapters) ───────────────
+    @_on_browser_thread
     def native_search(self, domain: str, query: str, search_url: str = "",
                        limit: int = 10) -> list[SearchResult]:
         """Search a site's OWN search, choosing the most reliable method for its platform:
@@ -759,6 +808,7 @@ class DRTBrowser:
         return False
 
     # ── proactive login ───────────────────────────────────────
+    @_on_browser_thread
     def ensure_logged_in(self, domain: str, creds: dict) -> tuple[bool, str]:
         """Establish a logged-in session for `domain` before searching it. Returns
         (logged_in, detail). `logged_in` is True ONLY when an authenticated session is
@@ -820,9 +870,12 @@ class DRTBrowser:
                 pass
 
     # ── open / read ───────────────────────────────────────────
+    @_on_browser_thread
     def open(self, url: str, min_chars: int = 200, timeout_ms: int = 30000) -> PageContent:
         """Open a URL in a fresh tab and return cleaned readable text.
 
+        A bot-challenge interstitial is waited out; if it never clears the page comes
+        back with `blocked=True` + an error so the caller can fetch it another way.
         Falls back to a screenshot (vision) only if text extraction is too thin.
         """
         page = self.new_tab()
@@ -837,6 +890,32 @@ class DRTBrowser:
             pc.title = (page.title() or "").strip()
             pc.text = self._extract_text(page)
             pc.links = self._extract_links(page)
+
+            # Bot challenge (Cloudflare "Just a moment…" & co.)? Give it time to clear,
+            # then re-read. Still walled → blocked (caller falls back to Bright Data).
+            if _is_challenge(pc.title, pc.text):
+                dom0 = host_of(url)
+                self._log(f"[open] bot challenge on {dom0} — waiting for it to clear…")
+                deadline = time.time() + _CHALLENGE_WAIT_MS / 1000.0
+                cleared = False
+                while time.time() < deadline:
+                    time.sleep(0.8)
+                    try:
+                        t2 = (page.title() or "").strip()
+                        x2 = self._extract_text(page)
+                    except Exception:
+                        continue
+                    if not _is_challenge(t2, x2) and len(x2) >= 120:
+                        pc.title, pc.text = t2, x2
+                        pc.links = self._extract_links(page)
+                        cleared = True
+                        break
+                if not cleared:
+                    pc.blocked = True
+                    pc.error = "bot challenge did not clear (Cloudflare/anti-bot wall)"
+                    self._log(f"[open] BLOCKED {url} :: challenge never cleared")
+                    return pc
+                self._log(f"[open] challenge cleared on {dom0}")
 
             # Login / paywall / bot-check wall? Try to resolve it (vault → pause),
             # then re-read the now-unlocked page. Once per domain per run.
@@ -884,7 +963,10 @@ class DRTBrowser:
                 """() => {
                     const drop = ['script','style','noscript','nav','header','footer',
                                   'aside','form','svg','button'];
-                    const pick = document.querySelector('article')
+                    // Forum threads wrap EVERY post in its own <article>; one article
+                    // = the page's content, several = read main/body so replies survive.
+                    const arts = document.querySelectorAll('article');
+                    const pick = (arts.length === 1 ? arts[0] : null)
                               || document.querySelector('main')
                               || document.querySelector('[role=main]')
                               || document.body;

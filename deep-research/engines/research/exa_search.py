@@ -28,8 +28,11 @@ def _key() -> str:
 
 
 def is_enabled() -> bool:
-    """True only when both the master toggle is on AND a key is present."""
-    return os.environ.get("DRT_EXA", "").strip().lower() in _TRUTHY and bool(_key())
+    """ON BY DEFAULT whenever an EXA_API_KEY is present (2026-09-03: Exa re-enabled as a
+    default discovery layer). DRT_EXA=0/false/off is the kill switch."""
+    if not _key():
+        return False
+    return os.environ.get("DRT_EXA", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _client():

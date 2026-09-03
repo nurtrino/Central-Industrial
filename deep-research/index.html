@@ -603,13 +603,14 @@ function _savedBadge(path) {
   const fname = String(path).split('\\').pop();
   return ` &nbsp;·&nbsp; <span style="color:var(--text-muted)" title="Auto-saved on completion to ${_esc(path)}">💾 auto-saved: ${_esc(fname)}</span>`;
 }
-async function saveAndOpen(docx_b64, query, label, fallbackName) {
+async function saveAndOpen(docx_b64, query, label, fallbackName, title) {
   if (!docx_b64) return;
+  if (title) fallbackName = `${title} — ${new Date().toISOString().slice(0, 10)}.docx`;
   _toast('Saving & opening in Word…');
   try {
     const r = await fetch(`${PERF_SERVER}/api/save_report`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ docx_b64, query, label }) });
+      body: JSON.stringify({ docx_b64, query, label, title: title || '' }) });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || ('save failed (' + r.status + ')'));
     if (j.opened) {
@@ -651,6 +652,7 @@ const ACT_KINDS = {
   extract: { g: '⚙', cls: 'ak-search' },   // per-page extraction verdicts
   synth:   { g: '✎', cls: 'ak-forum' },    // synthesis / meta-organization
   docs:    { g: '▤', cls: 'ak-forum' },    // uploaded-document intake analysis
+  lane:    { g: '⫽', cls: 'ak-plan' },     // parallel lanes: planning / lead review / hot trail
   log:     { g: '·', cls: 'ak-log' },
 };
 
@@ -722,7 +724,7 @@ function _actAfter(owner) {
                 extractOpen: false, extractUrl: '', extractMode: 'scrape', extractLimit: 25,
                 extractBusy: false, extractResult: null, extractError: null,
                 extractMsg: '', extractPct: null, _extractGen: 0,
-                channels: { api_search: true, web_engines: true, site_queries: true },
+                channels: { api_search: true, web_engines: true, site_queries: true, neural_search: true },
                 prefs: { open: false, loaded: false, prompt: '', name: '', status: '' } };
 
   function drReset() {
@@ -875,6 +877,7 @@ function _actAfter(owner) {
     const depths = [
       { id:'standard', label:'Standard', sub:'best outcome in ~5 min' },
       { id:'deep',     label:'Deep',     sub:'best outcome in ~10 min' },
+      { id:'exhaustive', label:'1 hour', sub:'free-roam lanes until exhausted or 60 min' },
       { id:'odysseus', label:'Deep + Odysseus', sub:'headless pre-research → deep run' },
     ];
     const chips = depths.map(o => `
@@ -941,6 +944,7 @@ function _actAfter(owner) {
       { k:'api_search',    label:'Baseline sweep',     sub:'fast broad browser search · no page opens' },
       { k:'web_engines',   label:'Open web engines',   sub:'DuckDuckGo · Brave · Google' },
       { k:'site_queries',  label:'Curated sites',      sub:'your forum / blog source list + logins' },
+      { k:'neural_search', label:'API discovery',      sub:'Tavily · Exa · Bright Data fallbacks' },
     ];
     const rows = items.map(it => `
       <label class="dr-toggle ${_dr.channels[it.k] ? 'on' : 'off'}">
@@ -986,6 +990,7 @@ function _actAfter(owner) {
       <div class="vc-memo-outer">
         <div class="vc-memo-toolbar">
           <div class="vc-memo-files">
+            ${d.title ? `<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px">${_esc(d.title)}</div>` : ''}
             <strong style="color:var(--text-secondary)">Question:</strong> ${_esc(d.query || _dr.query)}
             ${srcCount ? ` &nbsp;·&nbsp; ${srcCount} source${srcCount > 1 ? 's' : ''} reviewed` : ''}${_savedBadge(d.saved_path)}
           </div>
@@ -1092,6 +1097,7 @@ function _actAfter(owner) {
     const depths = [
       { id:'standard', label:'Standard', sub:'best outcome in ~5 min' },
       { id:'deep',     label:'Deep',     sub:'best outcome in ~10 min' },
+      { id:'exhaustive', label:'1 hour', sub:'free-roam lanes until exhausted or 60 min' },
       { id:'odysseus', label:'Deep + Odysseus', sub:'headless pre-research → deep run' },
     ];
     const chips = depths.map(o => `
@@ -1306,7 +1312,7 @@ function _actAfter(owner) {
 
   function drDownloadDocx() {
     const d = _dr.data; if (!d || !d.docx_b64) return;
-    saveAndOpen(d.docx_b64, d.query || _dr.query, 'Deep Research', 'Deep Research — Report.docx');
+    saveAndOpen(d.docx_b64, d.query || _dr.query, 'Deep Research', 'Deep Research — Report.docx', d.title);
   }
 
   function _drShell(inner) {
@@ -1809,7 +1815,7 @@ function _actAfter(owner) {
 
   const DR_STAGE_LABELS = {
     stage1: 'Baseline sweep',
-    stage2: 'Browser search engines',
+    stage2: 'Parallel research lanes (Chrome + APIs)',
     stage3: 'Credentialed sources',
     stage4: 'Gated sources (login)',
     odysseus: 'Odysseus pre-research (headless)',
@@ -2048,7 +2054,7 @@ function _actAfter(owner) {
 
   function orDownloadDocx() {
     const d = _or.data; if (!d || !d.docx_b64) return;
-    saveAndOpen(d.docx_b64, d.query || _or.query, 'Odysseus', 'Odysseus Research — Report.docx');
+    saveAndOpen(d.docx_b64, d.query || _or.query, 'Odysseus', 'Odysseus Research — Report.docx', d.title);
   }
 
   function _orShell(inner) {

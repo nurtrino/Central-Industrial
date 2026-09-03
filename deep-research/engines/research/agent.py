@@ -22,14 +22,19 @@ This module is ONLY search/gather — storage, evaluation, synthesis come later.
 
 from __future__ import annotations
 
+import concurrent.futures as _cf
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 
 from .browser import DRTBrowser, _JUNK_HOST
 from .exa_search import exa_search, exa_find_similar, exa_contents, is_enabled as exa_enabled
+from .tavily_search import tavily_search, tavily_extract, is_enabled as tavily_enabled
+from .brightdata import (serp_search as bd_serp_search, serp_enabled as bd_serp_enabled,
+                         unlock_fetch as bd_unlock_fetch, unlock_enabled as bd_unlock_enabled)
 from .login import normalize_domain
 from .models import get_model
 
@@ -38,11 +43,17 @@ from .models import get_model
 # `reserve` = time held back for extraction + synthesis + the go-deeper assessment;
 # the remainder is the gathering window. The search/page pools remain as generous
 # safety ceilings (runaway protection), but TIME is the governor.
+#   exhaustive (2026-09-03): the 1-HOUR free-roam tier — parallel lanes iterate until
+#   they exhaust themselves or the clock runs out; many deepening rounds; pools sized
+#   so that the clock, not the pool, is what ends it.
 DEPTH_BUDGETS = {
-    "standard": {"seconds": 300, "reserve": 100, "searches": 120, "pages": 150, "max_turns": 120},
-    "deep":     {"seconds": 600, "reserve": 130, "searches": 240, "pages": 300, "max_turns": 240},
+    "standard":   {"seconds": 300,  "reserve": 100, "searches": 120, "pages": 150, "max_turns": 120},
+    "deep":       {"seconds": 600,  "reserve": 130, "searches": 240, "pages": 300, "max_turns": 240},
+    "exhaustive": {"seconds": 3600, "reserve": 300, "searches": 900, "pages": 900, "max_turns": 400},
 }
-_LEGACY_DEPTHS = {"quick": "standard", "verydeep": "deep"}   # old tier names → nearest new tier
+_LEGACY_DEPTHS = {"quick": "standard", "verydeep": "deep",
+                  "hour": "exhaustive", "1h": "exhaustive", "1hour": "exhaustive",
+                  "max": "exhaustive"}   # old / alias tier names → canonical tier
 
 
 def normalize_depth(depth: str) -> str:
@@ -169,6 +180,9 @@ class HarvestResult:
     login_warnings: list = field(default_factory=list)    # [{domain, detail}] stored-login attempts that failed
     curated_searched: list = field(default_factory=list)  # curated domains actually site_search'd this run
     discovered_forums: list = field(default_factory=list)  # [{domain, reason}] — forums the agent found, not in the curated list
+    lanes: list = field(default_factory=list)          # [{name, mission}] parallel Stage-2 lanes this run
+    lane_reports: list = field(default_factory=list)   # [{lane, reason}] each lane's / digger's finish reason
+    fallback_fetches: list = field(default_factory=list)  # [{url, via, reason}] pages Chrome couldn't read, fetched via Bright Data/Tavily/Exa
     exa_searches: int = 0     # neural Exa queries run this run
     exa_similar: int = 0      # Exa find_similar calls run this run
     exa_urls: list = field(default_factory=list)   # URLs Exa surfaced (for provenance/A-B)
@@ -191,15 +205,23 @@ def _tool_defs(include_web_search: bool = True, include_site_search: bool = True
                include_neural: bool = False, include_register_forum: bool = False):
     tools = []
     if include_web_search:
+        engines = ["duckduckgo", "brave", "google"]
+        desc = ("Run a query on a general search engine and get ranked organic "
+                "results (title + url). Use COMPACT KEYWORD queries (2-6 terms — "
+                "proper nouns, model names, insider jargon), never full-sentence "
+                "questions: engines rank short keyword strings far better. Vary "
+                "queries and engines for broad coverage. An engine that returns nothing "
+                "is automatically retried through the API providers, so an empty result "
+                "means the web has nothing for that phrasing — rephrase, don't repeat.")
+        if tavily_enabled():
+            engines.append("tavily")
+            desc += (" engine=\"tavily\" queries the Tavily search API — a different index "
+                     "from the browser engines; good for freshness and long-tail pages.")
         tools.append({
             "name": "web_search",
-            "description": ("Run a query on a general search engine and get ranked organic "
-                            "results (title + url). Use COMPACT KEYWORD queries (2-6 terms — "
-                            "proper nouns, model names, insider jargon), never full-sentence "
-                            "questions: engines rank short keyword strings far better. Vary "
-                            "queries and engines for broad coverage."),
+            "description": desc,
             "input_schema": {"type": "object", "properties": {
-                "engine": {"type": "string", "enum": ["duckduckgo", "brave", "google"]},
+                "engine": {"type": "string", "enum": engines},
                 "query": {"type": "string"}}, "required": ["engine", "query"]},
         })
     if include_neural:
@@ -457,15 +479,152 @@ def _page_links_section(links, page_url, seen_urls, limit: int = 20) -> str:
             "replies, citations, pagination, an author's other posts.")
 
 
+_SHARED_LOCK = threading.RLock()   # guards harvest / pool / seen_urls across parallel lanes
+
+
+def _lane_log(log, tag):
+    """Wrap a log callback so every line carries the lane tag AFTER its [kind] prefix
+    (the server derives the activity-feed kind from that leading prefix, so the tag
+    must not displace it)."""
+    def _l(m):
+        m = str(m or "")
+        mm = re.match(r"\s*(\[[a-z_\-]+\])\s*(.*)", m, re.S | re.I)
+        log(f"{mm.group(1)} {tag} · {mm.group(2)}" if mm else f"[log] {tag} · {m}")
+    return _l
+
+
+def _sr(rows, engine):
+    """[{title,url,snippet}] dicts (API providers) → SearchResult objects (harness shape)."""
+    from .browser import SearchResult
+    out = []
+    for r in rows or []:
+        u = (r.get("url") or "").strip()
+        if u:
+            out.append(SearchResult(title=(r.get("title") or u)[:200], url=u,
+                                    snippet=(r.get("snippet") or "")[:400], engine=engine))
+    return out
+
+
+def _engine_search(br, engine, query, limit=10, log=None):
+    """One engine query with the provider fallback chain. Returns (results, via_label).
+
+    Browser engines first (real Chrome). An EMPTY browser result falls through to
+    Bright Data SERP → Tavily → Exa, so a blocked / captcha'd / selector-drifted engine
+    never reads as "nothing on the web" (both the 2026-09-03 Rivian trace and the
+    agentic-tools report show two of three browser engines returning nothing).
+    engine='tavily' / 'exa' go straight to that API."""
+    log = log or (lambda m: None)
+    engine = (engine or "duckduckgo").lower()
+    if engine == "tavily":
+        return _sr(tavily_search(query, num=limit, log=log), "tavily"), "tavily"
+    if engine == "exa":
+        return _sr(exa_search(query, num=limit, log=log), "exa"), "exa"
+    res = []
+    if br is not None:
+        try:
+            res = br.search(engine, query, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log(f"[search] {engine} error ({type(e).__name__}: {e}) → fallback chain")
+            res = []
+    if res:
+        return res, engine
+    if bd_serp_enabled():
+        rows = bd_serp_search(query, engine=("bing" if engine == "brave" else engine),
+                              num=limit, log=log)
+        if rows:
+            return _sr(rows, "brightdata"), f"{engine}→brightdata-serp"
+    if tavily_enabled():
+        rows = tavily_search(query, num=limit, log=log)
+        if rows:
+            return _sr(rows, "tavily"), f"{engine}→tavily"
+    if exa_enabled():
+        rows = exa_search(query, num=limit, log=log)
+        if rows:
+            return _sr(rows, "exa"), f"{engine}→exa"
+    return [], engine
+
+
+def _fetch_fallback(url, log):
+    """Page text when Chrome cannot read a URL (bot challenge, 403, timeout):
+    Bright Data Web Unlocker → Tavily extract → Exa contents.
+    Returns (page dict {url,title,text,links} | None, provider label)."""
+    if bd_unlock_enabled():
+        p = bd_unlock_fetch(url, log=log)
+        if p:
+            return p, "brightdata"
+    if tavily_enabled():
+        t = tavily_extract(url, log=log)
+        if t:
+            return {"url": url, "title": url, "text": t, "links": []}, "tavily"
+    if exa_enabled():
+        t = exa_contents(url, log=log)
+        if t:
+            return {"url": url, "title": url, "text": t, "links": []}, "exa"
+    return None, ""
+
+
+# ── transcript compaction (long / parallel runs) ─────────────────────────────
+# A lane that runs for 30+ minutes appends every opened page's 8K-char body to its
+# message list forever; on the 1-hour tier that overflows the context window. Once the
+# transcript is big, older page bodies are elided mechanically (no model call) — the
+# full text is already stored in the harvest for extraction. Recent turns stay verbatim.
+_COMPACT_AT_CHARS = 280_000      # ≈70K tokens
+_COMPACT_KEEP_TURNS = 6
+_ELIDED = ("\n[… page body elided from the transcript to save context — the full text is "
+           "stored in the harvest; re-open only if you truly need to re-read it …]")
+
+
+def _transcript_chars(messages) -> int:
+    n = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            n += len(c)
+            continue
+        for b in c or []:
+            if isinstance(b, dict):
+                n += len(str(b.get("content") or b.get("text") or ""))
+            else:
+                n += len(getattr(b, "text", "") or "")
+                try:
+                    n += len(json.dumps(getattr(b, "input", None) or {}))
+                except Exception:
+                    pass
+    return n
+
+
+def _compact_messages(messages, log) -> int:
+    if _transcript_chars(messages) < _COMPACT_AT_CHARS:
+        return 0
+    idx = [i for i, m in enumerate(messages)
+           if m.get("role") == "user" and isinstance(m.get("content"), list)]
+    old = idx[:-_COMPACT_KEEP_TURNS] if len(idx) > _COMPACT_KEEP_TURNS else []
+    n = 0
+    for i in old:
+        for b in messages[i]["content"]:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, str) and len(c) > 1500 and c.startswith("Opened") \
+                        and _ELIDED not in c:
+                    b["content"] = c.split("\n\n", 1)[0] + _ELIDED
+                    n += 1
+    if n:
+        log(f"[turn] transcript compacted — {n} older page bodies elided "
+            f"(~{_transcript_chars(messages) // 1000}K chars now)")
+    return n
+
+
 # ── one browser stage (shared loop) ───────────────────────────
 def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, task,
                        tools, cap, progress, log, notes, skip_event=None, question="",
                        sources=None, pool=None, deadline=None, hard_deadline=None,
-                       stop_event=None):
+                       stop_event=None, lane=None, clear_skip=True):
     # Soft stage allocation (grows via request_extension) vs. the hard global pool.
     # No pool passed → private pool equal to the allocation (fixed-cap behavior).
     # `deadline` = this stage's soft time share; `hard_deadline` = the run's gathering
     # window (extensions can push the stage deadline up to it, never past it).
+    # `lane` = a parallel-lane label (several of these loops may run concurrently,
+    # sharing result/seen_urls/pool — all mutations of those go through _SHARED_LOCK).
     alloc = {"searches": cap["searches"], "pages": cap["pages"]}
     used = {"searches": 0, "pages": 0}
     dl = {"t": deadline}                       # mutable so request_extension can extend
@@ -499,40 +658,51 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                         "more time; otherwise finish() now.")
             return ("TIME WINDOW CLOSED — the research clock is spent. Call finish() NOW "
                     "with what you have.")
-        if pool[kind] <= 0:
-            return ("GLOBAL research budget exhausted — no extensions left. Wrap up and "
-                    "finish() with what you have.")
-        if used[kind] >= alloc[kind]:
-            return ("Stage allocation spent. If you are on a genuinely HOT TRAIL toward the "
-                    "user's specific question, call request_extension(reason) to keep "
-                    "digging; otherwise finish().")
-        used[kind] += 1
-        pool[kind] -= 1
-        if kind == "searches":
-            result.searches_used += 1
-        else:
-            result.pages_used += 1
+        with _SHARED_LOCK:
+            if pool[kind] <= 0:
+                return ("GLOBAL research budget exhausted — no extensions left. Wrap up and "
+                        "finish() with what you have.")
+            if used[kind] >= alloc[kind]:
+                return ("Stage allocation spent. If you are on a genuinely HOT TRAIL toward the "
+                        "user's specific question, call request_extension(reason) to keep "
+                        "digging; otherwise finish().")
+            used[kind] += 1
+            pool[kind] -= 1
+            if kind == "searches":
+                result.searches_used += 1
+            else:
+                result.pages_used += 1
         return None
+
+    def _harvest(item):
+        with _SHARED_LOCK:
+            result.items.append(item)
+            return len(result.items)
 
     def dispatch(name, inp):
         if name == "finish":
-            if not result.stopped_reason:
-                result.stopped_reason = inp.get("reason", "")
+            reason = inp.get("reason", "")
+            with _SHARED_LOCK:
+                if lane:
+                    result.lane_reports.append({"lane": lane, "reason": reason})
+                elif not result.stopped_reason:
+                    result.stopped_reason = reason
             return "Stage complete.", True
         if name == "request_extension":
             reason = (inp.get("reason") or "").strip()
-            gs = min(4, max(0, pool["searches"]))     # grant capped by pool remainder
-            gp = min(6, max(0, pool["pages"]))
-            # Time grant: push the stage deadline up to +60s, never past the hard window.
-            gt = 0
-            if dl["t"] is not None and hard_deadline is not None:
-                new_t = min(hard_deadline, max(dl["t"], time.time()) + 60)
-                gt = max(0, int(new_t - dl["t"]))
-                dl["t"] = new_t
-            if gs <= 0 and gp <= 0 and gt <= 0:
-                log(f"[extension] denied (time window + pool exhausted): {reason[:200]}")
-                return "Denied: the research window is spent — finish with what you have.", False
-            alloc["searches"] += gs; alloc["pages"] += gp
+            with _SHARED_LOCK:
+                gs = min(4, max(0, pool["searches"]))     # grant capped by pool remainder
+                gp = min(6, max(0, pool["pages"]))
+                # Time grant: push the stage deadline up to +60s, never past the hard window.
+                gt = 0
+                if dl["t"] is not None and hard_deadline is not None:
+                    new_t = min(hard_deadline, max(dl["t"], time.time()) + 60)
+                    gt = max(0, int(new_t - dl["t"]))
+                    dl["t"] = new_t
+                if gs <= 0 and gp <= 0 and gt <= 0:
+                    log(f"[extension] denied (time window + pool exhausted): {reason[:200]}")
+                    return "Denied: the research window is spent — finish with what you have.", False
+                alloc["searches"] += gs; alloc["pages"] += gp
             log(f"[extension] granted (+{gt}s time, +{gs} searches/+{gp} opens): {reason[:200]}")
             return (f"Extension granted: +{gt}s on the clock, +{gs} searches / +{gp} page "
                     f"opens. {_budget()}", False)
@@ -541,10 +711,11 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             reason = (inp.get("reason") or "").strip()
             if not dom:
                 return "Could not parse that domain — give a bare domain like forum.example.com.", False
-            known = {normalize_domain(s.get("domain", "")) for s in srcs}
-            if dom in known or any(f.get("domain") == dom for f in result.discovered_forums):
-                return f"{dom} is already known — forum_search/site_search it directly.", False
-            result.discovered_forums.append({"domain": dom, "reason": reason})
+            with _SHARED_LOCK:
+                known = {normalize_domain(s.get("domain", "")) for s in srcs}
+                if dom in known or any(f.get("domain") == dom for f in result.discovered_forums):
+                    return f"{dom} is already known — forum_search/site_search it directly.", False
+                result.discovered_forums.append({"domain": dom, "reason": reason})
             log(f"[forum] discovered: {dom} — {reason}")
             return (f"Registered {dom} — you can forum_search/site_search it now; it will "
                     f"be surfaced to the user to add permanently.", False)
@@ -554,8 +725,9 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                 return denied, False
             try:
                 if name == "web_search":
-                    res = br.search(inp["engine"], inp["query"], limit=10)
-                    via = f"{inp['engine']}: {inp['query']}"
+                    res, via_eng = _engine_search(br, inp.get("engine"), inp["query"],
+                                                  limit=10, log=log)
+                    via = f"{via_eng}: {inp['query']}"
                 else:
                     dom = normalize_domain(inp.get("domain", "")) or \
                           (inp.get("domain") or "").strip().lower()
@@ -563,7 +735,8 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                         # The site's OWN search — platform adapter (Discourse/XenForo/Reddit/…)
                         # or a registered {q} template, run in the logged-in browser so it
                         # reaches unindexed/gated threads. Falls back to the site: engine when
-                        # native search yields nothing (JS-blocked, rate-limited, exotic CMS).
+                        # native search yields nothing (JS-blocked, rate-limited, exotic CMS),
+                        # then to Tavily domain-scoped search.
                         surl = next((str(s.get("search_url") or "").strip() for s in srcs
                                      if normalize_domain(s.get("domain", "")) == dom), "")
                         res = br.native_search(dom, inp["query"], search_url=surl, limit=10)
@@ -575,14 +748,21 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                     else:
                         res = br.site_search(inp["query"], dom, limit=10)
                         via = f"site:{dom} {inp['query']}"
-                    if dom and dom not in result.curated_searched:
-                        result.curated_searched.append(dom)
+                    if not res and tavily_enabled():
+                        res = _sr(tavily_search(inp["query"], num=10, include_domains=[dom],
+                                                log=log), "tavily")
+                        if res:
+                            via = f"tavily site:{dom} {inp['query']} (engines empty)"
+                    with _SHARED_LOCK:
+                        if dom and dom not in result.curated_searched:
+                            result.curated_searched.append(dom)
             except Exception as e:  # noqa: BLE001
                 return f"Search error: {type(e).__name__}: {e}", False
             if name == "forum_search":
                 log(f"[forum] {via} -> {len(res)} results")
             progress(stage_name, None, f"searched — {via}")
-            fresh = [r for r in res if r.url not in seen_urls]
+            with _SHARED_LOCK:
+                fresh = [r for r in res if r.url not in seen_urls]
             for r in fresh[:3]:       # feed: top hits cascading by
                 log(f"[hit] {(r.title or r.url)[:80]} → {r.url[:90]}")
             lines = [f"{i+1}. {r.title[:90]}\n   {r.url}" for i, r in enumerate(fresh)]
@@ -596,57 +776,67 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                 if name == "exa_search":
                     hits = exa_search(inp["query"], num=10, log=log)
                     via = f"exa: {inp['query']}"
-                    result.exa_searches += 1
+                    with _SHARED_LOCK:
+                        result.exa_searches += 1
                 else:
                     hits = exa_find_similar(inp.get("url", ""), num=10, log=log)
                     via = f"exa~similar: {inp.get('url', '')[:60]}"
-                    result.exa_similar += 1
+                    with _SHARED_LOCK:
+                        result.exa_similar += 1
             except Exception as e:  # noqa: BLE001
                 return f"Exa error: {type(e).__name__}: {e}", False
             log(f"[search] {via}")
             progress(stage_name, None, f"searched — {via}")
             lines = []
-            for hit in hits:
-                u = hit.get("url", "")
-                if not u:
-                    continue
-                if u not in result.exa_urls:
-                    result.exa_urls.append(u)
-                if u not in seen_urls:
-                    lines.append(f"{len(lines)+1}. {hit.get('title', '')[:90]}\n   {u}")
+            with _SHARED_LOCK:
+                for hit in hits:
+                    u = hit.get("url", "")
+                    if not u:
+                        continue
+                    if u not in result.exa_urls:
+                        result.exa_urls.append(u)
+                    if u not in seen_urls:
+                        lines.append(f"{len(lines)+1}. {hit.get('title', '')[:90]}\n   {u}")
             body = "\n".join(lines) if lines else "(no new results)"
             return f"Results for [{via}]:\n{body}\n\n{_budget()}", False
         if name == "open_page":
             url = inp["url"]
-            if url in seen_urls:
-                return "Already opened this URL. Skip it.", False
+            with _SHARED_LOCK:
+                if url in seen_urls:
+                    return "Already opened this URL. Skip it.", False
             denied = _consume("pages")
             if denied:
                 return denied, False
-            seen_urls.add(url)
+            with _SHARED_LOCK:
+                seen_urls.add(url)
             progress(stage_name, None, f"reading — {url[:70]}")
             pc = br.open(url)     # br logs the "[open] …" feed line itself
             if pc.error:
-                # Resilience: Chrome couldn't fetch (403 / wall / timeout). Fall back to
-                # Exa's cleaned contents so the page text isn't lost. Only when Exa is on.
-                fb = exa_contents(url, log=log) if exa_enabled() else ""
+                # Resilience: Chrome couldn't read it (bot challenge / 403 / timeout).
+                # Fetch it through the unblocking providers so the page isn't lost —
+                # Bright Data Web Unlocker → Tavily extract → Exa contents.
+                fb, prov = _fetch_fallback(url, log)
                 if fb:
-                    result.items.append(HarvestItem(
-                        url=url, title=inp.get("title") or url, text=fb,
-                        source_type=inp.get("source_type", "web"), via=f"{stage_name}+exa",
-                        retrieved_at=time.time()))
-                    if url not in result.exa_urls:
-                        result.exa_urls.append(url)
-                    shown = fb[:_PAGE_TEXT_TO_AGENT]
-                    tail = "" if len(fb) <= _PAGE_TEXT_TO_AGENT else \
-                           f"\n…[+{len(fb) - _PAGE_TEXT_TO_AGENT} more chars stored]"
-                    return (f"Opened (Chrome failed: {pc.error} — recovered via Exa):\n"
-                            f"URL: {url}\n\n{shown}{tail}\n\n"
-                            f"[harvested {len(result.items)} total] {_budget()}", False)
-                return f"Could not open ({pc.error}).", False
+                    n = _harvest(HarvestItem(
+                        url=url, title=fb.get("title") or inp.get("title") or url,
+                        text=fb["text"], source_type=inp.get("source_type", "web"),
+                        via=f"{stage_name}+{prov}", retrieved_at=time.time()))
+                    with _SHARED_LOCK:
+                        result.fallback_fetches.append({"url": url, "via": prov,
+                                                        "reason": pc.error[:80]})
+                    txt = fb["text"]
+                    shown = txt[:_PAGE_TEXT_TO_AGENT]
+                    tail = "" if len(txt) <= _PAGE_TEXT_TO_AGENT else \
+                           f"\n…[+{len(txt) - _PAGE_TEXT_TO_AGENT} more chars stored]"
+                    with _SHARED_LOCK:
+                        links_sec = _page_links_section(fb.get("links"), url, seen_urls)
+                    return (f"Opened via {prov} (Chrome was blocked: {pc.error}):\n"
+                            f"URL: {url}\n\n{shown}{tail}{links_sec}\n\n"
+                            f"[harvested {n} total] {_budget()}", False)
+                return f"Could not open ({pc.error}) and no unblocking provider could fetch it.", False
             # Store the RAW page text — goal-based extraction + junk filtering happens
             # post-hoc in synthesize.py (Pass A), which needs the full page.
-            result.items.append(HarvestItem(
+            n = _harvest(HarvestItem(
                 url=pc.url, title=pc.title, text=pc.text,
                 source_type=inp.get("source_type", "web"), via=stage_name,
                 used_screenshot=pc.used_screenshot, retrieved_at=time.time()))
@@ -654,9 +844,10 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             tail = "" if len(pc.text) <= _PAGE_TEXT_TO_AGENT else \
                    f"\n…[+{len(pc.text)-_PAGE_TEXT_TO_AGENT} more chars stored]"
             note = " (thin → screenshot)" if pc.used_screenshot else ""
-            links_sec = _page_links_section(pc.links, pc.url, seen_urls)
+            with _SHARED_LOCK:
+                links_sec = _page_links_section(pc.links, pc.url, seen_urls)
             return (f"Opened: {pc.title}{note}\nURL: {pc.url}\n\n{shown}{tail}{links_sec}\n\n"
-                    f"[harvested {len(result.items)} total] {_budget()}", False)
+                    f"[harvested {n} total] {_budget()}", False)
         return f"Unknown tool {name!r}.", False
 
     def _compact_input(name, inp):
@@ -681,16 +872,20 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             log(f"[stop] {stage_name}: halted by user — preserving harvest")
             break
         # User asked to end this stage early → stop, keep what's harvested, roll forward.
+        # (Parallel lanes don't clear the flag — the orchestrator clears it once ALL
+        # lanes have seen it.)
         if skip_event is not None and skip_event.is_set():
-            skip_event.clear()
+            if clear_skip:
+                skip_event.clear()
             notes.append(f"[{stage_name}] ended early by user.")
             log(f"[{stage_name}] skipped by user")
             break
         # Time governor: when the (possibly extended) stage window is gone, move on.
-        if dl["t"] is not None and time.time() > max(dl["t"], hard_deadline or dl["t"]) :
+        if dl["t"] is not None and time.time() > max(dl["t"], hard_deadline or dl["t"]):
             notes.append(f"[{stage_name}] time window closed.")
             log(f"[{stage_name}] time window closed — moving on")
             break
+        _compact_messages(messages, log)
         log(f"[turn] {stage_name}: agent weighing next move…{_clock()}")
         resp = client.messages.create(model=_MODEL, max_tokens=4096, system=system,
                                       tools=tools, messages=messages)
@@ -720,7 +915,6 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
         if fin:
             _trace(f"[{stage_name}] agent signaled finish")
             break
-
 
 def _credentialed_sources(sources, vault) -> list[dict]:
     """Credentialed sources to search in Stage 3: a domain must (a) have a stored login in
@@ -1033,6 +1227,225 @@ def _listing(items) -> str:
                      for s in items) or "  (none)"
 
 
+# ── Stage 2 as PARALLEL LANES + a sequential hot-trail digger ─────────────────
+# The orchestrator-worker pattern (Anthropic's research system; open_deep_research):
+# a lead decomposes the question into independent lanes, parallel workers gather,
+# then ONE synthesis step writes from the pooled context. Our twist honors precept 3
+# (chase the hot trail): after the lanes finish, a lead review picks the single
+# hottest trail and one sequential digger follows it with whatever Stage-2 time is
+# left. Model latency dominates a turn, so N lanes ≈ N× pages per minute; the browser
+# serializes page actions on its owner thread (see browser.py).
+_LANES_BY_DEPTH = {"standard": 3, "deep": 4, "exhaustive": 5}
+
+
+def _max_lanes(depth: str) -> int:
+    try:
+        n = int(os.environ.get("DRT_LANES", "") or 0)
+    except ValueError:
+        n = 0
+    return max(1, min(8, n or _LANES_BY_DEPTH.get(depth, 3)))
+
+
+def plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log) -> list[dict]:
+    """Decompose the question into 1..max_lanes independent research lanes.
+    Returns [{name, mission, queries:[...]}] — [] on failure or when one lane suffices."""
+    log = log or (lambda m: None)
+    if max_lanes <= 1:
+        return []
+    sys_p = (
+        "You are the LEAD of a parallel deep-research team. Decompose the user's question "
+        f"into 1 to {max_lanes} independent research LANES that separate researchers can "
+        "pursue AT THE SAME TIME without overlapping. A lane is a distinct angle, sub-question, "
+        "stakeholder, source type, or community whose findings are NEEDED for the SPECIFIC "
+        "question — not a generic outline. Do not manufacture lanes: a narrow question may "
+        "need only 1 or 2. Good lane splits: primary/official evidence vs. practitioner/forum "
+        "discussion vs. adversarial (complaints/failures/lawsuits) vs. a specific named entity "
+        "or version vs. a specific community to mine.\n"
+        "For each lane give: name (3-6 words), mission (2 sentences: exactly what to find and "
+        "where it most likely lives), queries (2-3 ENGINE queries — compact keyword strings, "
+        "2-6 terms, proper nouns / product names / insider vocabulary first, no question words).\n"
+        "Respond with ONLY JSON: {\"lanes\": [{\"name\": \"..\", \"mission\": \"..\", "
+        "\"queries\": [\"..\", \"..\"]}]}")
+    msg = f"QUESTION:\n{query}"
+    if clarifications:
+        msg += f"\n\nCONTEXT:\n{clarifications[:1500]}"
+    if stage1_brief:
+        msg += f"\n\nBASELINE BRIEF (what a quick sweep already established):\n{stage1_brief[:3000]}"
+    try:
+        r = client.messages.create(model=get_model("plan"), max_tokens=1500, system=sys_p,
+                                   messages=[{"role": "user", "content": msg}])
+        txt = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
+        m = re.search(r"\{.*\}", txt, re.S)
+        raw = json.loads(m.group(0)).get("lanes", []) if m else []
+    except Exception as e:  # noqa: BLE001
+        log(f"[lane] lane planning failed ({type(e).__name__}) — single-lane Stage 2")
+        return []
+    lanes = []
+    for ln in raw:
+        if not isinstance(ln, dict):
+            continue
+        name = str(ln.get("name") or "").strip()[:80]
+        mission = str(ln.get("mission") or "").strip()[:600]
+        qs = [str(q).replace("?", "").strip()[:120] for q in (ln.get("queries") or [])
+              if str(q).strip()][:3]
+        if name and mission:
+            lanes.append({"name": name, "mission": mission, "queries": qs})
+        if len(lanes) >= max_lanes:
+            break
+    if lanes:
+        log(f"[lane] planned {len(lanes)} lane(s): " + " | ".join(l["name"] for l in lanes))
+    return lanes
+
+
+def _lead_review(client, query, result, lanes, lane_notes, log) -> dict:
+    """After the lanes: pick the ONE hottest trail worth a dedicated sequential dig.
+    Returns {hot_trail, why, queries, start_urls} (hot_trail '' = nothing worth it)."""
+    log = log or (lambda m: None)
+    parts = []
+    reports = {r.get("lane"): r.get("reason", "") for r in (result.lane_reports or [])}
+    for i, ln in enumerate(lanes):
+        tag = f"L{i + 1}"
+        notes = "\n".join(lane_notes[i])[-1200:] if lane_notes[i] else "(no notes)"
+        parts.append(f"### {tag} — {ln['name']}\nMISSION: {ln['mission']}\n"
+                     f"FINISH REASON: {reports.get(tag, '(did not finish — clock/skip)')}\n"
+                     f"NOTES (tail):\n{notes}")
+    pages = [it for it in result.items if it.via.startswith("stage2")]
+    plist = "\n".join(f"- {(it.title or it.url)[:90]} — {it.url[:100]}" for it in pages[-40:])
+    sys_p = (
+        "You are the LEAD reviewing what parallel research lanes just gathered. Decide whether "
+        "there is ONE hot trail — a specific thread, community, document, author, version, or "
+        "angle where the research was visibly closing in on the user's SPECIFIC question but "
+        "stopped short (clock ran out, wall hit, one hop away from the primary source). If so, "
+        "describe it concretely so a single researcher can continue it immediately: where to "
+        "start (URLs already seen that should be re-read deeper / paginated / followed), and "
+        "2-4 ENGINE queries (compact keyword strings). If the lanes genuinely exhausted the "
+        "question, or nothing stands out, set hot_trail to an empty string.\n"
+        "Respond with ONLY JSON: {\"hot_trail\": \"..\", \"why\": \"..\", "
+        "\"queries\": [\"..\"], \"start_urls\": [\"..\"]}")
+    msg = (f"QUESTION:\n{query}\n\nLANE REPORTS:\n" + "\n\n".join(parts) +
+           f"\n\nPAGES HARVESTED IN STAGE 2 ({len(pages)}):\n{plist or '(none)'}")
+    try:
+        r = client.messages.create(model=get_model("plan"), max_tokens=1200, system=sys_p,
+                                   messages=[{"role": "user", "content": msg}])
+        txt = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
+        m = re.search(r"\{.*\}", txt, re.S)
+        data = json.loads(m.group(0)) if m else {}
+    except Exception as e:  # noqa: BLE001
+        log(f"[lane] lead review failed ({type(e).__name__}) — skipping the hot-trail dig")
+        return {}
+    return {"hot_trail": str(data.get("hot_trail") or "").strip()[:800],
+            "why": str(data.get("why") or "").strip()[:600],
+            "queries": [str(q).replace("?", "").strip()[:120] for q in (data.get("queries") or [])
+                        if str(q).strip()][:4],
+            "start_urls": [str(u).strip() for u in (data.get("start_urls") or [])
+                           if str(u).strip().startswith("http")][:6]}
+
+
+def _run_stage2_lanes(client, br, result, seen_urls, *, query, task, clarifications,
+                      governance, listing, focus, tools, cap2, pool, depth, stage1_brief,
+                      stage2_end, gather_deadline, progress, log, notes, skip_event,
+                      stop_event, sources):
+    """Stage 2 orchestration: lane planning → parallel lanes → lead review → hot-trail dig.
+    Falls back to the classic single loop when one lane suffices (or planning fails)."""
+    max_lanes = _max_lanes(depth)
+    lanes = plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log)
+    if len(lanes) <= 1:
+        task2 = task
+        if lanes:
+            ln = lanes[0]
+            task2 += (f"\n\nRESEARCH LANE: {ln['name']}\nMISSION: {ln['mission']}\n"
+                      f"SEED QUERIES: {'; '.join(ln.get('queries') or [])}")
+        _run_browser_stage(
+            client, br, result, seen_urls, stage_name="stage2",
+            system=_stage_system("engines", governance, listing, cap2, stage1_brief,
+                                 focus_note=focus, pool=pool),
+            task=task2, tools=tools, cap=cap2, progress=progress, log=log, notes=notes,
+            skip_event=skip_event, question=query, sources=sources, pool=pool,
+            deadline=stage2_end, hard_deadline=gather_deadline, stop_event=stop_event)
+        return
+
+    n = len(lanes)
+    result.lanes = [{"name": l["name"], "mission": l["mission"]} for l in lanes]
+    lane_cap = {"searches": max(4, round(cap2["searches"] / n)),
+                "pages": max(5, round(cap2["pages"] / n)),
+                "max_turns": cap2["max_turns"]}
+    # Lanes get ~70% of the Stage-2 share; the digger gets the rest — plus whatever the
+    # lanes leave unused when they exhaust themselves early (the 1-hour tier's intent).
+    lanes_end = min(stage2_end, time.time() + 0.7 * max(0, stage2_end - time.time()))
+    log(f"[lane] running {n} lanes in parallel · each {lane_cap['searches']}s/"
+        f"{lane_cap['pages']}p soft · lanes window {int(lanes_end - time.time())}s")
+    progress("stage2", None, f"{n} parallel lanes: " + " · ".join(l["name"] for l in lanes)[:120])
+    lane_notes = [[] for _ in lanes]
+
+    def _one(i, ln):
+        tag = f"L{i + 1}"
+        llog = _lane_log(log, tag)
+        task_i = (f"{task}\n\nYOUR RESEARCH LANE ({tag} of {n}; the other lanes run in "
+                  f"parallel and cover the other angles): {ln['name']}\n"
+                  f"MISSION: {ln['mission']}\n"
+                  f"SEED QUERIES (engine-optimized — refine as you learn): "
+                  + ("; ".join(ln.get("queries") or []) or "(craft your own)") +
+                  "\nStay on your lane. Finish when your lane is exhausted — do not tour.")
+        sysm = _stage_system("engines", governance, listing, lane_cap, stage1_brief,
+                             focus_note=(focus + f"\nLANE {tag}: {ln['name']} — {ln['mission']}"),
+                             pool=pool)
+        try:
+            _run_browser_stage(
+                client, br, result, seen_urls, stage_name=f"stage2/{tag}", system=sysm,
+                task=task_i, tools=tools, cap=lane_cap, progress=progress, log=llog,
+                notes=lane_notes[i], skip_event=skip_event, question=query, sources=sources,
+                pool=pool, deadline=lanes_end, hard_deadline=gather_deadline,
+                stop_event=stop_event, lane=tag, clear_skip=False)
+        except Exception as e:  # noqa: BLE001
+            msg = f"[stage2/{tag}] aborted: {type(e).__name__}: {e}"
+            lane_notes[i].append(msg)
+            llog(msg + " — other lanes continue")
+
+    with _cf.ThreadPoolExecutor(max_workers=n, thread_name_prefix="drt-lane") as ex:
+        list(ex.map(lambda p: _one(*p), enumerate(lanes)))
+    if skip_event is not None and skip_event.is_set():
+        skip_event.clear()
+    for i, ln in enumerate(lanes):
+        if lane_notes[i]:
+            notes.append(f"[stage2/L{i + 1} · {ln['name']}]\n" + "\n\n".join(lane_notes[i]))
+    log(f"[lane] lanes complete — {result.pages_used} pages / {result.searches_used} "
+        f"searches so far · pool {pool['searches']}s/{pool['pages']}p left")
+    if stop_event is not None and stop_event.is_set():
+        return
+
+    # ── lead review → sequential hot-trail dig on the remaining Stage-2 time ──
+    remaining = stage2_end - time.time()
+    if remaining < 45:
+        log("[lane] no Stage-2 time left for a hot-trail follow-up — moving on")
+        return
+    rev = _lead_review(client, query, result, lanes, lane_notes, log)
+    trail = (rev.get("hot_trail") or "").strip()
+    if not trail:
+        log("[lane] lead review: no single hot trail worth a dedicated dig — moving on")
+        return
+    log(f"[lane] HOT TRAIL → {trail[:220]}")
+    progress("stage2", None, f"Hot trail: {trail[:80]}")
+    dig_cap = {"searches": max(4, min(pool["searches"], round(cap2["searches"] * 0.4))),
+               "pages": max(5, min(pool["pages"], round(cap2["pages"] * 0.4))),
+               "max_turns": cap2["max_turns"]}
+    task_d = (f"{task}\n\nLEAD REVIEW — CONTINUE THE HOT TRAIL. The parallel lanes have "
+              f"finished; this is the one line of inquiry closest to the specific answer:\n"
+              f"TRAIL: {trail}\nWHY: {rev.get('why', '')}\n"
+              f"START HERE: {'; '.join(rev.get('start_urls') or []) or '(use the queries)'}\n"
+              f"QUERIES: {'; '.join(rev.get('queries') or []) or '(craft your own)'}\n"
+              f"Follow it as far as it goes — pagination, replies, cited primaries, the "
+              f"author's other posts. Finish when it is exhausted.")
+    _run_browser_stage(
+        client, br, result, seen_urls, stage_name="stage2/dig",
+        system=_stage_system("engines", governance, listing, dig_cap, stage1_brief,
+                             focus_note=(focus + "\nROLE: hot-trail digger (sequential, "
+                                         "after the parallel lanes)"), pool=pool),
+        task=task_d, tools=tools, cap=dig_cap, progress=progress,
+        log=_lane_log(log, "dig"), notes=notes, skip_event=skip_event, question=query,
+        sources=sources, pool=pool, deadline=stage2_end, hard_deadline=gather_deadline,
+        stop_event=stop_event, lane="dig")
+
+
 # ── orchestrator ──────────────────────────────────────────────
 def run_local_baseline(browser, client, query, clarifications="", depth="standard",
                        log=None, stop_event=None) -> dict:
@@ -1086,16 +1499,8 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
     except Exception:
         blocked = []
     seen, pool = set(), []
-    for i, q in enumerate(queries):
-        if stop_event is not None and stop_event.is_set():
-            log("[stop] baseline sweep halted by user")
-            break
-        engine = "brave" if (i % 2) else "duckduckgo"
-        try:
-            results = browser.search(engine, q, limit=8)
-        except Exception as e:  # noqa: BLE001
-            log(f"[local-baseline] {engine} search failed ({q!r}): {e}")
-            continue
+
+    def _absorb(results, label):
         for rslt in results:
             url = (getattr(rslt, "url", "") or "").strip()
             if not url or url in seen or any(b and b in url for b in blocked):
@@ -1103,8 +1508,27 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
             seen.add(url)
             pool.append({"url": url, "title": getattr(rslt, "title", "") or url,
                          "snippet": getattr(rslt, "snippet", "") or ""})
-        _trace(f"[local-baseline] {engine}: {q!r} → {len(results)} results "
-               f"({len(pool)} unique so far)")
+        _trace(f"[local-baseline] {label} → {len(results)} results ({len(pool)} unique so far)")
+
+    for i, q in enumerate(queries):
+        if stop_event is not None and stop_event.is_set():
+            log("[stop] baseline sweep halted by user")
+            break
+        engine = "brave" if (i % 2) else "duckduckgo"
+        # Browser engine first; an empty result falls through the provider chain
+        # (Bright Data SERP → Tavily → Exa) inside _engine_search.
+        results, via = _engine_search(browser, engine, q, limit=8, log=log)
+        _absorb(results, f"{via}: {q!r}")
+    # API discovery widens the net with a DIFFERENT index each: Tavily (search API) and
+    # Exa (neural). Two queries each — the broadest ones — so the baseline pool isn't
+    # hostage to whatever the browser engines happened to rank.
+    if not (stop_event is not None and stop_event.is_set()):
+        if tavily_enabled():
+            for q in queries[:2]:
+                _absorb(_sr(tavily_search(q, num=8, log=log), "tavily"), f"tavily: {q!r}")
+        if exa_enabled():
+            for q in queries[:2]:
+                _absorb(_sr(exa_search(q, num=8, log=log), "exa"), f"exa: {q!r}")
     if not pool:
         return {"findings_md": "", "sources": [], "used": False}
 
@@ -1202,9 +1626,9 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
     plan = _apply_channel_overrides(plan, channel_overrides, log)   # user toggles win
     # Hard-gate the neural channel on Exa availability ONCE here, so the plan dict is the
     # single source of truth (summary line, audit, and Stage-2 wiring all read from it).
-    if not exa_enabled():
+    if not (exa_enabled() or tavily_enabled()):
         if plan.get("neural_search", {}).get("use"):
-            log("[plan] neural search requested but Exa not configured (DRT_EXA/EXA_API_KEY) — off")
+            log("[plan] API discovery requested but neither EXA_API_KEY nor TAVILY_API_KEY is set — off")
         plan["neural_search"] = {"use": False, "_unavailable": True}
     result.plan = plan
     result.category = plan.get("category", "") or ""
@@ -1262,12 +1686,14 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         result.stage1_sources = s1.get("sources", [])
         stage1_brief = s1.get("findings_md", "")
 
-        # ── STAGE 2 — browser engines + curated-site queries (plan-biased) ──
+        # ── STAGE 2 — parallel research lanes in Chrome + API discovery (plan-biased) ──
         site_ch = plan.get("site_queries", {})
         web_ch = plan.get("web_engines", {})
         use_sites = site_ch.get("use", True)        # hard on/off (planner skip OR user toggle)
         use_engines = web_ch.get("use", True)
-        use_neural = False   # neural/Exa search removed as an option (2026-08-29)
+        # API discovery (Exa neural + Tavily) — ON by default when a key is present.
+        use_neural = bool(plan.get("neural_search", {}).get("use")) and \
+            (exa_enabled() or tavily_enabled())
         # One-time (ephemeral) logins collected this run — used for the search, NEVER saved to the vault.
         ephemeral_creds: dict = {}
         # ── UNIFIED per-query site selection: ONE relevance call over the whole site list. The
@@ -1286,7 +1712,8 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 f"{len(public_selected)} public 🟢, {len(login_selected)} login-required 🔴")
         if use_engines or use_sites or use_neural:
             if use_neural:
-                log("[plan] neural search (Exa) enabled for Stage 2")
+                log("[plan] API discovery on for Stage 2: "
+                    + " + ".join(p for p, on in (("Exa", exa_enabled()), ("Tavily", tavily_enabled())) if on))
             progress("stage2", None, f"{plan_msg} — searching the web in Chrome…")
             # Curated sites with stored logins get used in all cases; uncredentialed walls defer to Stage 4.
             br.login_handler = _curated_login_handler(vault, result, log, "stage2")
@@ -1299,24 +1726,40 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 log("[plan] curated-site queries off for this run")
             focus = _stage2_focus(plan, use_sites, use_engines)
             if use_neural:
-                focus += (" Exa NEURAL search (exa_search) and find-similar (exa_find_similar) are "
-                          "available — use them for niche/long-tail discovery and to expand from a "
-                          "strong source, COMPLEMENTING (not duplicating) keyword web_search.")
-            _guarded_stage(
-                "stage2",
-                system=_stage_system("engines", governance, _listing(seed_for_browser), cap2,
-                                      stage1_brief, focus_note=focus, pool=pool),
-                task=task,
-                tools=_tool_defs(include_web_search=use_engines, include_site_search=use_sites,
-                                 include_neural=use_neural, include_register_forum=True),
-                cap=cap2, progress=progress, log=log, notes=notes, skip_event=skip_event,
-                sources=sources, pool=pool,
-                # Stage 2's soft time share: ~60% of whatever gathering window remains.
-                deadline=min(gather_deadline,
-                             time.time() + 0.6 * max(0, gather_deadline - time.time())),
-                hard_deadline=gather_deadline)
+                extras = []
+                if tavily_enabled():
+                    extras.append("web_search engine=\"tavily\" (an API search index — "
+                                  "different coverage from the browser engines; keyword craft applies)")
+                if exa_enabled():
+                    extras.append("exa_search (NEURAL — describe the KIND of page in natural "
+                                  "language; finds niche/long-tail pages keyword engines miss) and "
+                                  "exa_find_similar (expand from one strong page)")
+                focus += (" API DISCOVERY is available — " + "; ".join(extras) +
+                          ". Use it to COMPLEMENT the browser engines, not duplicate them.")
+            tools2 = _tool_defs(include_web_search=(use_engines or use_neural),
+                                include_site_search=use_sites,
+                                include_neural=(use_neural and exa_enabled()),
+                                include_register_forum=True)
+            # Stage 2's soft time share: ~60% of whatever gathering window remains.
+            stage2_end = min(gather_deadline,
+                             time.time() + 0.6 * max(0, gather_deadline - time.time()))
+            if stop_event is None or not stop_event.is_set():
+                try:
+                    _run_stage2_lanes(
+                        client, br, result, seen_urls, query=query, task=task,
+                        clarifications=clarifications, governance=governance,
+                        listing=_listing(seed_for_browser), focus=focus, tools=tools2,
+                        cap2=cap2, pool=pool, depth=depth, stage1_brief=stage1_brief,
+                        stage2_end=stage2_end, gather_deadline=gather_deadline,
+                        progress=progress, log=log, notes=notes, skip_event=skip_event,
+                        stop_event=stop_event, sources=sources)
+                except Exception as e:  # noqa: BLE001
+                    msg = f"[stage2] aborted: {type(e).__name__}: {e}"
+                    notes.append(msg)
+                    log(msg + " — continuing to next stage")
         else:
-            log("[plan] Stage 2 skipped — open engines, curated sites, and neural all off (API-only run)")
+            log("[plan] Stage 2 skipped — open engines, curated sites, and API discovery all off")
+
 
         # ── STAGE 3 — login-required (🔴) sites the plan selected ──
         # These come straight from the unified selection above (already relevance-filtered).
@@ -1420,28 +1863,40 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
 
 
 def run_gap_round(client, browser, harvest, gaps, governance=None, sources=None,
-                  progress=None, log=None, skip_event=None, cap=None):
+                  progress=None, log=None, skip_event=None, cap=None, deadline=None,
+                  stop_event=None):
     """One light browser (engines) pass to fill specific gaps — for the evolving-report
     deepening loop. Appends new pages to `harvest` (mutates it) and returns the count
-    of new items added. Reuses the already-open browser passed in."""
+    of new items added. Reuses the already-open browser passed in.
+
+    deadline: absolute epoch seconds this round may run until (the job layer passes the
+    run's synthesis-reserve boundary). Without it a request_extension here could only
+    grant units, never time — the "+0s" the 2026-09-03 trace showed."""
     import anthropic  # noqa: F401 (client is passed in; import kept for parity)
     log = log or (lambda m: None)
     progress = progress or (lambda *a, **k: None)
     governance = governance if governance is not None else _load_governance()
     sources = sources if sources is not None else load_sources()
     seen = {it.url for it in harvest.items}
-    cap = cap or {"searches": len(gaps) + 2, "pages": 6, "max_turns": 20}
+    depth = getattr(harvest, "depth", "standard")
+    if cap is None:
+        cap = ({"searches": len(gaps) + 6, "pages": 14, "max_turns": 40} if depth == "exhaustive"
+               else {"searches": len(gaps) + 2, "pages": 6, "max_turns": 20})
     # Gap rounds run on their own small pool (the run's global pool isn't threaded
     # through synthesize) — sized with one extension worth of headroom so a hot trail
-    # can still request_extension once. Modest by design.
+    # can still request_extension once. Modest by design (larger on the 1-hour tier).
     pool = {"searches": cap["searches"] + 4, "pages": cap["pages"] + 6}
-    use_neural = False   # neural/Exa search removed as an option (2026-08-29)
+    use_neural = bool(getattr(harvest, "plan", {}).get("neural_search", {}).get("use")) \
+        and exa_enabled()
     browser.login_handler = _record_skip_handler(harvest, log)
     gap_text = "\n".join(gaps)
     seed_for_browser = _select_relevant_seed_sources(client, gap_text, "", sources, log)
     task = ("Fill these specific gaps with targeted web searches, open the best results, "
             "then finish:\n" + "\n".join(f"- {g}" for g in gaps))
     before = len(harvest.items)
+    # Soft share for this round: up to 4 min (12 on exhaustive), never past the deadline.
+    soft = time.time() + (720 if depth == "exhaustive" else 240)
+    round_deadline = min(deadline, soft) if deadline else None
     try:
         _run_browser_stage(
             client, browser, harvest, seen, stage_name="synthesize",
@@ -1450,7 +1905,8 @@ def run_gap_round(client, browser, harvest, gaps, governance=None, sources=None,
             task=task, tools=_tool_defs(include_web_search=True, include_neural=use_neural,
                                         include_register_forum=True),
             cap=cap, progress=progress, log=log, notes=[], skip_event=skip_event,
-            question="\n".join(gaps), sources=sources, pool=pool)
+            question="\n".join(gaps), sources=sources, pool=pool,
+            deadline=round_deadline, hard_deadline=deadline, stop_event=stop_event)
     except Exception as e:  # noqa: BLE001
         log(f"[deepen] gap round failed: {type(e).__name__}: {e}")
     return len(harvest.items) - before
