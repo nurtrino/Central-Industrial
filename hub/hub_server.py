@@ -366,7 +366,14 @@ def autostart_tools():
 
 # ── local mode: the single-port router (Host header -> backend, raw relay) ────
 def route_host(host):
-    """'<name>.localhost' -> the tool whose local.host is <name>; else None (= the hub)."""
+    """'<name>.localhost' -> the tool whose local.host is <name>; else None (= the hub).
+
+    Routing is decided ONCE per TCP connection from its first request's Host header and
+    the whole connection is then relayed. That is exactly right for browsers, which pool
+    connections per origin (host:port) — a notes.localhost connection never carries a
+    127.0.0.1 request. A client that reuses one connection while changing the Host
+    header (some scripted HTTP clients) would get the first backend's answers; use a
+    fresh connection per host in scripts."""
     host = (host or "").split(":")[0].strip().lower()
     if not host.endswith(".localhost"):
         return None

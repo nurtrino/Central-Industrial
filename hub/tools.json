@@ -42,7 +42,7 @@
         "port": 5008,
         "cwd": "D:\\_______Claude\\Central-Industrial\\hyper-jeopardy",
         "cmd": [
-          "C:\\Program Files\nodejs\node.exe",
+          "C:/Program Files/nodejs/node.exe",
           "--import",
           "tsx",
           "server.ts"
