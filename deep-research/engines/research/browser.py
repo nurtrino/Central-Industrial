@@ -56,15 +56,41 @@ _ENGINES = {
         "result_sel": "a.result__a",
         "snippet_sel": "a.result__snippet",
     },
+    # Brave (2026-09): results are Svelte `.snippet` blocks (no #results container any
+    # more); each holds the real href on its anchors and a title element. Rate-limited
+    # loads render a `.captcha-wrapper` page instead — detected and returned as empty so
+    # the provider fallback chain takes over.
     "brave": {
         "url": "https://search.brave.com/search?q={q}",
-        "result_sel": "#results a:has(.title), #results .snippet a[href^='http']",
+        "result_sel": ".snippet, .captcha-wrapper",
         "snippet_sel": ".snippet-description",
+        "extract_js": """() => {
+            if (document.querySelector('.captcha-wrapper')) return {captcha: true, rows: []};
+            const rows = [];
+            for (const s of document.querySelectorAll('.snippet')) {
+                if (s.closest('.video-cluster-grid, [class*=video-cluster]')) continue;
+                const a = Array.from(s.querySelectorAll('a[href^="http"]'))
+                               .find(x => !/search\\.brave\\.com|brave\\.com\\/search/.test(x.href));
+                if (!a) continue;
+                const t = s.querySelector('.title, h2, h3, [class*="title"]');
+                const title = ((t && t.innerText) || a.innerText || '').trim().split('\\n')
+                              .filter(x => x.trim().length > 3).pop() || a.href;
+                const d = s.querySelector('.snippet-description, [class*="description"]');
+                rows.push({href: a.href, title: title.slice(0, 200),
+                           snippet: ((d && d.innerText) || '').trim().slice(0, 300)});
+            }
+            return {captcha: false, rows};
+        }""",
     },
+    # Google (2026-09): result anchors are `a:has(h3)` inside #rso, but every href is an
+    # opaque redirect `/goto?url=<token>` (the old /url?q= is gone). The token resolves
+    # with a plain 302 → real URL via the session's own request client, so hrefs are
+    # resolved BEFORE the junk-host filter (which would otherwise drop google.com/goto).
     "google": {
-        "url": "https://www.google.com/search?q={q}",
-        "result_sel": "a:has(h3)",
+        "url": "https://www.google.com/search?q={q}&hl=en",
+        "result_sel": "#rso a:has(h3), a:has(h3)",
         "snippet_sel": "div[data-sncf] , div.VwiC3b",
+        "resolve_goto": True,
     },
 }
 
@@ -377,11 +403,24 @@ class DRTBrowser:
                 page.wait_for_selector(cfg["result_sel"], timeout=8000)
             except PWTimeout:
                 self._log(f"[search] {engine}: no results selector (blocked/captcha?) q={query!r}")
-            anchors = page.query_selector_all(cfg["result_sel"])
             seen = set()
-            for a in anchors:
-                href = _normalize_href((a.get_attribute("href") or "").strip())
-                title = (a.inner_text() or "").strip().split("\n")[0]
+            if cfg.get("extract_js"):
+                # Engine-specific DOM extraction (Brave): [{href,title,snippet}] + captcha flag.
+                data = page.evaluate(cfg["extract_js"]) or {}
+                if data.get("captcha"):
+                    self._log(f"[search] {engine}: CAPTCHA page (rate-limited) q={query!r} -> 0 results")
+                    return out
+                rows = [(r.get("href") or "", r.get("title") or "", r.get("snippet") or "")
+                        for r in (data.get("rows") or [])]
+            else:
+                rows = []
+                for a in page.query_selector_all(cfg["result_sel"]):
+                    rows.append(((a.get_attribute("href") or "").strip(),
+                                 (a.inner_text() or "").strip().split("\n")[0], ""))
+            for href, title, snippet in rows:
+                href = _normalize_href(href)
+                if cfg.get("resolve_goto") and "/goto?url=" in href:
+                    href = self._resolve_goto(page, href)
                 if not href or not href.startswith("http"):
                     continue
                 if _JUNK_HOST.search(href):
@@ -390,13 +429,27 @@ class DRTBrowser:
                 if key in seen:
                     continue
                 seen.add(key)
-                out.append(SearchResult(title=title or href, url=key, engine=engine))
+                out.append(SearchResult(title=title or href, url=key, snippet=snippet, engine=engine))
                 if len(out) >= limit:
                     break
             self._log(f"[search] {engine} q={query!r} -> {len(out)} results")
         finally:
             page.close()
         return out
+
+    def _resolve_goto(self, page, href: str) -> str:
+        """Google's `/goto?url=<opaque token>` → the real URL. The endpoint answers a
+        plain 302 whose Location is the destination; ask through the page's own request
+        client (same cookies, works in remote-session mode too). '' on any failure."""
+        try:
+            full = href if href.startswith("http") else "https://www.google.com" + href
+            r = page.context.request.get(full, max_redirects=0, timeout=8000)
+            loc = (r.headers.get("location") or "").strip()
+            if 300 <= r.status < 400 and loc.startswith("http"):
+                return loc
+        except Exception:
+            pass
+        return ""
 
     def site_search(self, query: str, domain: str, engine: str = "duckduckgo",
                     limit: int = 10) -> list[SearchResult]:

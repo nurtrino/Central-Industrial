@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, asdict
 from .browser import DRTBrowser, _JUNK_HOST
 from .exa_search import exa_search, exa_find_similar, exa_contents, is_enabled as exa_enabled
 from .tavily_search import tavily_search, tavily_extract, is_enabled as tavily_enabled
+from .brave_search import brave_search as brave_api_search, is_enabled as brave_api_enabled
 from .brightdata import (serp_search as bd_serp_search, serp_enabled as bd_serp_enabled,
                          unlock_fetch as bd_unlock_fetch, unlock_enabled as bd_unlock_enabled)
 from .login import normalize_domain
@@ -519,6 +520,12 @@ def _engine_search(br, engine, query, limit=10, log=None):
         return _sr(tavily_search(query, num=limit, log=log), "tavily"), "tavily"
     if engine == "exa":
         return _sr(exa_search(query, num=limit, log=log), "exa"), "exa"
+    # Brave: the official Search API first when keyed (same index, no selector drift,
+    # no CAPTCHA page); the browser scrape below remains its fallback.
+    if engine == "brave" and brave_api_enabled():
+        rows = brave_api_search(query, num=limit, log=log)
+        if rows:
+            return _sr(rows, "brave"), "brave-api"
     res = []
     if br is not None:
         try:

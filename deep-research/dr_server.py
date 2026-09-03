@@ -162,7 +162,7 @@ def health():
         providers = {"brightdata": _bd.status(), "tavily": _tv.is_enabled(), "exa": _ex.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.bdsessions",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.engines",
                     "sources_hash": _sources_hash(), "providers": providers})
 
 

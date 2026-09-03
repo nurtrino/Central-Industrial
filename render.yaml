@@ -88,6 +88,8 @@ services:
         sync: false
       - key: TAVILY_API_KEY        # Tavily search API (on by default when set)
         sync: false
+      - key: BRAVE_API_KEY         # Brave Search API (official; scrape is the fallback)
+        sync: false
       - key: BRIGHTDATA_API_KEY    # Bright Data: one account token…
         sync: false
       - key: BRIGHTDATA_UNLOCKER_ZONE   # …+ Web Unlocker zone NAME (blocked-page fetch)
