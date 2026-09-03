@@ -32,3 +32,9 @@ mrmd-worker/*.spec
 
 # ── Not deployed: legacy Windows/WSL2 Home Assistant launcher (kept locally) ──
 Home Assistant/
+
+# ── Local hub runtime (shared Twixtle store lives on the Render disk in prod) ──
+hub/twixtle_puzzles.json
+
+# ── Hyper Jeopardy local runtime state (accounts/leaderboard/game snapshot) ──
+hyper-jeopardy/.data/

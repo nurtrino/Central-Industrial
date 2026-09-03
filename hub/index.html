@@ -21,7 +21,7 @@
     --light:#6C5EB5;    /* C64 text     (color reg 14) */
     --green:#9AD284;    /* C64 light green - ONLINE   */
     --red:#9A6759;      /* C64 light red  - OFFLINE   */
-    --cyan:#70A4B2;     /* C64 cyan       - LOCAL     */
+    --cyan:#70A4B2;     /* C64 cyan       - LOCAL / HOSTED */
   }
   html,body{height:100%;margin:0;}
   body{
@@ -95,6 +95,9 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   var hint  = document.getElementById('hint');
   var booted = false;
   var pollTimer = null;
+  // 'hosted' (the public site: gate + SSO links) or 'local' (this machine: the hub
+  // starts tools on demand). Reported by /api/status; same page either way.
+  var mode = 'hosted';
 
   function line(text, cls){
     var span = document.createElement('span');
@@ -112,6 +115,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   }
   var statusEls = {};   // id -> status <a>
   var latestById = {};  // id -> latest tool object (carries the fresh SSO token)
+  var busy = {};        // id -> true while a local launch is in flight
 
   function renderMenu(tools){
     statusEls = {};
@@ -125,8 +129,8 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
       s.className = 'status st-wait'; s.href = t.url; s.textContent = '[ ...... ]';
       out.appendChild(s); out.appendChild(document.createTextNode('\n'));
       statusEls[t.id] = s;
-      a.addEventListener('click', function(ev){ ev.preventDefault(); openTool(t); });
-      s.addEventListener('click', function(ev){ ev.preventDefault(); openTool(t); });
+      a.addEventListener('click', function(ev){ ev.preventDefault(); openTool(latestById[t.id] || t); });
+      s.addEventListener('click', function(ev){ ev.preventDefault(); openTool(latestById[t.id] || t); });
     });
     out.appendChild(document.createTextNode('\n'));
     out.appendChild(makeCursor());
@@ -140,8 +144,9 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   function paint(tools){
     tools.forEach(function(t){
       latestById[t.id] = t;
-      var s = statusEls[t.id]; if(!s) return;
-      if(t.local){ s.className='status st-local';  s.textContent='[ LOCAL   ]'; }
+      var s = statusEls[t.id]; if(!s || busy[t.id]) return;
+      if(t.kind === 'local_only' && mode !== 'local'){ s.className='status st-local'; s.textContent='[ LOCAL   ]'; }
+      else if(t.kind === 'hosted' && mode === 'local'){ s.className='status st-local'; s.textContent='[ HOSTED  ]'; }
       else if(t.up){ s.className='status st-online'; s.textContent='[ ONLINE  ]'; }
       else    { s.className='status st-offline';s.textContent='[ OFFLINE ]'; }
     });
@@ -151,7 +156,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
 
   function poll(){
     fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();})
-      .then(function(d){ if(d && d.sso) ssoToken = d.sso; paint(d.tools||[]); }).catch(function(){});
+      .then(function(d){ if(d && d.sso) ssoToken = d.sso; if(d && d.mode) mode = d.mode; paint(d.tools||[]); }).catch(function(){});
   }
 
   function toolHref(url){
@@ -160,9 +165,33 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   }
 
   function openTool(t){
-    // Tools admit ONLY visitors arriving from the hub: carry a short-lived SSO token that
-    // the tool swaps for its own session cookie. A direct visit (no token) bounces back here.
-    if(t.url){ window.location.href = toolHref(t.url); }
+    if(!t || !t.url) return;
+    // LOCAL hub: a tool that runs here but is down gets STARTED by the hub, and we wait
+    // for its port before navigating. Everything else (hosted-only tools, pages the hub
+    // serves itself) just opens.
+    if(mode === 'local' && t.kind === 'local' && !t.up){ launchLocal(t); return; }
+    // HOSTED hub: tools admit ONLY visitors arriving from the hub — carry a short-lived
+    // SSO token that the tool swaps for its own session cookie. A direct visit (no
+    // token) bounces back here.
+    window.location.href = toolHref(t.url);
+  }
+
+  function launchLocal(t){
+    var s = statusEls[t.id];
+    if(busy[t.id]) return; busy[t.id] = true;
+    if(s){ s.className='status st-wait'; s.textContent='[STARTING ]'; }
+    fetch('/api/launch?id='+encodeURIComponent(t.id),{cache:'no-store'}).catch(function(){});
+    var tries = 0;
+    var iv = setInterval(function(){
+      tries++;
+      fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();})
+        .then(function(dd){
+          var c = (dd.tools||[]).filter(function(x){return x.id===t.id;})[0];
+          if(c && c.up){ clearInterval(iv); busy[t.id] = false; window.location.href = t.url; }
+          else if(tries > 160){ clearInterval(iv); busy[t.id] = false;
+                                if(s){ s.className='status st-offline'; s.textContent='[ FAILED  ]'; } }
+        }).catch(function(){});
+    }, 500);
   }
 
   // ---- access gate + menu ----------------------------------------------
@@ -170,7 +199,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
     // Gate decision on each page load. We require the access code EVERY time the hub
     // loads: a 401 means no/expired cookie, and a 200 with gated:true means the gate is
     // on (even if a still-valid cookie exists) — both paths show the prompt. Only a
-    // gate-off server (local dev) goes straight to the menu.
+    // gate-off server (the local hub) goes straight to the menu.
     fetch('/api/status',{cache:'no-store'}).then(function(r){
       if(r.status === 401){ showAccessPrompt(); return null; }
       return r.json();
@@ -183,6 +212,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
 
   function showMenu(d){
     if(d && d.sso) ssoToken = d.sso;
+    if(d && d.mode) mode = d.mode;
     out.appendChild(document.createTextNode('\n'));
     line('WELCOME TO CENTRAL INDUSTRIAL. WE ARE THE FUTURE.');
     out.appendChild(document.createTextNode('\n'));

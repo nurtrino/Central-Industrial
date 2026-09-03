@@ -1,34 +1,109 @@
 {
+  "_comment": "One registry for BOTH hubs. url = hosted URL. path = page the hub serves itself (both modes). local = how the LOCAL hub (CI_LOCAL=1) reaches/starts the tool behind the single port: <host>.localhost:5050 -> 127.0.0.1:<port>, cmd spawned in cwd (supervised; detached = fire-and-forget). local_only = exists only on this machine; hidden = supervised but not listed.",
   "tools": [
     {
       "id": "deep-research",
       "name": "Deep Research",
-      "url": "http://127.0.0.1:5006/"
+      "url": "https://research.centralindustrial.ai/",
+      "local": {
+        "host": "research",
+        "port": 5006,
+        "cwd": "D:\\_______Claude\\Deep Research",
+        "cmd": [
+          "D:\\_______Claude\\Deep Research\\.venv\\Scripts\\pythonw.exe",
+          "dr_server.py"
+        ],
+        "log": "server.log",
+        "autostart": true
+      }
     },
     {
       "id": "monkeyreadmonkeydo",
       "name": "Monkey Read Monkey Do",
-      "url": "http://127.0.0.1:5005/"
+      "url": "https://notes.centralindustrial.ai/",
+      "local": {
+        "host": "notes",
+        "port": 5005,
+        "cwd": "D:\\_______Claude\\Monkey Read Monkey Do",
+        "cmd": [
+          "D:\\_______Claude\\Monkey Read Monkey Do\\.venv\\Scripts\\pythonw.exe",
+          "app.py"
+        ],
+        "log": "server.log",
+        "autostart": true
+      }
     },
     {
       "id": "hyperjeopardy",
       "name": "Hyper Jeopardy",
-      "url": "https://central-industrial.onrender.com/"
+      "url": "https://central-industrial.onrender.com/",
+      "local": {
+        "host": "jeopardy",
+        "port": 5008,
+        "cwd": "D:\\_______Claude\\Central-Industrial\\hyper-jeopardy",
+        "cmd": [
+          "C:\\Program Files\nodejs\node.exe",
+          "--import",
+          "tsx",
+          "server.ts"
+        ],
+        "env": {
+          "NODE_ENV": "production",
+          "PORT": "5008",
+          "DATA_DIR": "D:\\_______Claude\\Central-Industrial\\hyper-jeopardy\\.data"
+        },
+        "log": "server.log",
+        "autostart": true
+      }
     },
     {
       "id": "cavemap",
       "name": "Cave Map",
-      "url": "https://centralindustrial.ai/cave"
+      "url": "https://centralindustrial.ai/cave",
+      "path": "/cave"
     },
     {
       "id": "twixtle",
       "name": "Twixtle",
-      "url": "https://centralindustrial.ai/twixtle"
+      "url": "https://centralindustrial.ai/twixtle",
+      "path": "/twixtle"
     },
     {
       "id": "crate",
       "name": "Crate",
-      "url": "https://centralindustrial.ai/crate"
+      "url": "https://centralindustrial.ai/crate",
+      "path": "/crate"
+    },
+    {
+      "id": "home-assistant",
+      "name": "Home Automation",
+      "local_only": true,
+      "local": {
+        "host": "home",
+        "port": 8123,
+        "cwd": "D:\\_______Claude\\Home Assistant",
+        "cmd": [
+          "wscript.exe",
+          "D:\\_______Claude\\Home Assistant\\Home Assistant.vbs"
+        ],
+        "detached": true
+      }
+    },
+    {
+      "id": "readmonkeydo-worker",
+      "name": "Read Monkey Do GPU worker",
+      "hidden": true,
+      "local_only": true,
+      "local": {
+        "port": 5007,
+        "cwd": "D:\\_______Claude\\Monkey Read Monkey Do",
+        "cmd": [
+          "D:\\_______Claude\\Monkey Read Monkey Do\\ReadMonkeyDoWorker.exe",
+          "--no-browser"
+        ],
+        "log": "worker.log",
+        "autostart": true
+      }
     }
   ]
 }
