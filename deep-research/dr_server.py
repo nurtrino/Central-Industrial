@@ -159,7 +159,9 @@ def favicon():
 def health():
     try:
         from engines.research import brightdata as _bd, tavily_search as _tv, exa_search as _ex
-        providers = {"brightdata": _bd.status(), "tavily": _tv.is_enabled(), "exa": _ex.is_enabled()}
+        from engines.research import brave_search as _br
+        providers = {"brightdata": _bd.status(), "tavily": _tv.is_enabled(), "exa": _ex.is_enabled(),
+                     "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
     return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.engines",
