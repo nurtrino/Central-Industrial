@@ -157,7 +157,8 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.unified"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.publish",
+                    "sources_hash": _sources_hash()})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -1276,6 +1277,80 @@ def deep_research_probe_sources():
         _PROBE[probe_id] = {"done": False, "total": len(clean), "results": [], "error": None}
     threading.Thread(target=_probe_worker, args=(probe_id, clean), daemon=True).start()
     return jsonify({"probe_id": probe_id, "total": len(clean)}), 202
+
+
+# ── publish the site list to the hosted instance (LOCAL-ONLY) ───────────────────────
+# The hosted site gets its site list from the COMMITTED config file baked into the container
+# at deploy. So "publish" = copy the local drt_sources.json into a persistent clone of the
+# repo, commit, push → Render auto-deploys (~2 min). Only the site list travels; the vault
+# never does. Refused on the hosted instance (it is the destination, not the source).
+_REPO_DIR = os.environ.get("DRT_REPO_DIR", r"D:\_______Claude\Central-Industrial")
+_REPO_URL = "https://github.com/nurtrino/Central-Industrial.git"
+_REPO_SOURCES_REL = "deep-research/config/drt_sources.json"
+
+
+def _is_hosted_instance() -> bool:
+    # The auth gate is only configured on the hosted deployment.
+    return bool(os.environ.get("AUTH_SECRET", "").strip())
+
+
+def _sources_hash() -> str:
+    """Short content hash of the site list — exposed on /api/health so a publish can be
+    confirmed to have landed on the hosted instance (compare local vs hosted)."""
+    import hashlib
+    try:
+        with open(_DR_SOURCES_PATH, "rb") as fh:
+            return hashlib.sha1(fh.read()).hexdigest()[:8]
+    except Exception:
+        return ""
+
+
+@app.route("/api/deep_research/publish_sources", methods=["POST", "OPTIONS"])
+def deep_research_publish_sources():
+    if request.method == "OPTIONS":
+        return "", 204
+    if _is_hosted_instance():
+        return jsonify({"error": "Publishing is local-only — the hosted site is the destination, "
+                                 "not the source. Edit the list on the local app and publish from there."}), 403
+    import shutil
+    import subprocess
+
+    def git(*args, cwd=None):
+        r = subprocess.run(["git", *args], cwd=cwd or _REPO_DIR, capture_output=True,
+                           text=True, timeout=240)
+        return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+    try:
+        if not os.path.isdir(os.path.join(_REPO_DIR, ".git")):
+            os.makedirs(os.path.dirname(_REPO_DIR), exist_ok=True)
+            rc, out = git("clone", _REPO_URL, _REPO_DIR, cwd=os.path.dirname(_REPO_DIR))
+            if rc != 0:
+                return jsonify({"error": f"clone failed: {out[-400:]}"}), 500
+        rc, out = git("pull", "--ff-only", "origin", "main")
+        if rc != 0:
+            return jsonify({"error": f"pull failed: {out[-400:]}"}), 500
+        dest = os.path.join(_REPO_DIR, *_REPO_SOURCES_REL.split("/"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copyfile(_DR_SOURCES_PATH, dest)
+        git("add", _REPO_SOURCES_REL)                       # stage ONLY the site list
+        rc, _ = git("diff", "--cached", "--quiet", "--", _REPO_SOURCES_REL)
+        if rc == 0:
+            return jsonify({"ok": True, "changed": False, "sources_hash": _sources_hash(),
+                            "message": "Hosted site list already matches — nothing to publish."})
+        from engines.research.agent import load_sources
+        n = len(load_sources())
+        rc, out = git("commit", "-m", f"Deep Research: site list published from local ({n} sites)")
+        if rc != 0:
+            return jsonify({"error": f"commit failed: {out[-400:]}"}), 500
+        rc, out = git("push", "origin", "main")
+        if rc != 0:
+            return jsonify({"error": f"push failed: {out[-400:]}"}), 500
+        _, sha = git("rev-parse", "--short", "HEAD")
+        return jsonify({"ok": True, "changed": True, "commit": sha, "sources_hash": _sources_hash(),
+                        "message": f"Published {n} sites (commit {sha}). Render is redeploying the "
+                                   f"hosted site now — about 2 minutes."})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
 @app.route("/api/deep_research/probe_status", methods=["GET"])

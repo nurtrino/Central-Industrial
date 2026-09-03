@@ -243,6 +243,9 @@
     .dr-dot.green { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,.55); }
     .dr-dot.red   { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,.55); }
     .dr-dot.grey  { background: #6b7280; }
+    .dr-src-publish { border-color: var(--admin-color); color: var(--admin-color); }
+    .dr-src-publish:hover { background: rgba(84,255,120,.10); }
+    .dr-src-publish:disabled { opacity: .6; cursor: default; }
     /* source-access probe results */
     .dr-probe-note { font-size: 12px; color: var(--text-muted); margin: 10px 0; }
     .dr-probe-box { margin: 12px 0 4px; border: 1px solid var(--border-dim); border-radius: 8px; overflow: hidden; }
@@ -1461,6 +1464,8 @@ function _actAfter(owner) {
             <button class="dr-src-btn dr-src-save" onclick="drSaveSources()">Save sources</button>
             <button class="dr-src-btn" id="dr-probe-btn" onclick="drProbeSources()"
                     title="Run each site's logged-out search from THIS server, to see which work here without a login.">🛰 Test access from ${_drIsHosted() ? 'this server' : 'a headless guest'}</button>
+            ${_drIsHosted() ? '' : `<button class="dr-src-btn dr-src-publish" id="dr-publish-btn" onclick="drPublishSources()"
+                    title="Save, then commit the site list to the repo and push — Render redeploys centralindustrial.ai with it (~2 min). Only the list travels; your vault never does.">🚀 Publish to centralindustrial.ai</button>`}
             <span id="dr-src-msg" class="dr-src-msg"></span>
           </div>
           <div id="dr-probe-panel"></div>
@@ -1506,6 +1511,24 @@ function _actAfter(owner) {
     if (!_dr.sources[i]) return;
     _dr.sources[i][k] = v;
     if (k === 'domain' || k === 'url') _drRender();
+  }
+  // Publish (local-only): save, then commit + push the site list so Render redeploys the
+  // hosted site with it. Only the list travels — never the vault.
+  async function drPublishSources() {
+    const btn = document.getElementById('dr-publish-btn');
+    const msg = document.getElementById('dr-src-msg');
+    if (btn) { btn.disabled = true; btn.textContent = 'Publishing…'; }
+    await drSaveSources();
+    if (msg) { msg.textContent = 'Committing + pushing the site list…'; msg.style.color = 'var(--text-muted)'; }
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/publish_sources`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (msg) { msg.textContent = '🚀 ' + (j.message || 'Published'); msg.style.color = j.changed ? 'var(--admin-color)' : 'var(--text-muted)'; }
+    } catch (e) {
+      if (msg) { msg.textContent = 'Publish failed: ' + e.message; msg.style.color = '#ff8888'; }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Publish to centralindustrial.ai'; }
   }
   // Click the dot to cycle the login flag: untested → 🟢 no login → 🔴 login required → untested.
   function drToggleLogin(i) {
