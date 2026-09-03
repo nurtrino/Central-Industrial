@@ -1,74 +1,18 @@
 {
+  "_comment": "Unified site list for Deep Research. One entry per site: url + login_required (the green/red dot). login_required=false = searchable logged out (runs on hosted AND local); true = needs a login (local uses the encrypted vault silently; hosted, or local without a stored login, prompts for ONE-TIME credentials that are never saved); null = untested (the Sources-panel probe fills it in). The research plan still selects only the topically-relevant sites per query, on both instances. Optional 'note' aids that relevance selection and is not shown in the simplified UI. Edit locally + commit; edits made on the hosted site are ephemeral (Render disk).",
   "sources": [
-    {
-      "description": "general",
-      "domain": "x.com",
-      "enabled": true,
-      "name": "x",
-      "type": "forum"
-    },
-    {
-      "description": "tech",
-      "domain": "news.ycombinator.com",
-      "enabled": true,
-      "name": "hacker news",
-      "type": "forum"
-    },
-    {
-      "description": "tech",
-      "domain": "avforums.com",
-      "enabled": true,
-      "name": "avforum",
-      "type": "forum"
-    },
-    {
-      "description": "general",
-      "domain": "reddit.com",
-      "enabled": true,
-      "name": "reddit",
-      "type": "forum"
-    },
-    {
-      "description": "business",
-      "domain": "techcrunch.com",
-      "enabled": true,
-      "name": "techcrunch",
-      "type": "news"
-    },
-    {
-      "description": "tech",
-      "domain": "forums.tomshardware.com",
-      "enabled": true,
-      "name": "tom's hardware",
-      "type": "forum"
-    },
-    {
-      "description": "tech",
-      "domain": "linustechtips.com",
-      "enabled": true,
-      "name": "linus tech tips",
-      "type": "forum"
-    },
-    {
-      "description": "tech",
-      "domain": "wilderssecurity.com",
-      "enabled": true,
-      "name": "wilders security",
-      "type": "forum"
-    },
-    {
-      "description": "tech",
-      "domain": "rivianforums.com",
-      "enabled": true,
-      "name": "rivian forums",
-      "type": "forum"
-    },
-    {
-      "description": "pc",
-      "domain": "github.com",
-      "enabled": true,
-      "name": "github",
-      "type": "website"
-    }
+    {"url": "avforums.com", "login_required": false, "note": "AV / home-theater / receivers"},
+    {"url": "rivianforums.com", "login_required": false, "note": "Rivian EV owners"},
+    {"url": "forum.wiimhome.com", "login_required": false, "note": "WiiM audio streamers, multiroom"},
+    {"url": "seekingalpha.com", "login_required": false, "note": "investing / equities / earnings"},
+    {"url": "github.com", "login_required": false, "note": "code, repos, issues, tooling"},
+    {"url": "news.ycombinator.com", "login_required": false, "note": "tech news with expert comment threads"},
+    {"url": "techcrunch.com", "login_required": false, "note": "startup / tech business news"},
+    {"url": "forums.tomshardware.com", "login_required": false, "note": "PC hardware, builds, troubleshooting"},
+    {"url": "linustechtips.com", "login_required": false, "note": "PC / enthusiast tech community"},
+    {"url": "reddit.com", "login_required": true, "note": "thousands of topical subreddits"},
+    {"url": "x.com", "login_required": true, "note": "real-time expert discussion"},
+    {"url": "wilderssecurity.com", "login_required": true, "note": "security & privacy forum"},
+    {"url": "forum.openwrt.org", "login_required": true, "note": "router firmware / networking (Discourse)"}
   ]
 }

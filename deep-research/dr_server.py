@@ -157,7 +157,7 @@ def favicon():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.probe"})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-08-29.unified"})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -1373,13 +1373,34 @@ def deep_research_sources():
     data = request.get_json(silent=True) or {}
     srcs = data.get("sources", [])
     from engines.research.login import normalize_domain
+    # Sanitize to the UNIFIED schema: {url, login_required, note?, search_url?}. Accepts legacy
+    # entries (domain/description) and drops the retired per-site fields (name/type/enabled).
+    clean, seen = [], set()
     for s in srcs:
-        if isinstance(s, dict) and s.get("domain"):
-            s["domain"] = normalize_domain(s["domain"])
+        if not isinstance(s, dict):
+            continue
+        url = (s.get("url") or s.get("domain") or "").strip()
+        dom = normalize_domain(url) or url.lower()
+        if not dom or dom in seen:
+            continue
+        seen.add(dom)
+        lr = s.get("login_required")
+        entry = {"url": dom, "login_required": lr if lr in (True, False) else None}
+        note = (s.get("note") or s.get("description") or "").strip()
+        if note:
+            entry["note"] = note
+        surl = (s.get("search_url") or "").strip()
+        if surl:
+            entry["search_url"] = surl
+        clean.append(entry)
     os.makedirs(os.path.dirname(_DR_SOURCES_PATH), exist_ok=True)
     with open(_DR_SOURCES_PATH, "w", encoding="utf-8") as fh:
-        json.dump({"sources": srcs}, fh, indent=2)
-    return jsonify({"ok": True, "count": len(srcs)})
+        json.dump({"_comment": ("Unified site list: url + login_required (green/red dot). "
+                                "false = searchable logged out; true = needs a login (vault locally, "
+                                "one-time prompt otherwise); null = untested. The research plan selects "
+                                "the topically-relevant sites per query."),
+                   "sources": clean}, fh, indent=2)
+    return jsonify({"ok": True, "count": len(clean)})
 
 
 # ── Extract a source: scrape one page / crawl a site (Firecrawl → Exa fallback) ──

@@ -231,6 +231,18 @@
       border-radius: 8px; padding: 10px 13px; margin-bottom: 14px;
     }
     .dr-src-hosted-note strong { color: #f0c869; }
+    /* unified list: the dot IS the login flag */
+    .dr-src-table-simple th:first-child, .dr-src-dot-td { width: 28px; text-align: center; }
+    .dr-src-url { font-family: ui-monospace, monospace; }
+    .dr-dot {
+      width: 13px; height: 13px; border-radius: 50%; border: 1px solid rgba(0,0,0,.35);
+      cursor: pointer; padding: 0; vertical-align: middle; transition: transform .12s, box-shadow .12s;
+    }
+    .dr-dot:hover { transform: scale(1.25); }
+    .dr-dot:focus-visible { outline: 2px solid var(--admin-color); outline-offset: 2px; }
+    .dr-dot.green { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,.55); }
+    .dr-dot.red   { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,.55); }
+    .dr-dot.grey  { background: #6b7280; }
     /* source-access probe results */
     .dr-probe-note { font-size: 12px; color: var(--text-muted); margin: 10px 0; }
     .dr-probe-box { margin: 12px 0 4px; border: 1px solid var(--border-dim); border-radius: 8px; overflow: hidden; }
@@ -1334,7 +1346,7 @@ function _actAfter(owner) {
     const btn = document.getElementById('dr-probe-btn');
     const panel = document.getElementById('dr-probe-panel');
     if (!panel) return;
-    const doms = (_dr.sources || []).map(s => (s.domain || '').trim().toLowerCase()).filter(Boolean);
+    const doms = (_dr.sources || []).map(s => _drSiteDomain(s.url || s.domain || '')).filter(Boolean);
     if (!doms.length) { panel.innerHTML = '<div class="dr-probe-note">No sources to test.</div>'; return; }
     if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
     panel.innerHTML = '<div class="dr-probe-note">Launching a logged-out browser and searching each site — a few seconds each…</div>';
@@ -1352,7 +1364,22 @@ function _actAfter(owner) {
       catch (e) { continue; }
       if (st.error && !(st.results || []).length) { panel.innerHTML = `<div class="dr-probe-note">Probe error: ${_esc(st.error)}</div>`; break; }
       panel.innerHTML = _drProbeHtml(st.results || [], st.total || doms.length, st.done);
-      if (st.done) break;
+      if (st.done) {
+        // Write the measured verdict back onto the list: searchable without a login → 🟢,
+        // otherwise → 🔴. Then re-render the dots and persist.
+        (st.results || []).forEach(r => {
+          const src = (_dr.sources || []).find(s => {
+            const u = _drSiteDomain(s.url || s.domain || '');
+            return u && (u === r.domain || u.endsWith('.' + r.domain) || r.domain.endsWith('.' + u));
+          });
+          if (src) src.login_required = !r.ok;
+        });
+        _drRender();
+        const p2 = document.getElementById('dr-probe-panel');
+        if (p2) p2.innerHTML = _drProbeHtml(st.results || [], st.total || doms.length, true);
+        drSaveSources();
+        break;
+      }
     }
     if (btn) { btn.disabled = false; btn.textContent = _drProbeLabel(); }
   }
@@ -1381,13 +1408,25 @@ function _actAfter(owner) {
     } else {
       const vault = _dr.vaultDomains || [];
       const rows = _dr.sources.map((s, i) => {
-        const dom = (s.domain||'').trim().toLowerCase();
+        const url = (s.url || s.domain || '').trim();
+        const dom = _drSiteDomain(url);
         const hasCred = dom && vault.some(d => dom === d || dom.endsWith('.'+d) || d.endsWith('.'+dom));
-        const lock = !dom ? `<span class="dr-lock-na" title="Enter a domain first">·</span>`
-          : `<button class="dr-lock ${hasCred?'on':''}" onclick="drToggleCred(${i})"
-                 title="${hasCred?'Credentials stored — click to edit/remove':'Store a login for this source'}">${hasCred?'🔒':'🔑'}</button>`;
+        const lr = s.login_required;
+        // The dot IS the login flag: 🟢 searchable logged out · 🔴 needs a login · ⚪ untested.
+        const dotCls = lr === true ? 'red' : (lr === false ? 'green' : 'grey');
+        const dotTitle = lr === true ? 'Requires a login to search — click to change'
+          : (lr === false ? 'Searchable without a login — click to change'
+          : 'Untested — click to set, or run 🛰 Test access');
+        const dot = `<button class="dr-dot ${dotCls}" onclick="drToggleLogin(${i})" title="${dotTitle}" aria-label="${dotTitle}"></button>`;
+        // Vault-login affordance only where it matters: login-required rows — and ONLY on the
+        // local app. The hosted site never stores credentials; a relevant 🔴 site there is
+        // satisfied by the one-time prompt at search time instead.
+        const lock = (lr === true && dom && !_drIsHosted())
+          ? `<button class="dr-lock ${hasCred?'on':''}" onclick="drToggleCred(${i})"
+                 title="${hasCred?'Login stored in your local vault — click to edit/remove':'Store a login in your local vault (otherwise you\'ll be asked once per search)'}">${hasCred?'🔒':'🔑'}</button>`
+          : '';
         const editor = (_dr.credOpenIdx === i && dom) ? `
-          <tr class="dr-cred-edit-row"><td colspan="8">
+          <tr class="dr-cred-edit-row"><td colspan="4">
             <div class="dr-cred-edit">
               <div class="dr-cred-edit-title">Login for <strong>${_esc(dom)}</strong>
                 <span class="dr-src-note" style="margin:0"> — saved to your encrypted local vault; makes this a Stage 3 source.</span></div>
@@ -1404,12 +1443,8 @@ function _actAfter(owner) {
           </td></tr>` : '';
         return `
           <tr>
-            <td><input class="dr-src-in" value="${_esc(s.name||'')}"    onchange="drEditSource(${i},'name',this.value)" placeholder="Name"></td>
-            <td><input class="dr-src-in" value="${_esc(s.domain||'')}"  onchange="drEditSource(${i},'domain',this.value)" placeholder="domain.com"></td>
-            <td><input class="dr-src-in" value="${_esc(s.type||'')}"    onchange="drEditSource(${i},'type',this.value)" placeholder="forum"></td>
-            <td class="dr-src-desc-td"><input class="dr-src-in dr-src-desc" value="${_esc(s.description||'')}" onchange="drEditSource(${i},'description',this.value)" placeholder="What subject matter this site covers" title="${_esc(s.description||'')}"></td>
-            <td class="dr-src-surl-td"><input class="dr-src-in" value="${_esc(s.search_url||'')}" onchange="drEditSource(${i},'search_url',this.value)" placeholder="https://site.com/search?q={q}" title="The site's own search page — lets the agent search INSIDE the forum (works behind logins). {q} = query."></td>
-            <td style="text-align:center"><input type="checkbox" ${s.enabled!==false?'checked':''} onchange="drEditSource(${i},'enabled',this.checked)"></td>
+            <td class="dr-src-dot-td">${dot}</td>
+            <td><input class="dr-src-in dr-src-url" value="${_esc(url)}" onchange="drEditSource(${i},'url',this.value)" placeholder="forum.example.com"></td>
             <td style="text-align:center">${lock}</td>
             <td style="text-align:center"><button class="dr-src-del" onclick="drRemoveSource(${i})" title="Remove">✕</button></td>
           </tr>${editor}`;
@@ -1417,9 +1452,9 @@ function _actAfter(owner) {
       inner = `
         <div class="dr-src-body">
           ${_drIsHosted() ? `<div class="dr-src-hosted-note">🔒 <strong>Credentialed research runs on the local app.</strong> You're on the hosted site — it has no access to your saved vault, logins entered here are temporary, and a cloud server rarely gets past bot-protection on gated forums. For logged-in, deep-forum research, run Deep Research locally.</div>` : ''}
-          <table class="dr-src-table">
-            <thead><tr><th>Name</th><th>Domain</th><th>Type</th><th>Description</th><th title="The site's own search page — lets the agent search INSIDE the forum (works behind logins). {q} = query.">Search URL</th><th>On</th><th>Login</th><th></th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="8" style="color:var(--text-muted);padding:10px">No sources yet.</td></tr>'}</tbody>
+          <table class="dr-src-table dr-src-table-simple">
+            <thead><tr><th title="🟢 searchable without a login · 🔴 needs a login · ⚪ untested"></th><th>Site</th><th></th><th></th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4" style="color:var(--text-muted);padding:10px">No sources yet.</td></tr>'}</tbody>
           </table>
           <div class="dr-src-actions">
             <button class="dr-src-btn" onclick="drAddSource()">+ Add source</button>
@@ -1429,9 +1464,10 @@ function _actAfter(owner) {
             <span id="dr-src-msg" class="dr-src-msg"></span>
           </div>
           <div id="dr-probe-panel"></div>
-          <div class="dr-src-note">A seed list, not a fence — the agent also follows relevant forums/sites it discovers.
-            🔑 = store a login (saved encrypted; becomes a Stage 3 credentialed source). 🔒 = login stored.
-            🛰 = test which sites are searchable here WITHOUT a login${_drIsHosted() ? ' (this is Render’s datacenter IP — the true hosted picture)' : ' (headless guest, ≈ the hosted environment)'}.</div>
+          <div class="dr-src-note">One list, every site eligible — the research plan picks only the sites relevant to each query.
+            🟢 searchable without a login (runs here and locally) · 🔴 needs a login: local uses your vault silently; otherwise you're asked once per search and nothing is saved · ⚪ untested.
+            Click a dot to set it, or 🛰 Test to measure it from ${_drIsHosted() ? 'this server (Render’s datacenter IP — the true hosted picture)' : 'a headless guest (≈ the hosted environment)'}.
+            ${_drIsHosted() ? 'This hosted site never stores logins — a relevant 🔴 site asks you once per search.' : '🔑/🔒 on a 🔴 row = store / stored login in your local vault.'}</div>
         </div>`;
     }
     return `
@@ -1463,15 +1499,25 @@ function _actAfter(owner) {
       _dr.vaultDomains = Array.isArray(j.domains) ? j.domains : [];
     } catch { _dr.vaultDomains = []; }
   }
+  function _drSiteDomain(url) {
+    return (url || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  }
   function drEditSource(i, k, v) {
     if (!_dr.sources[i]) return;
     _dr.sources[i][k] = v;
-    if (k === 'domain') _drRender();
+    if (k === 'domain' || k === 'url') _drRender();
+  }
+  // Click the dot to cycle the login flag: untested → 🟢 no login → 🔴 login required → untested.
+  function drToggleLogin(i) {
+    const s = _dr.sources[i]; if (!s) return;
+    const lr = s.login_required;
+    s.login_required = (lr === null || lr === undefined) ? false : (lr === false ? true : null);
+    _drRender();
   }
   function drToggleCred(i) { _dr.credOpenIdx = (_dr.credOpenIdx === i) ? -1 : i; _drRender(); }
   async function drSaveCred(i) {
     const s = _dr.sources[i]; if (!s) return;
-    const dom = (s.domain||'').trim().toLowerCase();
+    const dom = _drSiteDomain(s.url || s.domain || '');
     const msg = document.getElementById('dr-cred-msg-'+i);
     const username = (document.getElementById('dr-cred-u-'+i)||{}).value || '';
     const password = (document.getElementById('dr-cred-p-'+i)||{}).value || '';
@@ -1489,7 +1535,7 @@ function _actAfter(owner) {
   }
   async function drRemoveCred(i) {
     const s = _dr.sources[i]; if (!s) return;
-    const dom = (s.domain||'').trim().toLowerCase();
+    const dom = _drSiteDomain(s.url || s.domain || '');
     try {
       const r = await fetch(`${PERF_SERVER}/api/deep_research/vault`, {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -1501,14 +1547,14 @@ function _actAfter(owner) {
   }
   function drAddSource() {
     _dr.sources = _dr.sources || [];
-    _dr.sources.push({ name:'', domain:'', type:'forum', enabled:true, description:'' });
+    _dr.sources.push({ url:'', login_required:null });
     _drRender();
   }
   function drRemoveSource(i) { _dr.sources.splice(i, 1); _drRender(); }
   async function drSaveSources() {
     const msg = document.getElementById('dr-src-msg');
     try {
-      const clean = (_dr.sources||[]).filter(s => (s.domain||'').trim());
+      const clean = (_dr.sources||[]).filter(s => (s.url||s.domain||'').trim());
       const r = await fetch(`${PERF_SERVER}/api/deep_research/sources`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ sources: clean }) });

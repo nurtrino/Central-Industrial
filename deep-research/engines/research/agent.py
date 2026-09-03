@@ -96,13 +96,52 @@ def _load_env():
                 os.environ[k] = v
 
 
+def _normalize_source(s: dict) -> dict:
+    """Normalize one source entry to a single internal shape, accepting BOTH schemas:
+      • unified (current):  {"url": "avforums.com", "login_required": bool|null, "note"?: ""}
+      • legacy:             {"name","domain","type","description","enabled","search_url"}
+    login_required is the site property that drives the 🟢/🔴 dot and the search path:
+    False = searchable logged out, True = needs a login, None = untested (probe fills it)."""
+    url = (s.get("url") or s.get("domain") or "").strip()
+    domain = normalize_domain(url) or url.lower().lstrip("https://").lstrip("http://")
+    note = (s.get("note") or s.get("description") or "").strip()
+    lr = s.get("login_required", None)
+    if isinstance(lr, str):
+        lr = lr.strip().lower() in ("1", "true", "yes")
+    return {
+        "url": url or domain,
+        "domain": domain,
+        "login_required": lr,                 # True | False | None
+        "note": note,
+        "description": note,                  # legacy alias for existing callers
+        "name": (s.get("name") or domain),
+        "type": (s.get("type") or "site"),
+        "search_url": (s.get("search_url") or "").strip(),
+        "enabled": True,                       # unified list is all-on; selection is by the plan
+    }
+
+
 def load_sources(path: str = _SOURCES_PATH) -> list[dict]:
+    """The single site list. Every entry is a candidate; the research plan decides which are
+    topically relevant per query. Tolerant of a BOM and of either schema."""
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             data = json.load(fh)
-        return [s for s in data.get("sources", []) if s.get("enabled", True)]
     except Exception:
         return []
+    raw = data.get("sources", []) if isinstance(data, dict) else (data or [])
+    out, seen = [], set()
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        if s.get("enabled") is False:          # legacy explicit-off entries stay excluded
+            continue
+        n = _normalize_source(s)
+        if not n["domain"] or n["domain"] in seen:
+            continue
+        seen.add(n["domain"])
+        out.append(n)
+    return out
 
 
 # ── harvest ───────────────────────────────────────────────────
@@ -373,12 +412,13 @@ def _curated_login_handler(vault, result, log, label="stage2"):
     return h
 
 
-def _vault_handler(vault, result, log, label):
-    """Stages 3/4: try stored creds; success → True; otherwise record + skip (no stall, no 2FA)."""
+def _vault_handler(vault, result, log, label, ephemeral=None):
+    """Stages 3/4: try creds — ONE-TIME ephemeral creds first (typed in for this run, never
+    saved), then the saved vault; success → True; otherwise record + skip (no stall, no 2FA)."""
     from .login import try_autofill
 
     def h(domain, page):
-        creds = vault.get(domain) if vault else None
+        creds = (ephemeral or {}).get(domain) or (vault.get(domain) if vault else None)
         if creds and try_autofill(page, creds, log):
             if domain not in result.logged_in:
                 result.logged_in.append(domain)
@@ -930,7 +970,7 @@ def _stage2_focus(plan: dict, use_sites: bool, use_engines: bool) -> str:
 
 # Always kept regardless of the relevance filter — broad, general-purpose sources
 # that earn their place on almost any research question.
-_ALWAYS_ON_DOMAINS = {"reddit.com", "substack.com"}
+_ALWAYS_ON_DOMAINS = set()   # relevance gates EVERY site now — nothing is forced into a query
 _SEED_FILTER_THRESHOLD = 12   # below this, inject the whole seed list (no filter call)
 _SEED_FILTER_LIMIT = 18       # max topical forums injected into a browser stage
 
@@ -1228,6 +1268,22 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         use_sites = site_ch.get("use", True)        # hard on/off (planner skip OR user toggle)
         use_engines = web_ch.get("use", True)
         use_neural = False   # neural/Exa search removed as an option (2026-08-29)
+        # One-time (ephemeral) logins collected this run — used for the search, NEVER saved to the vault.
+        ephemeral_creds: dict = {}
+        # ── UNIFIED per-query site selection: ONE relevance call over the whole site list. The
+        # plan's Claude call picks the topically-relevant sites; 🟢 public ones (login_required
+        # != True) feed the open sweep, 🔴 login-required ones go through the login path (vault,
+        # else a one-time prompt). Identical on hosted and local — the only difference is whether
+        # a stored login already exists. This replaces the old two separate selection calls and
+        # fixes the vault-orphan bug (a login is no longer required to be in a second list).
+        selected_sites = _select_relevant_seed_sources(
+            client, query, clarifications, sources, log,
+            emphasis=site_ch.get("emphasis")) if use_sites else []
+        public_selected = [s for s in selected_sites if s.get("login_required") is not True]
+        login_selected = [s for s in selected_sites if s.get("login_required") is True]
+        if selected_sites:
+            log(f"[plan] selected {len(selected_sites)} relevant site(s): "
+                f"{len(public_selected)} public 🟢, {len(login_selected)} login-required 🔴")
         if use_engines or use_sites or use_neural:
             if use_neural:
                 log("[plan] neural search (Exa) enabled for Stage 2")
@@ -1237,8 +1293,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
             # The plan decides whether to lean on the curated list; the relevance filter still
             # picks WHICH specific sites (by Description), kept signal-dense over the full table.
             if use_sites:
-                seed_for_browser = _select_relevant_seed_sources(
-                    client, query, clarifications, sources, log, emphasis=site_ch.get("emphasis"))
+                seed_for_browser = public_selected     # 🟢 public sites → open sweep
             else:
                 seed_for_browser = []
                 log("[plan] curated-site queries off for this run")
@@ -1263,23 +1318,32 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         else:
             log("[plan] Stage 2 skipped — open engines, curated sites, and neural all off (API-only run)")
 
-        # ── STAGE 3 — already-credentialed sources (topically filtered) ──
-        # Credentialed sources ARE site queries — gated by the curated-sites channel.
-        credentialed = _credentialed_sources(sources, vault) if use_sites else []
+        # ── STAGE 3 — login-required (🔴) sites the plan selected ──
+        # These come straight from the unified selection above (already relevance-filtered).
+        # Split them: sites with a stored vault login are logged into + searched here; sites
+        # with NO stored login are deferred to Stage 4's one-time (ephemeral) prompt.
+        credentialed = login_selected if use_sites else []
         if not use_sites:
-            log("[plan] Stage 3 (credentialed sites) skipped — curated sites off")
+            log("[plan] Stage 3 (login-required sites) skipped — curated sites off")
         if credentialed:
-            relevant = _select_relevant_credentialed(client, query, clarifications, credentialed, log)
-            if relevant:
-                doms = [s["domain"] for s in relevant]
-                # ── Proactive login: use the stored credentials for every relevant credentialed
-                # site up front (not only when a wall is hit). Warn on any that fail. Sites with no
-                # stored login_url fall back to the reactive handler set below.
-                progress("stage3", None, f"Preparing credentialed sources: {', '.join(doms)}")
+            have_login, need_prompt = [], []
+            for s in credentialed:
+                dom = s["domain"]
+                creds = vault.get(dom) if vault else None
+                if creds and (creds.get("username") or "").strip():
+                    have_login.append(s)
+                else:
+                    need_prompt.append(s)
+                    result.gated_candidates.setdefault(
+                        dom, "login-required site selected as relevant to this query")
+            if need_prompt:
+                log(f"[stage3] login-required, no stored login → one-time prompt (Stage 4): "
+                    f"{[s['domain'] for s in need_prompt]}")
+            if have_login:
+                doms = [s["domain"] for s in have_login]
+                progress("stage3", None, f"Logging into: {', '.join(doms)}")
                 for dom in doms:
                     creds = vault.get(dom) if vault else None
-                    # Always check — ensure_logged_in is cheap (verifies the profile's auth
-                    # cookie first, no navigation) and honest about the outcome.
                     try:
                         ok, detail = br.ensure_logged_in(dom, creds or {})
                     except Exception as e:  # noqa: BLE001
@@ -1289,42 +1353,40 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                             result.logged_in.append(dom)
                         log(f"[stage3] logged in: {dom} ({detail})")
                     elif "public content only" in detail:
-                        # Not a failure — many forums are fully searchable logged out, and a
-                        # real wall later still triggers the reactive vault login handler.
-                        log(f"[stage3] {dom}: searching public content (not logged in) — "
-                            f"reactive login will fire on any wall")
+                        log(f"[stage3] {dom}: not logged in — searching public + reactive login on wall")
                     else:
-                        # A genuine login attempt that couldn't complete — worth surfacing.
                         _record_login_warning(result, dom, detail)
                         log(f"[stage3] login could not be completed: {dom} — {detail}")
-                progress("stage3", None, f"Searching credentialed sources: {', '.join(doms)}")
-                br.login_handler = _vault_handler(vault, result, log, "stage3")
+                progress("stage3", None, f"Searching: {', '.join(doms)}")
+                br.login_handler = _vault_handler(vault, result, log, "stage3", ephemeral=ephemeral_creds)
                 _guarded_stage(
                     "stage3",
-                    system=_stage_system("credentialed", governance, _listing(relevant), cap3,
+                    system=_stage_system("credentialed", governance, _listing(have_login), cap3,
                                          stage1_brief, pool=pool),
                     task=task, tools=_tool_defs(include_web_search=False), cap=cap3,
                     progress=progress, log=log, notes=notes, skip_event=skip_event,
                     question=query, sources=sources, pool=pool,
                     deadline=gather_deadline, hard_deadline=gather_deadline)
-            else:
-                log("[stage3] no credentialed sources topically relevant to this query; skipping")
         else:
-            log("[stage3] no credentialed sources in vault; skipping")
+            log("[stage3] no login-required sites relevant to this query; skipping")
 
         # ── STAGE 4 — new gated sources (batched in-app login) ──
         if use_sites and result.gated_candidates and request_credentials:
             cands = [{"domain": d, "reason": r} for d, r in result.gated_candidates.items()]
             progress("stage4", None, f"Awaiting credentials for {len(cands)} gated source(s)…")
             provided = request_credentials(cands) or {}
-            br.login_handler = _vault_handler(vault, result, log, "stage4")
+            br.login_handler = _vault_handler(vault, result, log, "stage4", ephemeral=ephemeral_creds)
             for dom, creds in provided.items():
                 if not creds or not (creds.get("username") or "").strip():
                     if dom not in result.skipped_gated:
                         result.skipped_gated.append(dom)
                     continue
-                vault.set(dom, creds.get("username", ""), creds.get("password", ""),
-                          login_url=creds.get("login_url", ""))
+                # ONE-TIME credentials: held in memory for this run only, NEVER written to the
+                # vault. (The vault is populated separately + locally; hosted stays credential-free.)
+                ephemeral_creds[dom] = {
+                    "username": creds.get("username", ""), "password": creds.get("password", ""),
+                    "login_url": creds.get("login_url", ""),
+                }
                 result.gated_candidates.pop(dom, None)
                 progress("stage4", None, f"logging into {dom} and searching…")
                 cap4 = {"searches": 2, "pages": 3, "max_turns": 12}
