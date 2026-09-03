@@ -316,21 +316,35 @@ fetch("/api/config").then(r=>r.json()).then(c=>{
 
 // ---- local-helper status (so the download is visible BEFORE you hit Run) ----
 let helperTimer = null;
+// /health JSON from the local helper ({model, device, gpu_name, diarization…}) or null when
+// it isn't running. The helper only starts serving AFTER its one-time setup finishes, so a
+// reply here means the model is downloaded and ready.
+async function workerHealth(){
+  try{ const r=await fetch(workerBase()+"/health",{method:"GET"}); return r.ok ? await r.json() : null; }
+  catch(e){ return null; }
+}
+const HELPER_DL = `<a href="/download/ReadMonkeyDoWorker.exe" style="color:var(--accent);font-weight:bold">⬇ Download the helper</a>`+
+  " — small download (Windows; <b>no GPU needed</b>, faster with an NVIDIA card). Run it once: it sets "+
+  "itself up (~1&nbsp;GB one-time, ~3&nbsp;GB if it installs GPU libraries) and fetches the Whisper "+
+  "<b>small</b> model, then this page detects it automatically.";
 async function checkHelper(){
   const el = $("#helperStatus"); if(!el) return;
-  const up = await workerUp();
-  if(up){
+  const h = await workerHealth();
+  if(h){
+    const t = s => String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const where = h.device==="cuda" ? "GPU"+(h.gpu_name?" · "+t(h.gpu_name):"")
+                : h.device==="cpu"  ? "CPU" : "";
     el.style.cssText = "margin:10px 0;padding:9px 14px;border-radius:8px;font-size:14px;"+
       "border:1px solid var(--accent);color:var(--accent)";
-    el.innerHTML = "✓ Local transcription helper connected — audio is processed on this machine.";
+    el.innerHTML = "✓ Local transcription helper connected — Whisper <b>"+t(h.model||"?")+"</b>"+
+      (where ? " on "+where : "")+" · audio is processed on this machine."+
+      (h.diarization ? "" : " <span style='opacity:.7'>(no speaker labels in this helper)</span>");
     if(helperTimer){ clearInterval(helperTimer); helperTimer = null; }   // stop polling once up
   } else {
     el.style.cssText = "margin:10px 0;padding:9px 14px;border-radius:8px;font-size:14px;"+
       "border:1px solid var(--warn);color:var(--warn)";
-    el.innerHTML = "Local transcription helper not detected on this PC. "+
-      `<a href="/download/ReadMonkeyDoWorker.exe" style="color:var(--accent);font-weight:bold">⬇ Download the helper</a>`+
-      " — small download (Windows · NVIDIA GPU); the first run sets itself up (one-time "+
-      "~4&nbsp;GB: GPU libraries + Whisper model), then run it and "+
+    el.innerHTML = "Local transcription helper not detected on this PC. "+HELPER_DL+
+      " Already installed? Start it, then "+
       `<a href="#" id="helperRecheck" style="color:var(--accent)">re-check</a>. `+
       "Audio is transcribed locally and never leaves your computer.";
     const rc = $("#helperRecheck");
@@ -464,12 +478,9 @@ async function transcribeOnWorker(file, onProgress){
 async function runHostedAudio(pr){
   if(!(await workerUp())){
     pr.innerHTML=`<span style="color:var(--warn)">The Read Monkey Do transcription helper `+
-      `isn't running on this machine. Download it (Windows · needs an NVIDIA GPU), `+
-      `run it, then click Run again — audio is transcribed locally and never leaves your `+
-      `computer.<br><br>`+
-      `<a href="/download/ReadMonkeyDoWorker.exe" style="color:var(--accent)">⬇ Download the helper</a> `+
-      `— small download; the first run sets itself up (one-time ~4&nbsp;GB: GPU libraries + `+
-      `Whisper model) and needs that much free disk.</span>`;
+      `isn't running on this machine. Download it (Windows; no GPU needed), run it, then `+
+      `click Run again — audio is transcribed locally and never leaves your computer.<br><br>`+
+      HELPER_DL+`</span>`;
     goBtn.disabled=false; return;
   }
   const media=files.filter(f=>["audio","video"].includes(kind(f.name)));

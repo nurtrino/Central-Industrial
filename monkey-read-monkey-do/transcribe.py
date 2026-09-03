@@ -97,16 +97,24 @@ def to_wav(src_path: str, log=print) -> str:
 # --------------------------------------------------------------------------- #
 # Whisper transcription
 # --------------------------------------------------------------------------- #
-def _require_cuda_ct2(log=print):
-    """GPU check that does NOT import torch — keeps the faster-whisper path torch-free
-    so the Lite worker build needs no torch. CTranslate2 ships its own CUDA runtime."""
+def _pick_ct2_device(log=print):
+    """Decide where faster-whisper runs — torch-free (CTranslate2 only) so the Lite worker
+    build needs no torch. NOTEMAX_DEVICE=cuda|cpu forces it; the default 'auto' uses the
+    GPU (float16 in VRAM) when CTranslate2 can see one, otherwise the CPU with int8
+    weights — the lightest setting there is, so the helper runs on any PC.
+    Returns (device, compute_type)."""
+    want = os.environ.get("NOTEMAX_DEVICE", "auto").strip().lower() or "auto"
+    if want == "cpu":
+        return "cpu", "int8"
+    have_cuda = False
     try:
         import ctranslate2
-        if ctranslate2.get_cuda_device_count() < 1:
-            raise RuntimeError("No CUDA GPU visible to CTranslate2 — Monkey Read Monkey Do "
-                               "needs an NVIDIA GPU; refusing to run on CPU.")
-    except ImportError:
-        pass   # ctranslate2 absent → WhisperModel(device='cuda') raises a clear error
+        have_cuda = ctranslate2.get_cuda_device_count() >= 1
+    except Exception:                                # noqa: BLE001
+        have_cuda = False
+    if want == "cuda" and not have_cuda:
+        raise RuntimeError("NOTEMAX_DEVICE=cuda but no CUDA GPU is visible to CTranslate2.")
+    return ("cuda", "float16") if have_cuda else ("cpu", "int8")
 
 
 def _add_cuda_dll_dirs(log=print):
@@ -133,24 +141,41 @@ def _add_cuda_dll_dirs(log=print):
 def _load_faster_whisper(model_size: str, log=print):
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
-        _require_cuda_ct2(log)
-        _add_cuda_dll_dirs(log)
+        device, compute = _pick_ct2_device(log)
         from faster_whisper import WhisperModel
-        log(f"  loading faster-whisper '{model_size}' into GPU VRAM (float16)...")
-        # device="cuda" + float16 keeps weights and compute in VRAM (CTranslate2).
-        _WHISPER_MODEL = WhisperModel(model_size, device="cuda", compute_type="float16")
-        _vram_used(log)
+        if device == "cuda":
+            _add_cuda_dll_dirs(log)
+            log(f"  loading faster-whisper '{model_size}' into GPU VRAM ({compute})...")
+        else:
+            log(f"  loading faster-whisper '{model_size}' on the CPU ({compute} — no GPU needed)...")
+        # cuda+float16 keeps weights and compute in VRAM; cpu+int8 is the lightest footprint.
+        try:
+            _WHISPER_MODEL = WhisperModel(model_size, device=device, compute_type=compute)
+        except Exception as e:                       # noqa: BLE001
+            if device != "cuda":
+                raise
+            # A GPU CTranslate2 can't actually use (too old, broken driver, missing CUDA
+            # DLLs) must not strand the user — drop to the CPU path instead of failing.
+            log(f"  GPU load failed ({type(e).__name__}: {e}); falling back to CPU (int8).")
+            os.environ["NOTEMAX_DEVICE"] = "cpu"     # keep later device decisions consistent
+            device, compute = "cpu", "int8"
+            _WHISPER_MODEL = WhisperModel(model_size, device=device, compute_type=compute)
+        if device == "cuda":
+            _vram_used(log)
     return _WHISPER_MODEL
 
 
 def _transcribe_faster(wav_path: str, model_size: str, language, log,
                        on_progress=None, control=None):
     model = _load_faster_whisper(model_size, log)
+    device, _ = _pick_ct2_device(log)
     segments, info = model.transcribe(
         wav_path,
         language=language,
         vad_filter=True,                       # drop long silences
-        beam_size=5,                           # higher-fidelity decoding
+        # GPU: beam search for fidelity. CPU: greedy decoding — several times cheaper for
+        # a small accuracy cost, which is the right trade on a laptop with no GPU.
+        beam_size=5 if device == "cuda" else 1,
         word_timestamps=True,                  # enables word-level speaker assignment
     )
     duration = getattr(info, "duration", 0) or 0

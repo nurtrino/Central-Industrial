@@ -72,6 +72,14 @@ LITE = os.environ.get("MRMD_LITE", "").strip().lower() in ("1", "true", "yes", "
 # the ReadMonkeyDo folder). Lets us see live progress / diagnose a stuck or failing run.
 LOG_PATH = os.environ.get("MRMD_LOG", "").strip() or os.path.join(_HERE, "worker.log")
 
+# Where Whisper will run — decided torch-free by transcribe.py (GPU float16 if CTranslate2
+# sees one, else CPU int8; NOTEMAX_DEVICE forces it). Reported on /health so the page can
+# tell the user "small on CPU" vs "large-v3 on GPU".
+try:
+    DEVICE, COMPUTE = T._pick_ct2_device()
+except Exception:                                    # noqa: BLE001
+    DEVICE, COMPUTE = "?", "?"
+
 
 def server_log(msg):
     line = time.strftime("%H:%M:%S ") + str(msg)
@@ -109,7 +117,7 @@ def pick_model_for_vram():
         return MODEL_OVERRIDE, None
     gb = _vram_gb()
     if gb is None:
-        return "large-v3", None
+        return "small", None                  # no NVIDIA GPU → the light CPU-friendly model
     if gb >= 12:
         model = "large-v3"
     elif gb >= 8:
@@ -160,6 +168,7 @@ def health():
         pass
     return jsonify({"ok": True, "tool": "mrmd-worker", "lite": LITE,
                     "gpu": name is not None, "gpu_name": name, "vram_gb": gb,
+                    "device": DEVICE, "compute_type": COMPUTE,
                     "model": model, "diarization": bool(HF_TOKEN) and not LITE,
                     "token_required": bool(WORKER_TOKEN)})
 
@@ -244,8 +253,9 @@ def transcribe_route():
 
 if __name__ == "__main__":
     m, vram = pick_model_for_vram()
-    print(f"Monkey Read Monkey Do — GPU worker on http://0.0.0.0:{PORT}")
+    print(f"Monkey Read Monkey Do — transcription worker on http://0.0.0.0:{PORT}")
     print(f"  whisper model:  {m}" + (f"  (auto-picked for {vram} GB VRAM)" if vram else "  (forced)"))
+    print(f"  compute:        {DEVICE} ({COMPUTE})")
     print(f"  diarization:    {'ON' if HF_TOKEN else 'OFF (no HF_TOKEN)'}")
     print(f"  token required: {'yes' if WORKER_TOKEN else 'NO — set MRMD_WORKER_TOKEN before exposing!'}")
     print(f"  allowed origin: {ALLOWED_ORIGIN}")

@@ -2,25 +2,26 @@
 Monkey Read Monkey Do — self-provisioning local worker (the downloadable .exe).
 
 WHAT THIS IS
-A small (~10 MB) launcher the user downloads from notes.centralindustrial.ai and
+A small (~8 MB) launcher the user downloads from notes.centralindustrial.ai and
 double-clicks. On the FIRST run it sets itself up — with no Python, no installer, no
-clicking — by recreating the exact GPU stack we proved works on the RTX 5070:
+clicking:
 
   1. fetch `uv` (a single 15 MB binary)               -> APP_DIR/uv.exe
   2. uv venv (uv downloads CPython 3.12 if needed)     -> APP_DIR/venv
-  3. uv pip install the PINNED faster-whisper + CUDA   -> into that venv
-     wheels (cuBLAS/cuDNN — the bits that make the GPU work)
+  3. uv pip install the PINNED faster-whisper stack    -> into that venv
+     (+ the CUDA cuBLAS/cuDNN wheels ONLY when an NVIDIA GPU is present)
   4. fetch a static ffmpeg/ffprobe                     -> APP_DIR/ffmpeg
-  5. download the right Whisper model for this GPU      -> APP_DIR/hf-cache
+  5. download the Whisper model (default: `small`)     -> APP_DIR/hf-cache
   6. launch the local worker on 127.0.0.1:5007
 
 Every later run skips 1-5 (they're cached) and goes straight to 6. The hosted Read
 Monkey Do page already polls http://127.0.0.1:5007/health and uploads audio there, so
-once this is running the site "just works" — audio is transcribed on THIS machine's
-GPU and never leaves it.
+once this is running the site "just works" — audio is transcribed on THIS machine and
+never leaves it.
 
-FIRST-RUN DOWNLOAD is large (~4-5 GB: CUDA libs + the Whisper model) and needs that
-much free disk. It's a one-time cost; it's simply what local GPU Whisper requires.
+RUNS ANYWHERE — no GPU required. With an NVIDIA card Whisper runs in VRAM (float16);
+without one it runs on the CPU with int8 weights, the lightest setting there is.
+FIRST-RUN DOWNLOAD ≈ 1 GB (≈ 3 GB when the GPU libraries are installed), one time.
 
 Built by build_setup.bat into ReadMonkeyDoWorker.exe. Pure stdlib so the launcher
 itself stays tiny and dependency-free — all the heavy ML lives in the provisioned venv.
@@ -35,7 +36,7 @@ import zipfile
 
 APP_NAME = "ReadMonkeyDo"
 HOSTED_URL = "https://notes.centralindustrial.ai"
-PORT = "5007"
+PORT = os.environ.get("MRMD_PORT", "").strip() or "5007"    # MRMD_PORT: tests / clashes
 
 # Where everything we provision lives (survives between runs).
 APP_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP_NAME)
@@ -46,22 +47,35 @@ FFMPEG_DIR = os.path.join(APP_DIR, "ffmpeg")
 HF_CACHE = os.path.join(APP_DIR, "hf-cache")
 SRC_DIR = os.path.join(APP_DIR, "app")          # worker_server.py + transcribe.py live here
 MODEL_FILE = os.path.join(APP_DIR, "model.txt")  # remembers the chosen Whisper model
+DEVICE_FILE = os.path.join(APP_DIR, "device.txt")  # present = user chose --cpu
 VALID_MODELS = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
+# The default: small enough to download quickly and run on a CPU, accurate enough for
+# meeting notes. Bigger models are opt-in via --model (remembered).
+DEFAULT_MODEL = "small"
+MODEL_MB = {"tiny": 75, "base": 145, "small": 465, "medium": 1500,
+            "large-v2": 3000, "large-v3": 3000}
 
 # Download sources.
 UV_URL = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
 FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
-# The PINNED stack — these exact versions are what transcribe on the RTX 5070 (Blackwell
-# needs recent CUDA 12.9 + cuDNN 9 + a CTranslate2 build with sm_120 kernels). Do not
-# loosen these without re-verifying on the target GPU. Lite = faster-whisper only
-# (no torch, no pyannote -> no speaker labels), which is why this stays a few-GB install.
-REQUIREMENTS = """\
+# The PINNED stack. Lite = faster-whisper only (no torch, no pyannote -> no speaker
+# labels). The CUDA wheels (cuBLAS/cuDNN, ~2 GB) are added ONLY when an NVIDIA GPU is
+# present — a GPU-less PC gets the ~250 MB CPU stack and runs Whisper with int8 weights.
+# These exact CUDA versions are what transcribe on Blackwell (RTX 50xx needs CUDA 12.9 +
+# cuDNN 9 + a CTranslate2 build with sm_120 kernels); do not loosen them without
+# re-verifying on the target GPU. Order matters: HEAD+CUDA+TAIL must reproduce the
+# previous requirements text byte-for-byte so existing GPU installs don't re-install.
+_REQ_HEAD = """\
 faster-whisper==1.2.1
 ctranslate2==4.8.0
+"""
+_REQ_CUDA = """\
 nvidia-cublas-cu12==12.9.2.10
 nvidia-cudnn-cu12==9.23.2.1
 nvidia-cuda-nvrtc-cu12==12.9.86
+"""
+_REQ_TAIL = """\
 onnxruntime==1.27.0
 av==17.1.0
 numpy==2.5.0
@@ -71,6 +85,11 @@ soundfile==0.14.0
 flask==3.1.3
 python-dotenv==1.2.2
 """
+
+
+def requirements_text(use_cuda: bool) -> str:
+    return _REQ_HEAD + (_REQ_CUDA if use_cuda else "") + _REQ_TAIL
+
 
 # Tiny entry point we drop next to worker_server.py so it binds to 127.0.0.1 (local only),
 # runs in Lite mode, and answers the hosted page's origin — same as the old tray app did,
@@ -155,17 +174,22 @@ def ensure_venv():
         raise RuntimeError("venv python not created")
 
 
-def ensure_deps():
+def ensure_deps(use_cuda: bool):
     req_path = os.path.join(APP_DIR, "requirements.txt")
     marker = os.path.join(APP_DIR, ".deps-ok")
-    # Re-install only when the pinned set changes (e.g. a new exe version ships).
+    wanted = requirements_text(use_cuda)
+    # Re-install only when the pinned set changes (a new exe version, or the GPU/CPU
+    # choice changed since last time).
     if os.path.isfile(marker) and os.path.isfile(req_path):
         with open(req_path, "r", encoding="utf-8") as f:
-            if f.read() == REQUIREMENTS:
+            if f.read() == wanted:
                 return
     with open(req_path, "w", encoding="utf-8") as f:
-        f.write(REQUIREMENTS)
-    log("[3/5] Installing faster-whisper + CUDA libraries (~2 GB, one time)...")
+        f.write(wanted)
+    if use_cuda:
+        log("[3/5] Installing faster-whisper + CUDA libraries (~2 GB, one time)...")
+    else:
+        log("[3/5] Installing faster-whisper (CPU build, ~250 MB, one time)...")
     subprocess.run([UV_EXE, "pip", "install", "--python", VENV_PY,
                     "-r", req_path], check=True)
     open(marker, "w").close()
@@ -203,45 +227,62 @@ def install_app_files():
     return runner
 
 
-def _pick_model():
-    """Same VRAM->model rule the worker uses, so we pre-fetch what it will load."""
+def _nvidia_gpu_name():
+    """Name of the NVIDIA GPU via nvidia-smi, or None when there isn't one (or no driver)."""
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True, text=True, check=True).stdout.strip().splitlines()[0]
-        gb = int(out) / 1024.0
+        return out.strip() or None
     except Exception:
-        return "large-v3"
-    if gb >= 12:
-        return "large-v3"
-    if gb >= 8:
-        return "medium"
-    if gb >= 5:
-        return "small"
-    if gb >= 3:
-        return "base"
-    return "tiny"
+        return None
+
+
+def _truthy(v):
+    return (v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def force_cpu() -> bool:
+    """--cpu (remembered) or MRMD_FORCE_CPU=1: skip the CUDA libraries and run Whisper on
+    the CPU even when an NVIDIA GPU is present. --gpu forgets a remembered --cpu."""
+    if _truthy(os.environ.get("MRMD_FORCE_CPU")):
+        return True
+    argv = sys.argv[1:]
+    if "--cpu" in argv:
+        with open(DEVICE_FILE, "w", encoding="utf-8") as f:
+            f.write("cpu")
+        return True
+    if "--gpu" in argv:
+        try:
+            os.remove(DEVICE_FILE)
+        except OSError:
+            pass
+        return False
+    return os.path.isfile(DEVICE_FILE)
 
 
 def _print_help():
-    log("Read Monkey Do worker — local GPU transcription helper")
+    log("Read Monkey Do worker — local transcription helper (GPU optional)")
     log("")
-    log("Usage:  ReadMonkeyDoWorker.exe [--model <name>]")
+    log("Usage:  ReadMonkeyDoWorker.exe [--model <name>] [--cpu | --gpu] [--no-browser]")
     log("")
-    log("  --model auto      pick automatically from this GPU's VRAM (default)")
-    log("  --model <name>    force a Whisper model; one of:")
+    log(f"  --model <name>    Whisper model; default '{DEFAULT_MODEL}'. One of:")
     log("                    " + ", ".join(VALID_MODELS))
+    log("  --cpu             run on the CPU even if an NVIDIA GPU is present (remembered)")
+    log("  --gpu             forget a remembered --cpu")
+    log("  --no-browser      don't open the site when the worker starts")
     log("  --help            show this and exit")
     log("")
-    log("Bigger = more accurate but more VRAM/time: large-v3 is best, tiny/base fastest.")
-    log("Your choice is remembered for next time. Example:")
+    log("Bigger models are more accurate but slower and larger to download:")
+    log("  " + ", ".join(f"{m} ≈{MODEL_MB[m]} MB" for m in VALID_MODELS))
+    log("Your --model choice is remembered for next time. Example:")
     log("  ReadMonkeyDoWorker.exe --model large-v3")
 
 
 def resolve_model_selection():
-    """Decide which Whisper model to use: CLI --model > saved model.txt > 'auto'.
+    """Decide which Whisper model to use: CLI --model > saved model.txt > default.
     An explicit choice is persisted so later double-clicks reuse it. Returns
-    (selection, concrete_model) where selection is 'auto' or a model name."""
+    (selection, concrete_model) where selection is 'auto' (= the default) or a name."""
     argv = sys.argv[1:]
     sel = None
     i = 0
@@ -274,14 +315,14 @@ def resolve_model_selection():
                 sel = saved
         except OSError:
             pass
-    return sel, (_pick_model() if sel == "auto" else sel)
+    return sel, (DEFAULT_MODEL if sel == "auto" else sel)
 
 
 def ensure_model(env, model):
     marker = os.path.join(APP_DIR, f".model-{model}-ok")
     if os.path.isfile(marker):
         return model
-    log(f"[5/5] Downloading the Whisper '{model}' model for this GPU (one time)...")
+    log(f"[5/5] Downloading the Whisper '{model}' model (~{MODEL_MB.get(model, '?')} MB, one time)...")
     code = ("from faster_whisper.utils import download_model; "
             f"download_model('{model}')")
     subprocess.run([VENV_PY, "-c", code], check=True, env=env)
@@ -289,7 +330,7 @@ def ensure_model(env, model):
     return model
 
 
-def worker_env(model):
+def worker_env(model, use_cuda: bool):
     env = dict(os.environ)
     env["PATH"] = FFMPEG_DIR + os.pathsep + env.get("PATH", "")
     env["HF_HOME"] = HF_CACHE
@@ -298,33 +339,44 @@ def worker_env(model):
     env["PORT"] = PORT
     env["MRMD_ALLOWED_ORIGIN"] = HOSTED_URL
     env["NOTEMAX_WHISPER_MODEL"] = model    # load exactly the model we provisioned
+    # 'auto' = GPU if CTranslate2 sees one (float16), else CPU int8; 'cpu' pins the CPU.
+    env["NOTEMAX_DEVICE"] = "auto" if use_cuda else "cpu"
     env["MRMD_LOG"] = os.path.join(APP_DIR, "worker.log")   # debug log lives next to setup
     return env
 
 
 def main():
     os.makedirs(APP_DIR, exist_ok=True)
-    sel, model = resolve_model_selection()       # CLI --model / saved choice / auto
+    sel, model = resolve_model_selection()       # CLI --model / saved choice / default
+    cpu_only = force_cpu()
+    gpu = None if cpu_only else _nvidia_gpu_name()
+    use_cuda = gpu is not None
     log("=" * 60)
     log(" Monkey Read Monkey Do — local transcription worker")
     log("=" * 60)
     log(f" Setup folder: {APP_DIR}")
-    log(f" Whisper model: {model}" + ("  (auto-picked for this GPU)" if sel == "auto"
-                                      else "  (forced via --model)"))
+    log(f" Whisper model: {model}" + ("  (default — light, runs on any PC)" if sel == "auto"
+                                      else "  (chosen via --model)"))
+    if use_cuda:
+        log(f" Compute: GPU — {gpu} (float16)")
+    elif cpu_only:
+        log(" Compute: CPU, int8 (forced with --cpu / MRMD_FORCE_CPU)")
+    else:
+        log(" Compute: CPU, int8 (no NVIDIA GPU found — that's fine, just slower)")
     log("")
 
-    env = worker_env(model)
+    env = worker_env(model, use_cuda)
     try:
         ensure_uv()
         ensure_venv()
-        ensure_deps()
+        ensure_deps(use_cuda)
         ensure_ffmpeg()
         runner = install_app_files()
         ensure_model(env, model)
     except subprocess.CalledProcessError as e:
         log("")
         log(f"!! Setup step failed (exit {e.returncode}). Most likely causes:")
-        log("   - not enough free disk space (first run needs ~5 GB), or")
+        log("   - not enough free disk space (first run needs ~1 GB; ~3 GB with GPU libraries), or")
         log("   - no internet connection.")
         log("   Free up space / reconnect and run this again — it resumes where it left off.")
         input("\nPress Enter to close.")
@@ -335,19 +387,20 @@ def main():
         return 1
 
     log("")
-    log(f" Ready. Whisper model: {model}.  Open {HOSTED_URL} and transcribe —")
+    log(f" Ready. Whisper {model} on {'GPU' if use_cuda else 'CPU'}.  Open {HOSTED_URL} and transcribe —")
     log(" audio stays on this machine. Keep this window open while you work.")
-    log(" Change the model:  ReadMonkeyDoWorker.exe --model <name>   (--help for options)")
+    log(" Options:  ReadMonkeyDoWorker.exe --model <name> | --cpu | --gpu   (--help for details)")
     log(f" Live progress shows in THIS window; full log: {os.path.join(APP_DIR, 'worker.log')}")
     log("-" * 60)
 
     # Open the site once, then run the worker in the foreground (closing this window
     # stops the worker).
-    try:
-        import webbrowser
-        webbrowser.open(HOSTED_URL)
-    except Exception:
-        pass
+    if not ("--no-browser" in sys.argv[1:] or _truthy(os.environ.get("MRMD_NO_BROWSER"))):
+        try:
+            import webbrowser
+            webbrowser.open(HOSTED_URL)
+        except Exception:
+            pass
     time.sleep(0.5)
     return subprocess.call([VENV_PY, runner], cwd=os.path.dirname(runner), env=env)
 
