@@ -155,6 +155,20 @@ def favicon():
     return ("", 204)
 
 
+_EGG_MP3 = "Boonies Basement Tub (128kbit_AAC)-2.mp3"
+
+
+@app.route("/egg.mp3")
+def egg_mp3():
+    """The 'Oh, Very Deep' easter egg — played by the UI when that depth chip is selected.
+    The file lives beside the server locally only (not committed); elsewhere this 404s and
+    the UI's play() fails silently."""
+    path = os.path.join(_ROOT, _EGG_MP3)
+    if not os.path.exists(path):
+        return ("", 404)
+    return send_from_directory(_ROOT, _EGG_MP3, mimetype="audio/mpeg")
+
+
 @app.route("/api/health")
 def health():
     try:
@@ -164,7 +178,7 @@ def health():
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.engines",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.odyall",
                     "sources_hash": _sources_hash(), "providers": providers})
 
 
@@ -646,7 +660,64 @@ def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
 #  DEEP RESEARCH (DRT) — browser-driven, agentic web research
 # ══════════════════════════════════════════════════════════════
 
-DR_STAGES = ["stage1", "stage2", "stage3", "stage4", "synthesize", "report"]
+# Every tier opens with an Odysseus pre-research pass (2026-09-03) — it is the first stage.
+DR_STAGES = ["odysseus", "stage1", "stage2", "stage3", "stage4", "synthesize", "report"]
+
+# Odysseus pre-pass sizing per tier: (rounds, seconds). Runs BEFORE the research clock,
+# like document analysis, so the tier's own window is untouched.
+_ODY_BY_DEPTH = {"standard": (2, 150), "deep": (4, 300), "exhaustive": (6, 600)}
+
+
+def _run_odysseus_prepass(job_id, job, query, clarifications, depth, stop_ev, skip_ev, prog):
+    """Headless IterResearch pre-pass for every tier. Returns the report markdown ('' on
+    failure/skip). STOP cancels it (the worker then honors stop_mode); the stage Skip button
+    cancels it and the run continues with whatever it had. Never raises."""
+    rounds, secs = _ODY_BY_DEPTH.get(depth, _ODY_BY_DEPTH["standard"])
+    prog("odysseus", None, f"Odysseus pre-research — {rounds} rounds, up to {secs // 60} min…")
+
+    def _p(ev):
+        msg = "Odysseus — " + _ody_msg(ev)
+        with _JOBS_LOCK:
+            job["message"] = msg
+        _push_event(job_id, "ody", msg)
+
+    try:
+        import asyncio
+        from engines.odysseus.deep_research import DeepResearcher
+        q_full = query
+        if clarifications:
+            q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
+        researcher = DeepResearcher(
+            llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
+            llm_model="claude-opus-4-8",
+            max_rounds=rounds, max_time=secs, progress_callback=_p)
+        # Cooperative cancel: STOP or Skip-this-stage ends the pre-pass promptly.
+        done = threading.Event()
+
+        def _watch():
+            while not done.wait(0.5):
+                if stop_ev.is_set() or skip_ev.is_set():
+                    researcher.cancel()
+                    _push_event(job_id, "ody", "Odysseus pre-research cancelled by user — continuing")
+                    return
+        threading.Thread(target=_watch, daemon=True).start()
+        try:
+            report = (asyncio.run(researcher.research(q_full)) or "").strip()
+        finally:
+            done.set()
+        if skip_ev.is_set():
+            skip_ev.clear()
+        if report and not report.lower().startswith("**search unavailable**"):
+            _push_event(job_id, "ody",
+                        f"[synth] Odysseus pre-research complete — {len(report):,} chars, "
+                        f"{researcher.round_count} rounds, {len(researcher.urls_fetched)} URLs; "
+                        "handing off to the browser pipeline")
+            return report
+        _push_event(job_id, "ody", "Odysseus pre-research produced nothing usable — continuing without it")
+    except Exception as e:  # noqa: BLE001 — the pre-pass is an enhancer, never a blocker
+        _push_event(job_id, "ody",
+                    f"Odysseus pre-pass failed ({type(e).__name__}) — continuing with a plain run")
+    return ""
 _DR_EVENTS = {}     # job_id -> threading.Event (for batched Stage-4 credential prompt)
 _DR_SKIP = {}       # job_id -> threading.Event (user "skip this stage" signal)
 _DR_STOP = {}       # job_id -> threading.Event (user "STOP the whole run" signal)
@@ -791,10 +862,14 @@ def _dr_harvest_to_md(query, h):
     return "\n".join(out)
 
 
-def _dr_wrap_report(query, h, synth_md):
+def _dr_wrap_report(query, h, synth_md, ody_md=""):
     """Wrap the synthesized report with the harvest audit trail (collapsed <details> for
-    the web UI; a plain section for the docx)."""
+    the web UI; a plain section for the docx). `ody_md` = the Odysseus pre-research pass
+    that grounded the run — appended as its own collapsed/trailing section for traceability."""
     harvest_md = _dr_harvest_to_md(query, h)
+    if (ody_md or "").strip():
+        harvest_md += ("\n\n## Odysseus pre-research (headless pass that grounded this run)\n\n"
+                       + ody_md.strip())
     synth_md = (synth_md or "").strip()
     warn = ""
     if getattr(h, "login_warnings", None):
@@ -936,6 +1011,31 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             client = make_client("claude", api_key, refusal_hook=_refusal_hook,
                                  on_stop=_refusal_stop)
 
+        # ── Odysseus pre-research — EVERY tier (2026-09-03). The headless IterResearch
+        # pass runs first, sized to the tier, and its report is fed in EXACTLY like a
+        # dropped file: the intake analyst distills it into grounding for the plan +
+        # lanes, and its full text reaches synthesis as trusted user material. Local-model
+        # runs skip it (Odysseus is wired to the Anthropic key).
+        from engines.research.agent import normalize_depth as _nd0
+        depth = _nd0(depth)
+        ody_report = ""
+        if not is_local(provider) and not stop_ev.is_set():
+            ody_report = _run_odysseus_prepass(job_id, job, query, clarifications, depth,
+                                               stop_ev, skip_ev, prog)
+            if stop_ev.is_set() and (job.get("stop_mode") == "abort"):
+                with _JOBS_LOCK:
+                    job["aborted"] = True; job["message"] = "Stopped — discarded."
+                    job["done"] = True
+                return
+        else:
+            log_fn("[ody] Odysseus pre-research skipped (local model run)" if is_local(provider)
+                   else "[ody] Odysseus pre-research skipped")
+        if ody_report:
+            ody_part = ("[Odysseus pre-research findings]\n"
+                        + _truncate_words(ody_report, _DOC_WORD_CAP))
+            doc_parts = list(doc_parts or []) + [ody_part]
+            doc_context = (doc_context + "\n\n" + ody_part).strip() if doc_context else ody_part
+
         # ── Uploaded documents: extract → parse (done at POST) → ANALYZE here.
         # Each file is distilled against the question (facts, entities, open questions,
         # search leads); the brief grounds the planner + browser agent. The FULL raw
@@ -1051,7 +1151,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                 report_md_synth = report_md_synth + "\n\n" + go_deeper
 
         prog("report", None, "Assembling report…")
-        report_md, docx_md = _dr_wrap_report(query, h, report_md_synth)
+        report_md, docx_md = _dr_wrap_report(query, h, report_md_synth, ody_md=ody_report)
         try:
             docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()
         except Exception:
@@ -1066,6 +1166,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                   "source_count": len(sources), "docx_b64": docx_b64,
                   "saved_path": _autosave_report(docx_b64, query, "Deep Research", title=title),
                   "go_deeper_md": go_deeper,
+                  "odysseus_report_md": ody_report,
                   "discovered_forums": getattr(h, "discovered_forums", []) or [],
                   "category": getattr(h, "category", ""),
                   "plan": getattr(h, "plan", {}),
@@ -1137,33 +1238,13 @@ def deep_research_start():
                 pass
     doc_context = "\n\n".join(doc_parts)
 
-    # ── "Deep + Odysseus" depth: a chained run. Pass 1 = the headless IterResearch
-    # engine (standard, 4 rounds); its report is analyzed by the document-intake
-    # analyst and fed into Pass 2 — the normal DEEP-tier browser pipeline — as a
-    # supporting document. Same job shape/stream, stages list gains the ody row.
-    if raw_depth == "odysseus":
-        job_id = os.urandom(8).hex()
-        with _JOBS_LOCK:
-            _JOBS[job_id] = {
-                "stage": "odysseus", "pct": None, "message": "Starting Odysseus pre-research…",
-                "done": False, "error": None, "result": None,
-                "awaiting_credentials": None, "submitted_credentials": None,
-                "events": [], "eseq": 0,
-            }
-        _DR_EVENTS[job_id] = threading.Event()
-        _DR_SKIP[job_id] = threading.Event()
-        _DR_STOP[job_id] = threading.Event()
-        _DR_REFUSAL[job_id] = threading.Event()
-        threading.Thread(target=_ody_depth_worker,
-                         args=(job_id, query, clarifications, doc_context,
-                               channel_overrides, provider, doc_parts),
-                         daemon=True).start()
-        return jsonify({"job_id": job_id, "stages": ["odysseus"] + DR_STAGES}), 202
-
+    # (The old "Deep + Odysseus" chained depth is gone as a separate path — every tier
+    # now opens with an Odysseus pre-pass inside _dr_worker; normalize_depth maps the
+    # legacy "odysseus" value to the deep tier.)
     job_id = os.urandom(8).hex()
     with _JOBS_LOCK:
         _JOBS[job_id] = {
-            "stage": "stage1", "pct": None, "message": "Starting…",
+            "stage": "odysseus", "pct": None, "message": "Starting…",
             "done": False, "error": None, "result": None,
             "awaiting_credentials": None, "submitted_credentials": None,
             "events": [], "eseq": 0,
@@ -1826,54 +1907,6 @@ def _ody_worker(job_id, query, max_rounds, max_time, category):
         with _JOBS_LOCK:
             job["error"] = traceback.format_exc()
             job["done"] = True
-
-
-def _ody_depth_worker(job_id, query, clarifications, doc_context, channel_overrides,
-                      provider, doc_parts):
-    """Deep Research's "Deep + Odysseus" depth: PASS 1 runs the headless IterResearch
-    engine at its standard setting (4 rounds); its report is then handed to the normal
-    DEEP-tier pipeline as a supporting document — so the existing document-intake
-    analyst distills it (Fable, standard effort) into search-enhancing grounding for
-    the plan + browser stages, and its full text still reaches synthesis as user_docs.
-    Odysseus failure degrades to a plain deep run, never blocks it."""
-    job = _JOBS[job_id]
-
-    def prog(ev):
-        msg = "Pass 1 · Odysseus — " + _ody_msg(ev)
-        with _JOBS_LOCK:
-            job["message"] = msg
-        _push_event(job_id, "ody", msg)
-
-    ody_report = ""
-    try:
-        import asyncio
-        from engines.odysseus.deep_research import DeepResearcher
-        q_full = query
-        if clarifications:
-            q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
-        researcher = DeepResearcher(
-            llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
-            llm_model="claude-opus-4-8",
-            max_rounds=4, max_time=300, progress_callback=prog)
-        ody_report = (asyncio.run(researcher.research(q_full)) or "").strip()
-        _push_event(job_id, "ody",
-                    f"[synth] Odysseus pre-research complete — {len(ody_report):,} chars; "
-                    "handing off to Deep Research")
-    except Exception as e:  # noqa: BLE001 — pre-pass is an enhancer, never a blocker
-        _push_event(job_id, "ody",
-                    f"Odysseus pre-pass failed ({type(e).__name__}) — continuing with a plain deep run")
-
-    if ody_report:
-        # Feed the pre-research in EXACTLY like a dropped file: it gets its own
-        # document-intake analysis pass, and its full text reaches synthesis.
-        ody_part = ("[Odysseus pre-research findings]\n"
-                    + _truncate_words(ody_report, _DOC_WORD_CAP))
-        doc_parts = list(doc_parts or []) + [ody_part]
-        doc_context = (doc_context + "\n\n" + ody_part).strip() if doc_context else ody_part
-
-    # PASS 2 — the full browser pipeline at the DEEP tier, same job/stream/result.
-    _dr_worker(job_id, query, "deep", clarifications, doc_context, channel_overrides,
-               provider, doc_parts)
 
 
 @app.route("/api/odysseus_research", methods=["POST", "OPTIONS"])

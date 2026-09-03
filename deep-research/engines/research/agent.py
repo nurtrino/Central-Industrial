@@ -53,8 +53,10 @@ DEPTH_BUDGETS = {
     "exhaustive": {"seconds": 3600, "reserve": 300, "searches": 900, "pages": 900, "max_turns": 400},
 }
 _LEGACY_DEPTHS = {"quick": "standard", "verydeep": "deep",
+                  "odysseus": "deep",    # the old "Deep + Odysseus" chip — every tier chains Odysseus now
                   "hour": "exhaustive", "1h": "exhaustive", "1hour": "exhaustive",
-                  "max": "exhaustive"}   # old / alias tier names → canonical tier
+                  "max": "exhaustive", "ohverydeep": "exhaustive",
+                  "oh-very-deep": "exhaustive"}   # old / alias tier names → canonical tier
 
 
 def normalize_depth(depth: str) -> str:

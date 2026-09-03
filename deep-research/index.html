@@ -875,10 +875,9 @@ function _actAfter(owner) {
 
   function _drForm() {
     const depths = [
-      { id:'standard', label:'Standard', sub:'best outcome in ~5 min' },
-      { id:'deep',     label:'Deep',     sub:'best outcome in ~10 min' },
-      { id:'exhaustive', label:'1 hour', sub:'free-roam lanes until exhausted or 60 min' },
-      { id:'odysseus', label:'Deep + Odysseus', sub:'headless pre-research → deep run' },
+      { id:'standard',   label:'Standard',      sub:'Odysseus pre-research → 5 min browser run' },
+      { id:'deep',       label:'Deep',          sub:'Odysseus pre-research → 10 min browser run' },
+      { id:'exhaustive', label:'Oh, Very Deep', sub:'Odysseus pre-research → lanes free-roam until exhausted or 60 min' },
     ];
     const chips = depths.map(o => `
       <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
@@ -937,7 +936,18 @@ function _actAfter(owner) {
       </div>`;
   }
 
-  function drSetDepth(id) { _dr.depth = id; _drRender(); }
+  function drSetDepth(id) { _dr.depth = id; if (id === 'exhaustive') _drEgg(); _drRender(); }
+  // "Oh, Very Deep" easter egg: play the tub track, restarting on every press. The click
+  // is a user gesture so autoplay policy allows it; a missing file (hosted) fails silently.
+  let _drEggAudio = null;
+  function _drEgg() {
+    try {
+      if (!_drEggAudio) _drEggAudio = new Audio(`${PERF_SERVER}/egg.mp3`);
+      _drEggAudio.currentTime = 0;
+      const p = _drEggAudio.play();
+      if (p && p.catch) p.catch(() => {});
+    } catch (_) {}
+  }
 
   function _drChannelsHtml() {
     const items = [
@@ -1095,10 +1105,9 @@ function _actAfter(owner) {
         </div>`;
     }
     const depths = [
-      { id:'standard', label:'Standard', sub:'best outcome in ~5 min' },
-      { id:'deep',     label:'Deep',     sub:'best outcome in ~10 min' },
-      { id:'exhaustive', label:'1 hour', sub:'free-roam lanes until exhausted or 60 min' },
-      { id:'odysseus', label:'Deep + Odysseus', sub:'headless pre-research → deep run' },
+      { id:'standard',   label:'Standard',      sub:'Odysseus pre-research → 5 min browser run' },
+      { id:'deep',       label:'Deep',          sub:'Odysseus pre-research → 10 min browser run' },
+      { id:'exhaustive', label:'Oh, Very Deep', sub:'Odysseus pre-research → lanes free-roam until exhausted or 60 min' },
     ];
     const chips = depths.map(o => `
       <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
@@ -1701,7 +1710,7 @@ function _actAfter(owner) {
       if (err.name === 'AbortError' || myGen !== _dr.gen) return;
       _dr.abort = null; _drErrorNote(err.message); return;
     }
-    const stages = job.stages || ['stage1','stage2','stage3','stage4','synthesize','report'];
+    const stages = job.stages || ['odysseus','stage1','stage2','stage3','stage4','synthesize','report'];
     const jobId = job.job_id;
     _dr.jobId = jobId;
     actStartRun(jobId);
@@ -1841,7 +1850,7 @@ function _actAfter(owner) {
       : `<div class="mn-bar-fill mn-bar-indet"></div>`;
     const secs = Math.round((Date.now() - t0) / 1000);
     const elapsed = `${Math.floor(secs / 60)}m ${secs % 60}s`;
-    const canSkip = ['stage2','stage3','stage4'].includes(cur) && _dr.skipReqStage !== cur;
+    const canSkip = ['odysseus','stage2','stage3','stage4'].includes(cur) && _dr.skipReqStage !== cur;
     const skipBtn = canSkip
       ? `<button class="dr-skip-btn" onclick="drSkipStage('${cur}')">Skip this stage →</button>`
       : (_dr.skipReqStage === cur ? `<div class="dr-skip-note">Wrapping up this stage…</div>` : '');

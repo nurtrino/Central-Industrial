@@ -2,8 +2,52 @@
 
 _Last updated: 2026-09-03 (parallel lanes / 1-hour tier / Bright Data / Tavily+Exa session)_
 
-> ## ⭐ STATE AT 2026-09-03 — read this first (LOCAL ONLY; hosted twin NOT yet ported)
-> Build marker **`2026-09-03.lanes`** on `/api/health` (which now also reports `providers`).
+> ## ⭐ STATE AT 2026-09-03 SESSION CLOSE — read this first (LOCAL + HOSTED at parity)
+> Build marker **`2026-09-03.odyall`** on `/api/health`, which also reports `providers`. At
+> close BOTH instances show: `brave_api:true · tavily:true · exa:true · brightdata.unlocker:true
+> · brightdata.browser:true · brightdata.serp:false` (SERP zone never created — optional).
+>
+> **FINAL ARCHITECTURE CHANGE (build `odyall`): EVERY tier opens with an Odysseus pre-research
+> pass.** `DR_STAGES` now starts with `"odysseus"`; `_run_odysseus_prepass()` in `dr_server.py`
+> runs the headless IterResearch engine sized per tier (`_ODY_BY_DEPTH`: standard 2 rounds/150s ·
+> deep 4/300s · exhaustive 6/600s) BEFORE the research clock, and its report is appended to
+> `doc_parts`/`doc_context` as `[Odysseus pre-research findings]` — so the intake analyst
+> distills it into grounding for the plan + lanes and its full text reaches synthesis as trusted
+> user material (exactly the old "Deep + Odysseus" chain, now for all tiers). The report is also
+> appended to the audit as "Odysseus pre-research (headless pass…)" and returned as
+> `result["odysseus_report_md"]`. STOP or Skip-this-stage cancels the pre-pass cooperatively.
+> Local-model runs skip it (Odysseus is wired to the Anthropic key). The separate "Deep +
+> Odysseus" chip and `_ody_depth_worker` are GONE; `normalize_depth("odysseus")` → deep.
+> **Tier renamed: `exhaustive` = "Oh, Very Deep"** in the UI (aliases ohverydeep/hour/1h/max);
+> selecting it plays `/egg.mp3` (`Boonies Basement Tub…mp3`, LOCAL file only — the route 404s
+> and the UI stays silent on hosted; the mp3 is not committed). Chip subtitles now say
+> "Odysseus pre-research → N min browser run". Verified live (standard): Odysseus 2 rounds →
+> 14,659-char report from 22 URLs → distilled to a 3,374-char brief → plan → 3 lanes.
+> Effective durations ≈ standard 7-8 min · deep 15 min · Oh, Very Deep ~70 min.
+>
+> Five builds shipped today in order: `lanes` (5143de1) → `bdsessions` (5c844c8) → `engines`
+> (fa0363b) → health `brave_api` field (9945784) → `odyall`. Each was ported to `nurtrino/Central-Industrial`
+> by grafting (engine files copied whole — the deployed engine was byte-identical to pre-session
+> local; exact old→new edit pairs onto the gated `dr_server.py` + `index.html`; `render.yaml`
+> declares `TAVILY_API_KEY` / `BRAVE_API_KEY` / `BRIGHTDATA_*` / `DRT_LANES` as `sync:false`),
+> gate verified with the Flask test client, push SHA-verified, hosted health polled for the
+> marker (~80-100s each). All keys are set in BOTH the local `.env` and the Render `deep-research`
+> env. ⚠ This handoff's copy in the repo lags this final edit by one push (docs only).
+>
+> **Engine layer at close:** DuckDuckGo + Google via the browser (Google's `/goto` tokens
+> resolved to real URLs), Brave via its official API (scrape = fallback), Tavily + Exa via API;
+> any empty engine result falls through Bright Data SERP (off) → Tavily → Exa. Pages Chrome
+> can't read (Cloudflare challenge detected + waited out) fall through Bright Data Web Unlocker
+> → Tavily extract → Exa contents. Headless/hosted mode runs on Bright Data's Browser API, one
+> session per tab. Stage 2 = parallel lanes + hot-trail digger; tiers Standard 5 min / Deep 10
+> min / 1 hour. Reports save as `<generated title> — YYYY-MM-DD HHMM.docx`.
+>
+> **Verified runs today (local, same Rivian question):** standard = 3 lanes, 11 searches,
+> 8 pages, 6 sources; deep = 4 lanes + digger, 19 searches, 20 pages, 17 sources, stop-judge
+> YES first pass. Both BEFORE the Google/Brave fixes and the Brave/Tavily keys, so the next run
+> should see materially more engine hits and fewer fallbacks. ⚠ The 1-hour tier has NOT been
+> run yet. ⚠ Brave scrape-path markup fix is unverified (kept captcha'd during testing; moot
+> while the API key is set).
 > Driven by a compare/contrast of the tool against the agentic-search techniques report
 > (`Deep Research — Report (7).docx`): the report's best-evidenced protocol is
 > orchestrator-worker gathering with parallel sub-agents then ONE synthesis step; our own
@@ -65,6 +109,31 @@ _Last updated: 2026-09-03 (parallel lanes / 1-hour tier / Bright Data / Tavily+E
 >    is still BLANK in `.env` — Exa is live (verified: every dead Brave/Google query fell
 >    through to Exa in the shakedown run), Tavily is wired but dormant until a key is added.
 >
+> 3b. **Bright Data Browser API — LIVE + ported (build `2026-09-03.bdsessions`).** Zone
+>    `scraping_browser1`; `BRIGHTDATA_BROWSER_WSS` set locally AND on Render (first attempt
+>    failed `407 wrong_password` — the URL had been retyped with a truncated password; copy
+>    it with the copy icon on the zone's Playground/Overview "Credentials" line). Their
+>    sessions are ONE DOMAIN each (`navigate_domains_limit`), max 60 min, 5-min idle timeout
+>    → `new_tab()` opens a fresh CDP session per tab in remote mode (page.close() closes the
+>    session); startup only probes the credentials; `_domain_cookies` → [] (never "logged
+>    in"). Live headless test through it: the Cloudflare-walled rivianforums thread read in
+>    FULL (4580c, no challenge) and DDG returned 5 results — bundled headless Chromium got 0
+>    from every engine and was walled on the thread. Per-action latency 10-50s (remote).
+>    Native XenForo search through the remote browser timed out (falls back to `site:`).
+> 3c. **Google + Brave engines FIXED (build `2026-09-03.engines`).** Both had returned 0 in
+>    every mode all day. Causes: **Google** now wraps EVERY result href as an opaque
+>    `/goto?url=<token>` (the old `/url?q=` is gone) which the junk-host filter dropped —
+>    the token answers a plain 302 → real URL, so `DRTBrowser._resolve_goto` resolves it
+>    through `page.context.request` (session cookies; works in remote-session mode) BEFORE
+>    the junk filter; verified 8/8 real URLs in 2s. **Brave** dropped the `#results`
+>    container: results are Svelte `.snippet` blocks (`extract_js` in `_ENGINES`), and a
+>    rate-limited load renders a `.captcha-wrapper` page — now detected in ~1s and returned
+>    as empty (fallback chain). Repeated test hits kept Brave captcha'd, so the scrape fix is
+>    unverified; moot when keyed: **`brave_search.py` = official Brave Search API**
+>    (`BRAVE_API_KEY`, blank until the user gets one at api-dashboard.search.brave.com) is now
+>    the PRIMARY `brave` path in `_engine_search`, scrape = fallback. Google has no general
+>    web API (Custom Search JSON is capped/thinner) — browser scrape + Bright Data SERP zone
+>    (not created) is the right Google stack.
 > 5. **Titled report filenames** (same day, user request): `_report_title(query, report_md,
 >    client)` = one cheap model call ("4-9 words, Title Case, specific to what the report
 >    established"; slug fallback) → `_report_filename(title, label)` =
