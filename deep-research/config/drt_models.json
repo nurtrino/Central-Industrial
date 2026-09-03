@@ -1,10 +1,11 @@
 {
-  "_comment": "Per-role model map for the Deep Research Tool. Edit a value to override the default, then restart the server (in-app 'Restart Server' or POST /api/restart) to apply. Roles: extract = per-page extraction + category classify; search = browser agent loop + Stage-1 baseline sweep; route = relevance filters, stop-judge, gap-queries; plan = the upfront research planner; synthesize = the cited report (the deliverable). Per user directive all roles run claude-opus-4-8 at high effort (effort is set in engines/research/llm.py, env override DRT_EFFORT).",
+  "_comment": "Per-role model map for the Deep Research Tool. Edit a value to override the default, then restart the server (in-app 'Restart Server' or POST /api/restart) to apply. Roles: extract = per-page extraction + classify; search = the lane navigators (Stage 2 lanes, Stages 3/4, gap rounds); route = relevance filters, stop-judge, gap-queries, titles, baseline query-gen, the Odysseus pre-pass; plan = the planner, lane planning, and the lead review; dig = the hot-trail digger; synthesize = the cited report (the deliverable). 2026-09-03 split (orchestrator-worker pattern): navigators + extraction/routing on Sonnet 5, judgment + deliverable on Opus 4.8. Effort is set in engines/research/llm.py (env DRT_EFFORT).",
   "models": {
-    "extract": "claude-opus-4-8",
-    "search": "claude-opus-4-8",
-    "route": "claude-opus-4-8",
+    "extract": "claude-sonnet-5",
+    "search": "claude-sonnet-5",
+    "route": "claude-sonnet-5",
     "plan": "claude-opus-4-8",
+    "dig": "claude-opus-4-8",
     "synthesize": "claude-opus-4-8"
   }
 }

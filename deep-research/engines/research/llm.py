@@ -283,8 +283,20 @@ class _ClaudeMessages:
             kw["max_tokens"] = _MAX_TOKENS_FLOOR
         extra_body = dict(kw.pop("extra_body", None) or {})
         extra_body.setdefault("output_config", {"effort": DRT_EFFORT})
+        # Prompt caching (2026-09-03): top-level auto-cache = "cache the last cacheable
+        # block". The agent loops resend an ever-growing transcript every turn, so the
+        # prefix is identical turn-to-turn — cached input is ~10% of full price and
+        # counts far less against rate limits. Sent via extra_body (SDK-version-proof).
+        extra_body.setdefault("cache_control", {"type": "ephemeral"})
         kw["extra_body"] = extra_body
+        # Second, explicit breakpoint on the system prompt: the governance + stage prompt
+        # (~4-5K tokens) is identical across every turn of every lane, so it hits even
+        # when the messages diverge (parallel lanes share it).
+        sysm = kw.get("system")
+        if isinstance(sysm, str) and len(sysm) > 4000:
+            kw["system"] = [{"type": "text", "text": sysm, "cache_control": {"type": "ephemeral"}}]
         resp = self._o._inner.messages.create(**kw)
+        self._o._account(kw.get("model"), getattr(resp, "usage", None))
         # Claude safety refusal → HTTP 200 with stop_reason 'refusal' and empty content.
         # Left unhandled these silently no-op the whole pipeline. Give the owner a chance
         # to pause, ask the user, and (if they confirm) swap to the local model, then
@@ -305,15 +317,59 @@ class ClaudeClient:
     LMStudioClient for the rest of the run. Parallel callers that refuse at the same
     time honor the first decision rather than re-prompting."""
 
+    # Parallel lanes can draw 429s at the org's rate tier; the SDK retries with backoff,
+    # and 5 retries (default 2) rides out a burst instead of aborting a lane.
+    _MAX_RETRIES = 5
+
     def __init__(self, api_key=None, refusal_hook=None, on_stop=None):
         import anthropic
-        self._inner = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        self._inner = (anthropic.Anthropic(api_key=api_key, max_retries=self._MAX_RETRIES)
+                       if api_key else anthropic.Anthropic(max_retries=self._MAX_RETRIES))
         self._refusal_hook = refusal_hook   # pause + return "local"|"abort" (UI only)
         self._on_stop = on_stop             # called to halt the run (abort / local-unavailable)
         self._local = None            # set to an LMStudioClient after a confirmed switch
         self._decision = None         # remembered so repeats don't re-prompt
         self._lock = __import__("threading").Lock()
         self.messages = _ClaudeMessages(self)
+        # Per-run token accounting, by model: {model: {calls, input, output, cache_read,
+        # cache_write}} — surfaced in the report audit so every run shows its real spend.
+        self.usage = {}
+
+    def _account(self, model, usage):
+        if usage is None:
+            return
+        with self._lock:
+            u = self.usage.setdefault(str(model or "?"),
+                                      {"calls": 0, "input": 0, "output": 0,
+                                       "cache_read": 0, "cache_write": 0})
+            u["calls"] += 1
+            u["input"] += int(getattr(usage, "input_tokens", 0) or 0)
+            u["output"] += int(getattr(usage, "output_tokens", 0) or 0)
+            u["cache_read"] += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            u["cache_write"] += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+
+    # Anthropic first-party list prices, $ per 1M tokens (cached: 2026-06-24 skill table);
+    # cache write ≈ 1.25× input, cache read ≈ 0.1× input.
+    _PRICES = {"claude-opus-4-8": (5.0, 25.0), "claude-opus-5": (5.0, 25.0),
+               "claude-sonnet-5": (2.0, 10.0), "claude-sonnet-4-6": (3.0, 15.0),
+               "claude-fable-5-1": (10.0, 50.0), "claude-fable-5": (10.0, 50.0),
+               "claude-haiku-4-5": (1.0, 5.0)}
+
+    def usage_summary(self) -> dict:
+        """{'by_model': {...}, 'total_usd': float, 'totals': {...}} for the audit."""
+        by, tot = {}, {"calls": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        total_usd = 0.0
+        with self._lock:
+            items = {m: dict(u) for m, u in self.usage.items()}
+        for m, u in items.items():
+            pin, pout = self._PRICES.get(m, (5.0, 25.0))
+            usd = (u["input"] * pin + u["cache_write"] * pin * 1.25
+                   + u["cache_read"] * pin * 0.1 + u["output"] * pout) / 1e6
+            by[m] = {**u, "usd": round(usd, 2)}
+            total_usd += usd
+            for k in tot:
+                tot[k] += u[k]
+        return {"by_model": by, "totals": tot, "total_usd": round(total_usd, 2)}
 
     def _stop(self):
         if self._on_stop:

@@ -178,7 +178,7 @@ def health():
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.odyall",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-03.sonnetlanes",
                     "sources_hash": _sources_hash(), "providers": providers})
 
 
@@ -687,9 +687,10 @@ def _run_odysseus_prepass(job_id, job, query, clarifications, depth, stop_ev, sk
         q_full = query
         if clarifications:
             q_full += f"\n\nCONTEXT / CLARIFICATIONS:\n{clarifications[:2000]}"
+        from engines.research.models import get_model as _gm
         researcher = DeepResearcher(
             llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
-            llm_model="claude-opus-4-8",
+            llm_model=_gm("route"),      # the pre-pass is extraction/query-gen work -> Sonnet
             max_rounds=rounds, max_time=secs, progress_callback=_p)
         # Cooperative cancel: STOP or Skip-this-stage ends the pre-pass promptly.
         done = threading.Event()
@@ -793,10 +794,17 @@ def _dr_harvest_to_md(query, h):
         from engines.research.models import all_models
         mm = all_models()
         out.append(
-            f"**Models:** plan `{mm['plan']}` · search `{mm['search']}` · route `{mm['route']}` · "
-            f"extract `{mm['extract']}` · synthesize `{mm['synthesize']}`\n")
+            f"**Models:** plan `{mm['plan']}` · lanes `{mm['search']}` · dig `{mm.get('dig', mm['plan'])}` · "
+            f"route `{mm['route']}` · extract `{mm['extract']}` · synthesize `{mm['synthesize']}`\n")
     except Exception:
         pass
+    us = getattr(h, "usage", None)
+    if isinstance(us, dict) and us.get("by_model"):
+        rows = " · ".join(
+            f"`{m}` {u['calls']} calls, {u['input']/1000:.0f}K in + {u['cache_read']/1000:.0f}K cached"
+            f" + {u['cache_write']/1000:.0f}K cache-write, {u['output']/1000:.0f}K out ≈ ${u['usd']:.2f}"
+            for m, u in us["by_model"].items())
+        out.append(f"**API usage this run ≈ ${us.get('total_usd', 0):.2f}** — {rows}\n")
     lanes = getattr(h, "lanes", None) or []
     if lanes:
         reps = {r.get("lane"): r.get("reason", "") for r in (getattr(h, "lane_reports", None) or [])}
@@ -1151,6 +1159,15 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                 report_md_synth = report_md_synth + "\n\n" + go_deeper
 
         prog("report", None, "Assembling report…")
+        try:      # real spend for the audit (ClaudeClient counts every call's usage)
+            h.usage = client.usage_summary() if hasattr(client, "usage_summary") else None
+            if h.usage:
+                log_fn(f"[synth] API usage this run ≈ ${h.usage['total_usd']:.2f} "
+                       f"({h.usage['totals']['input']//1000}K in, "
+                       f"{h.usage['totals']['cache_read']//1000}K cached, "
+                       f"{h.usage['totals']['output']//1000}K out)")
+        except Exception:
+            h.usage = None
         report_md, docx_md = _dr_wrap_report(query, h, report_md_synth, ody_md=ody_report)
         try:
             docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()

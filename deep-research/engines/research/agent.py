@@ -627,7 +627,8 @@ def _compact_messages(messages, log) -> int:
 def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, task,
                        tools, cap, progress, log, notes, skip_event=None, question="",
                        sources=None, pool=None, deadline=None, hard_deadline=None,
-                       stop_event=None, lane=None, clear_skip=True):
+                       stop_event=None, lane=None, clear_skip=True, model=None):
+    model = model or _MODEL          # navigators = the "search" role; the digger passes "dig"
     # Soft stage allocation (grows via request_extension) vs. the hard global pool.
     # No pool passed → private pool equal to the allocation (fixed-cap behavior).
     # `deadline` = this stage's soft time share; `hard_deadline` = the run's gathering
@@ -896,7 +897,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             break
         _compact_messages(messages, log)
         log(f"[turn] {stage_name}: agent weighing next move…{_clock()}")
-        resp = client.messages.create(model=_MODEL, max_tokens=4096, system=system,
+        resp = client.messages.create(model=model, max_tokens=4096, system=system,
                                       tools=tools, messages=messages)
         messages.append({"role": "assistant", "content": resp.content})
         for b in resp.content:
@@ -1452,7 +1453,7 @@ def _run_stage2_lanes(client, br, result, seen_urls, *, query, task, clarificati
         task=task_d, tools=tools, cap=dig_cap, progress=progress,
         log=_lane_log(log, "dig"), notes=notes, skip_event=skip_event, question=query,
         sources=sources, pool=pool, deadline=stage2_end, hard_deadline=gather_deadline,
-        stop_event=stop_event, lane="dig")
+        stop_event=stop_event, lane="dig", model=get_model("dig"))
 
 
 # ── orchestrator ──────────────────────────────────────────────

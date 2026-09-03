@@ -22,11 +22,16 @@ from __future__ import annotations
 import json
 import os
 
+# 2026-09-03: orchestrator-worker split (Anthropic's research system: Opus lead, Sonnet
+# subagents). Navigators + high-volume extraction/routing on Sonnet 5; the judgment
+# steps (plan / lane planning / lead review, the hot-trail digger) and the deliverable
+# (synthesis) on Opus 4.8.
 _DEFAULT_MODELS = {
-    "extract":    "claude-opus-4-8",
-    "search":     "claude-opus-4-8",
-    "route":      "claude-opus-4-8",
+    "extract":    "claude-sonnet-5",
+    "search":     "claude-sonnet-5",
+    "route":      "claude-sonnet-5",
     "plan":       "claude-opus-4-8",
+    "dig":        "claude-opus-4-8",
     "synthesize": "claude-opus-4-8",
 }
 
