@@ -38,3 +38,7 @@ hub/twixtle_puzzles.json
 
 # ── Hyper Jeopardy local runtime state (accounts/leaderboard/game snapshot) ──
 hyper-jeopardy/.data/
+
+# Deep Research local-only files (easter-egg audio, agent traces)
+deep-research/*.mp3
+deep-research/traces/

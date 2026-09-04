@@ -2,7 +2,7 @@
 
 _Last updated: 2026-09-03 (parallel lanes / 1-hour tier / Bright Data / Tavily+Exa session)_
 
-> ## ⭐ STATE AT 2026-09-03 SESSION CLOSE — read this first (LOCAL + HOSTED at parity)
+> ## ⭐ STATE AT 2026-09-03 SESSION CLOSE — read this first (LOCAL + HOSTED at parity, repo `7453b9d`)
 > Build marker **`2026-09-03.odyall`** on `/api/health`, which also reports `providers`. At
 > close BOTH instances show: `brave_api:true · tavily:true · exa:true · brightdata.unlocker:true
 > · brightdata.browser:true · brightdata.serp:false` (SERP zone never created — optional).
@@ -24,6 +24,82 @@ _Last updated: 2026-09-03 (parallel lanes / 1-hour tier / Bright Data / Tavily+E
 > "Odysseus pre-research → N min browser run". Verified live (standard): Odysseus 2 rounds →
 > 14,659-char report from 22 URLs → distilled to a 3,374-char brief → plan → 3 lanes.
 > Effective durations ≈ standard 7-8 min · deep 15 min · Oh, Very Deep ~70 min.
+>
+> ## ⭐⭐ DONE 2026-09-03 evening: THE FORK IS OVER — local runs FROM this repo clone
+> **`D:\_______Claude\Central-Industrial\deep-research\` is now the ONLY Deep Research
+> codebase.** The local instance (:5006, supervised by the local hub via `hub/tools.json`
+> `local.cwd`/`local.cmd`) runs this folder's `dr_server.py` with this folder's gitignored
+> state: `.env` (+ `DRT_REPORTS_DIR=D:\______Documents\___Deep Research Reports`),
+> `config/.drt_vault_key` + `drt_credentials.enc`, `.drt_chrome_profile/` (moved, logins
+> intact), `.venv/` (moved — relocatable, imports verified), the egg mp3 and `traces/`
+> (both now gitignored). The old `D:\_______Claude\Deep Research\` is ARCHIVED under
+> `D:\_______Claude\_ARCHIVE\` — do not edit it. **Workflow from now on:** edit here →
+> restart local (in-app Restart, or kill the :5006 PID and hit the hub) → test → bump the
+> `build` marker → `git commit` → `git push` → Render deploys ~90s → poll `/api/health`.
+> No grafting, no parity checks, no Publish button needed (the site list is a committed
+> file; local `sources_hash` differs from hosted only by git's CRLF checkout).
+> _Historical rationale (kept for context):_ today's five ports were each done by grafting exact edit pairs onto the hosted files, and
+> three of them aborted on an anchor mismatch before succeeding. Measured at session close,
+> the ENTIRE local-vs-hosted difference is: (1) the auth gate block in `dr_server.py`, which
+> is already self-disabling (`GATE_ON = bool(AUTH_SECRET)`); (2) `PORT` (env, default 5006),
+> `HOME_URL`/`HUB_URL` (env, default `http://127.0.0.1:5050/`), and `_REPORTS_DIR`
+> (env `DRT_REPORTS_DIR`, default `<root>/reports`) — all env-driven with local defaults;
+> (3) `index.html`'s `__HUB_URL__` placeholder, which the server fills at serve time. The
+> hosted copy is a strict SUPERSET that behaves as the local tool when run without the Render
+> env. The other session unified the hub the same way today (hub/ = ONE codebase, local +
+> public). **Do the same here:**
+> 1. In `D:\_______Claude\Central-Industrial\deep-research\` (the persistent clone), place the
+>    gitignored local state: `.env` (with `DRT_REPORTS_DIR=D:\______Documents\___Deep Research
+>    Reports` added), `config/.drt_vault_key` + `config/drt_credentials.enc`,
+>    `.drt_chrome_profile/` (or let it regenerate + re-login), the egg mp3, and a `.venv`
+>    (copy the existing one or point the launcher at `D:\_______Claude\Deep Research\.venv`).
+>    All of these are already in the repo's `.gitignore`.
+> 2. Point the local hub's `hub/tools.json` deep-research entry (`cwd` + `cmd`) at the clone.
+>    `HOME_URL` is already passed by the hub.
+> 3. Retire `D:\_______Claude\Deep Research\` (archive it — do NOT keep editing it).
+> Then every change is: edit in the clone → restart local (:5006) → test → `git commit` →
+> `git push` → Render deploys in ~90s → poll `/api/health` for the build marker. One file
+> set, one history, no grafts, no parity drift. Keep the rules that still apply: bump the
+> `build` marker per deploy; SHA-verify pushes; keep `.env`/vault/profile out of git;
+> Render env vars (`sync:false`) must be set in the dashboard by hand; the Publish button
+> becomes redundant (the site list is just a committed file) but harmless.
+> **Publish/CRLF note:** local `.sources_hash` differs from hosted purely by CRLF vs LF
+> line endings (files are byte-identical after `tr -d '\r'`); the 17:16 Publish DID land
+> (`2ac3d5d`). Running from the clone (LF) ends that false alarm too.
+>
+> **LAST CHANGE — build `2026-09-03.sonnetlanes`, LIVE-VERIFIED + PUSHED (repo `cca349b`):
+> orchestrator-worker MODEL SPLIT + prompt caching + usage accounting.** ⚠ The Anthropic
+> account behind the `tFib…` key RAN OUT OF CREDITS during this session (≈6 all-Opus runs);
+> local `.env` now carries a NEW key `sk-ant-api03-pG9r…` from a funded org — **the Render
+> `deep-research` env still has the OLD key; update `ANTHROPIC_API_KEY` there** or hosted runs
+> fail with "credit balance is too low" (health stays green — it never calls the API).
+> Verified live: Sonnet 5 through the wrapper (guards fire, effort accepted); caching reads
+> ~9.2K tokens per call both on an extended transcript AND across lanes sharing the system
+> prompt (explicit `cache_control` breakpoint on `system` when >4K chars + top-level auto
+> breakpoint); a full standard run on the split (job c64c88…, 3 Sonnet lanes, 2 extensions,
+> 11 pages, 7 cited sources) reported **≈ $0.88 total** in its audit — Sonnet 30 calls with
+> 202K cached / 141K cache-write / 14K out ≈ $0.54, Opus 4 calls ≈ $0.35. ⚠ That figure
+> EXCLUDES the Odysseus pre-pass: `engines/odysseus/llm_core.py` calls AsyncAnthropic
+> directly (no wrapper → no caching, no accounting; ~$0.5-1 on Sonnet for 2 rounds).
+> Follow-up: route llm_core through the same cache/accounting shape. Original plan text:
+> Per the user (cost
+> discussion: a 1-hour run estimated at ~$70-120 on all-Opus, dominated by lanes resending
+> growing transcripts): `config/drt_models.json` + `models.py` defaults now = **search/extract/
+> route → `claude-sonnet-5`; plan/dig/synthesize → `claude-opus-4-8`** (new `dig` role: the
+> hot-trail digger passes `model=get_model("dig")` into `_run_browser_stage(..., model=)`;
+> lanes/stage3/stage4/gap rounds use `search`; the Odysseus pre-pass uses `route`; the
+> standalone Odysseus sub-tool stays Opus). `ClaudeClient` now (a) sends top-level
+> `cache_control: {type: ephemeral}` via `extra_body` on EVERY call (auto-cache the last
+> block — the agent loops' prefix is identical turn-to-turn; expected to cut the lanes row
+> ~85%), (b) `max_retries=5`, (c) counts usage per model (`client.usage`, `usage_summary()`
+> with list prices) → `h.usage` → **"API usage this run ≈ $X"** line in the report audit +
+> `[synth]` feed line. Offline lane harness passes. **TO DO when credits are back:** run the
+> wrapper micro-test (Sonnet 5 call with temperature+tiny max_tokens; two identical calls
+> with a ~5K-token system → 2nd shows `cache_read_input_tokens>0`; `usage_summary()`), then
+> a standard run (audit should show Sonnet lanes + the $ line), then graft to hosted
+> (models.py, agent.py, llm.py, dr_server.py, config/drt_models.json) + push. If the API
+> rejects top-level `cache_control`, drop that one `setdefault` line in `llm.py` — nothing
+> else depends on it. The credit exhaustion itself = today's ~6 Opus runs.
 >
 > Five builds shipped today in order: `lanes` (5143de1) → `bdsessions` (5c844c8) → `engines`
 > (fa0363b) → health `brave_api` field (9945784) → `odyall`. Each was ported to `nurtrino/Central-Industrial`

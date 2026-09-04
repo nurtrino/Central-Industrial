@@ -8,9 +8,9 @@
       "local": {
         "host": "research",
         "port": 5006,
-        "cwd": "D:\\_______Claude\\Deep Research",
+        "cwd": "D:\\_______Claude\\Central-Industrial\\deep-research",
         "cmd": [
-          "D:\\_______Claude\\Deep Research\\.venv\\Scripts\\pythonw.exe",
+          "D:\\_______Claude\\Central-Industrial\\deep-research\\.venv\\Scripts\\pythonw.exe",
           "dr_server.py"
         ],
         "log": "server.log",
