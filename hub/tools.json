@@ -14,7 +14,10 @@
           "dr_server.py"
         ],
         "log": "server.log",
-        "autostart": true
+        "autostart": true,
+        "env": {
+          "HOME_URL": "http://127.0.0.1:5050/"
+        }
       }
     },
     {
@@ -30,7 +33,10 @@
           "app.py"
         ],
         "log": "server.log",
-        "autostart": true
+        "autostart": true,
+        "env": {
+          "HOME_URL": "http://127.0.0.1:5050/"
+        }
       }
     },
     {
@@ -50,7 +56,8 @@
         "env": {
           "NODE_ENV": "production",
           "PORT": "5008",
-          "DATA_DIR": "D:\\_______Claude\\Central-Industrial\\hyper-jeopardy\\.data"
+          "DATA_DIR": "D:\\_______Claude\\Central-Industrial\\hyper-jeopardy\\.data",
+          "HOME_URL": "http://127.0.0.1:5050/"
         },
         "log": "server.log",
         "autostart": true
@@ -102,7 +109,10 @@
           "--no-browser"
         ],
         "log": "worker.log",
-        "autostart": true
+        "autostart": true,
+        "env": {
+          "HOME_URL": "http://127.0.0.1:5050/"
+        }
       }
     }
   ]

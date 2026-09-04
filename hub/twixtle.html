@@ -19,6 +19,7 @@
     display:flex;flex-direction:column;align-items:center;overflow-x:hidden;user-select:none}
   #app{width:100%;max-width:560px;display:flex;flex-direction:column;min-height:100dvh;padding:0 14px}
   header{display:flex;align-items:center;gap:10px;padding:14px 2px 6px}
+  a.c64-home{font-family:"Courier New",monospace;font-size:12px;font-weight:bold;letter-spacing:.5px;text-transform:uppercase;color:#6C5EB5;background:#352879;border:2px solid #6C5EB5;padding:5px 9px;text-decoration:none;line-height:1;white-space:nowrap;flex:none}a.c64-home:hover{background:#6C5EB5;color:#352879}
   .logo{font-size:26px;font-weight:900;letter-spacing:-.5px}
   .logo small{font-size:10px;font-weight:800;color:var(--muted);letter-spacing:2px;display:block;margin-top:-4px}
   .nav{display:flex;gap:0;background:#E4E1D6;border-radius:999px;padding:3px;margin-left:auto}
@@ -133,6 +134,7 @@
 <body>
 <div id="app">
   <header>
+    <a class="c64-home" href="/?return" title="Back to the Special Projects menu">← Special Projects</a>
     <div class="logo">twixtle<small>LAB</small></div>
     <nav class="nav" id="nav">
       <button data-view="play" class="on">Play</button>

@@ -98,6 +98,11 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   // 'hosted' (the public site: gate + SSO links) or 'local' (this machine: the hub
   // starts tools on demand). Reported by /api/status; same page either way.
   var mode = 'hosted';
+  // Coming BACK from a tool (its "Special Projects" button links to /?return): skip the
+  // boot sequence and, while the session cookie is still valid, the access-code prompt —
+  // land straight on the menu. A lapsed session still gets the prompt.
+  var returning = false;
+  try { returning = new URLSearchParams(window.location.search).has('return'); } catch(e){}
 
   function line(text, cls){
     var span = document.createElement('span');
@@ -205,7 +210,7 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
       return r.json();
     }).then(function(d){
       if(!d) return;
-      if(d.gated){ showAccessPrompt(); return; }
+      if(d.gated && !returning){ showAccessPrompt(); return; }
       showMenu(d);
     }).catch(function(){ line('?DEVICE NOT PRESENT  ERROR', 'st-offline'); });
   }
@@ -338,8 +343,18 @@ LOAD"SPECIAL PROJECTS",8,1<span class="cursor" id="bootcur"></span>
   // Boot on the first user gesture (key or click). Required so the browser allows
   // the music to play — autoplay-with-sound is blocked until the user interacts.
   // This is the C64 "press any key" flow: first input → looping music + live menu.
-  window.addEventListener('keydown', boot, {once:true});
-  window.addEventListener('pointerdown', boot, {once:true});
+  if(returning){
+    try { history.replaceState(null, '', window.location.pathname); } catch(e){}
+    booted = true;
+    var bc0 = document.getElementById('bootcur'); if(bc0) bc0.remove();
+    if(hint) hint.remove();
+    out.appendChild(document.createTextNode('\n'));
+    line('READY.');
+    enter();
+  } else {
+    window.addEventListener('keydown', boot, {once:true});
+    window.addEventListener('pointerdown', boot, {once:true});
+  }
 })();
 </script>
 </body>

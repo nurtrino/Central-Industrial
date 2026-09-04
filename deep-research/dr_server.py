@@ -136,7 +136,8 @@ if _HUB_URL and not re.match(r"^https?://", _HUB_URL, re.I):
 @app.route("/")
 def index():
     with open(os.path.join(_ROOT, "index.html"), encoding="utf-8") as fh:
-        html = fh.read().replace("__HUB_URL__", _HUB_URL)
+        # "/?return" = the hub skips its boot screen + access prompt and lands on the menu.
+        html = fh.read().replace("__HUB_URL__", _HUB_URL.rstrip("/") + "/?return")
     return app.response_class(html, mimetype="text/html")
 
 

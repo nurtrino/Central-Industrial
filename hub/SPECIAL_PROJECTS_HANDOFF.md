@@ -59,6 +59,17 @@ _Last updated: 2026-09-03 (one hub codebase + single local port — see the bloc
 > `jeopardy.centralindustrial.ai` domain in render.yaml has NO DNS record (fix in DNS/Render
 > if wanted). Local build recipe: `cd hyper-jeopardy && npm ci && npm run build`; the hub
 > runs `node --import tsx server.ts` with `PORT=5008 NODE_ENV=production DATA_DIR=.data`.
+> (6) **Back-to-menu button** (same evening): every tool page — Deep Research, MRMD, Hyper
+> Jeopardy, Cave Map, Twixtle, Crate, hosted AND local — carries a top-left C64-styled
+> "← Special Projects" button linking to the hub's **`/?return`** entry, which skips the boot
+> screen and (while the `ci_auth` session cookie is valid) the access-code prompt and lands on
+> the menu; a lapsed session still gets the prompt; a plain visit still boots + prompts. Tools
+> learn the hub URL from `HOME_URL` (Render: https://centralindustrial.ai — the apex 301 keeps
+> `?return`; local: the hub passes `HOME_URL=http://127.0.0.1:5050/` to every supervised tool).
+> DR: `__HUB_URL__` placeholder → `HOME_URL/?return`; MRMD: `#hubBack` from `/api/config.hub_url`;
+> Hyper Jeopardy: `components/HubLink.tsx` fetches `/api/hub` (runtime env, not build-time);
+> hub-served pages link `/?return` relatively. Local copies of DR/MRMD `index.html` carry the
+> same button (hardcoded 127.0.0.1:5050).
 
 ---
 

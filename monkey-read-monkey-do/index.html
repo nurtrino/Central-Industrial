@@ -20,6 +20,9 @@
   header{padding:22px 28px;border-bottom:1px solid var(--line);display:flex;
          align-items:baseline;gap:14px}
   header h1{margin:0;font-size:22px;letter-spacing:.3px}
+  /* back to the C64 menu (the hub lands on the menu directly via /?return) */
+  a.c64-home{font-family:"Courier New",monospace;font-size:12px;font-weight:bold;letter-spacing:.5px;text-transform:uppercase;color:#6C5EB5;background:#352879;border:2px solid #6C5EB5;padding:5px 9px;text-decoration:none;line-height:1;margin-right:14px;white-space:nowrap}
+  a.c64-home:hover{background:#6C5EB5;color:#352879}
   header .tag{color:var(--muted);font-size:13px}
   .badges{margin-left:auto;display:flex;gap:8px;font-size:12px}
   .badge{padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
@@ -170,6 +173,7 @@
 </head>
 <body>
 <header>
+  <a class="c64-home" id="hubBack" href="http://127.0.0.1:5050/?return" title="Back to the Special Projects menu">← Special Projects</a>
   <h1>Monkey Read Monkey Do</h1>
   <span class="tag">local transcription &amp; meeting notes</span>
   <div class="badges" id="badges"></div>
@@ -310,6 +314,7 @@ function renderBadges(){
   if(t) t.onclick = ()=>{ diarizeOn = !diarizeOn; renderBadges(); };
 }
 fetch("/api/config").then(r=>r.json()).then(c=>{
+  var hb=document.getElementById('hubBack'); if(hb&&c.hub_url) hb.href=String(c.hub_url).replace(/\/+$/,'')+'/?return';
   cfg = c; diarizeOn = !!c.diarization;     // default ON when available
   renderBadges();
 }).catch(()=>{});

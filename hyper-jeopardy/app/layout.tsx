@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import Starfield from "@/components/Starfield";
+import HubLink from "@/components/HubLink";
 
 // Self-hosted so the production build never depends on Google Fonts network
 // access. Orbitron carries the "space-age display" role (title / values /
@@ -48,6 +49,8 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {/* Ambient space backdrop behind every route (display + phones) */}
         <Starfield />
+        {/* Back to the Central Industrial hub menu (every tool carries this) */}
+        <HubLink />
         {children}
       </body>
     </html>
