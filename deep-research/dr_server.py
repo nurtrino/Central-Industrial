@@ -1490,7 +1490,9 @@ def deep_research_publish_sources():
 
     def git(*args, cwd=None):
         r = subprocess.run(["git", *args], cwd=cwd or _REPO_DIR, capture_output=True,
-                           text=True, timeout=240)
+                           text=True, timeout=240, stdin=subprocess.DEVNULL,
+                           creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                          if os.name == "nt" else 0))   # no cmd flash under pythonw
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
     try:

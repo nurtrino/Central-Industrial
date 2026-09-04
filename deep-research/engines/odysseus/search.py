@@ -15,7 +15,12 @@ import ipaddress
 import logging
 import os
 import socket
+import subprocess
 from urllib.parse import urlparse, parse_qs, unquote
+
+# Windows: the server runs under pythonw (no console), so every child console app —
+# curl here, once per page fetched — would otherwise flash its own cmd window.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 import httpx
 from bs4 import BeautifulSoup
@@ -170,7 +175,7 @@ def _curl_get(url: str, timeout: int):
     """GET via curl (built into Windows) — its TLS/header fingerprint passes the
     bot-protection (Cloudflare etc.) that 403s headless httpx in this environment.
     Returns (status_code, content_type, body_bytes)."""
-    import subprocess, tempfile
+    import tempfile
     body = tempfile.NamedTemporaryFile(delete=False, suffix=".bin"); body.close()
     hdr = tempfile.NamedTemporaryFile(delete=False, suffix=".hdr"); hdr.close()
     try:
@@ -180,7 +185,8 @@ def _curl_get(url: str, timeout: int):
              "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
              "-H", "Accept-Language: en-US,en;q=0.9",
              "-o", body.name, "-D", hdr.name, "-w", "%{http_code}", url],
-            capture_output=True, text=True, timeout=int(timeout) + 10)
+            capture_output=True, text=True, timeout=int(timeout) + 10,
+            creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL)
         status = int((p.stdout or "0").strip() or 0)
         ctype = ""
         try:
