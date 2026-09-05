@@ -67,6 +67,27 @@ _Last updated: 2026-09-03 (parallel lanes / 1-hour tier / Bright Data / Tavily+E
 > line endings (files are byte-identical after `tr -d '\r'`); the 17:16 Publish DID land
 > (`2ac3d5d`). Running from the clone (LF) ends that false alarm too.
 >
+> **2026-09-05 "Failed to fetch" / "Research could not run" mid-run (build `pollretry`):**
+> the SERVER never died (process up since 10:28, 89 polls answered, run finished 11:10 and
+> auto-saved 45 pages/45 sources) — the browser's status poll failed ONCE and the UI treated
+> any fetch error as fatal. Likely the local hub's per-connection relay (`hub_server.py`
+> `Router`/`_relay`: one browser TCP connection pinned to one backend connection, 30s
+> pre-request timeout, half-close on backend EOF) racing a pooled/speculative browser socket.
+> Fix (UI, both DR + Odysseus poll loops): transient errors retry for ~90s (feed line
+> "connection blip … retrying"); HTTP 404 "unknown job" = server actually restarted → clear
+> message; after 90s → "lost contact; the run may still finish server-side — check the
+> reports folder". ⚠ A finished job stays in `_JOBS` until its done-poll is read — so a
+> lost run's result can be recovered with one status GET (that's how the 11:10 report was
+> retrieved). Hub relay hardening (keep-alive awareness / retry on backend connect) is the
+> hub's job — not touched here.
+>
+> **Windows console-flash fix (same evening):** dozens of cmd windows popping up during a local
+> run were the Odysseus pre-pass's per-page `curl` fetches (`engines/odysseus/search.py`
+> `_curl_get`) — under `pythonw` every child console app gets its own window. Now spawned with
+> `creationflags=CREATE_NO_WINDOW` (+ `stdin=DEVNULL`); same for the Publish button's `git`
+> calls in `dr_server.py`. Guarded by `os.name == "nt"`, no-op on Render. The headed Chrome
+> window is intentional and unaffected.
+>
 > **LAST CHANGE — build `2026-09-03.sonnetlanes`, LIVE-VERIFIED + PUSHED (repo `cca349b`):
 > orchestrator-worker MODEL SPLIT + prompt caching + usage accounting.** ⚠ The Anthropic
 > account behind the `tFib…` key RAN OUT OF CREDITS during this session (≈6 all-Opus runs);

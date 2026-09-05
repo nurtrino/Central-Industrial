@@ -1725,10 +1725,26 @@ function _actAfter(owner) {
       try {
         const r = await fetch(`${PERF_SERVER}/api/deep_research/status?job=${jobId}&after=${_actAfter(jobId)}`, { signal: ctrl.signal });
         st = await r.json();
-        if (!r.ok) throw new Error(st.error || `status ${r.status}`);
+        if (!r.ok) throw Object.assign(new Error(st.error || `status ${r.status}`), { httpStatus: r.status });
+        _dr._pollFails = 0;
       } catch (err) {
         if (err.name === 'AbortError' || myGen !== _dr.gen) return;
-        _dr.abort = null; _drErrorNote(err.message); return;
+        // A transient blip (the hub relay dropping a pooled connection, a 502, a
+        // momentary network error) must NOT end a run that is still going on the
+        // server. Retry for up to ~90s before giving up; a 404 "unknown job" means the
+        // server itself restarted and the run is genuinely gone.
+        const gone = err.httpStatus === 404;
+        _dr._pollFails = (_dr._pollFails || 0) + 1;
+        if (!gone && _dr._pollFails <= 60) {
+          if (_dr._pollFails === 1 || _dr._pollFails % 10 === 0)
+            actAppend([[null, 'log', `[log] connection blip (${err.message}) — retrying… (${_dr._pollFails})`]]);
+          continue;
+        }
+        _dr.abort = null;
+        _drErrorNote(gone
+          ? 'The server restarted while this run was in progress, so the run was lost. If it had already finished, the report was auto-saved to the reports folder.'
+          : `Lost contact with the server for over a minute (${err.message}). The run may still be finishing server-side — check the reports folder.`);
+        return;
       }
       if (myGen !== _dr.gen) return;
       actIngest(jobId, st);
@@ -2131,7 +2147,12 @@ function _actAfter(owner) {
         const r = await fetch(`${PERF_SERVER}/api/odysseus_research/status?job=${_or.jobId}&after=${_actAfter(_or.jobId)}`, { signal: ctrl.signal });
         st = await r.json();
         if (!r.ok) throw new Error(st.error || `status ${r.status}`);
-      } catch (err) { if (err.name==='AbortError'||myGen!==_or.gen) return; _or.abort=null; _orErr(err.message); return; }
+      } catch (err) {
+        if (err.name==='AbortError'||myGen!==_or.gen) return;
+        _or._pollFails = (_or._pollFails || 0) + 1;              // transient blip → retry ~90s
+        if (_or._pollFails <= 60 && !/unknown job/.test(err.message)) continue;
+        _or.abort=null; _orErr(err.message); return;
+      }
       if (myGen !== _or.gen) return;
       actIngest(_or.jobId, st);
       if (st.error) { _or.abort=null; _orErr(st.error); return; }
