@@ -82,21 +82,6 @@
       "path": "/crate"
     },
     {
-      "id": "home-assistant",
-      "name": "Home Automation",
-      "local_only": true,
-      "local": {
-        "host": "home",
-        "port": 8123,
-        "cwd": "D:\\_______Claude\\Home Assistant",
-        "cmd": [
-          "wscript.exe",
-          "D:\\_______Claude\\Home Assistant\\Home Assistant.vbs"
-        ],
-        "detached": true
-      }
-    },
-    {
       "id": "readmonkeydo-worker",
       "name": "Read Monkey Do GPU worker",
       "hidden": true,

@@ -16,7 +16,6 @@ LOCAL (CI_LOCAL=1 — this machine): no gate. Everything lives behind ONE port
     http://127.0.0.1:5050/            the hub (this page; /cave /twixtle /crate too)
     http://notes.localhost:5050/      Monkey Read Monkey Do   (-> 127.0.0.1:5005)
     http://research.localhost:5050/   Deep Research           (-> 127.0.0.1:5006)
-    http://home.localhost:5050/       Home Assistant          (-> 127.0.0.1:8123)
 
 A tiny TCP router on the public port reads each connection's Host header and relays
 the whole connection byte-for-byte to the right backend (so streaming, long polls
