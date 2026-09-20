@@ -1,8 +1,501 @@
 # Deep Research — Handoff
 
-_Last updated: 2026-09-03 (parallel lanes / 1-hour tier / Bright Data / Tavily+Exa session)_
+_Last updated: 2026-09-20 (portable implementation guide added; state as of build `2026-09-05.pollretry`)_
 
-> ## ⭐ STATE AT 2026-09-03 SESSION CLOSE — read this first (LOCAL + HOSTED at parity, repo `7453b9d`)
+> ## ⭐ STATE NOW — read this first
+> **The ONLY codebase is the repo clone `D:\_______Claude\Central-Industrial\deep-research\`**
+> (local :5006 runs from it under the local hub; hosted `research.centralindustrial.ai` deploys
+> from it via Render). Build marker `2026-09-05.pollretry` on `/api/health`, which also reports
+> `providers` — at last check both instances: `brave_api · tavily · exa · brightdata.unlocker ·
+> brightdata.browser` all true, `brightdata.serp` false (zone never created; optional).
+> Workflow: edit here → restart local (in-app Restart or kill the :5006 PID and hit the hub) →
+> test → bump `build` → `git commit` → `git push` → Render deploys ~90s → poll `/api/health`.
+> Gitignored local state in this folder: `.env` (incl. `DRT_REPORTS_DIR`), `config/.drt_vault_key`
+> + `config/drt_credentials.enc`, `.drt_chrome_profile/`, `.venv/`, the egg mp3, `traces/`.
+> The old `D:\_______Claude\Deep Research\` is archived — never edit it. Render env vars
+> (`sync:false` in `render.yaml`) are set by hand in the dashboard; the Anthropic key there is the
+> funded `pG9r…` key. Models: lanes/extract/route = `claude-sonnet-5`, plan/dig/synthesize =
+> `claude-opus-4-8` (`config/drt_models.json`). Measured cost: a standard run ≈ $0.88 + ~$0.5-1
+> for the Odysseus pre-pass (which bypasses the wrapper — see follow-ups).
+>
+> **Open follow-ups:** (1) route `engines/odysseus/llm_core.py` through the cached/accounted
+> wrapper shape; (2) the "Oh, Very Deep" 1-hour tier has never been run end to end; (3) Brave's
+> scrape path is unverified (moot while `BRAVE_API_KEY` is set); (4) hub relay hardening lives
+> in the hub, not here.
+>
+> **Part A below is the portable guide** — written to bring a sibling deep-research tool (same
+> Flask + Playwright + Claude shape, more rudimentary) up to this tool's level. **Part B** is the
+> session-by-session history of THIS tool, kept for detail.
+
+---
+
+# PART A — PORTABLE IMPLEMENTATION GUIDE (for the sibling tool)
+
+_Audience: an agent or engineer upgrading another instance of a deep-research tool on another
+machine/network. Framework-relative: adapt names, keep the shapes. Everything here is what was
+built and live-verified on the reference tool between 2026-08-12 and 2026-09-05. It assumes the
+sibling already has (or first builds) the 2026-08-12 baseline described in
+`DEEP_ACTUAL_RESEARCH_UPGRADE_GUIDE.md` (kept beside this file): one wrapped LLM client, a
+staged browser pipeline with a tool-use loop, per-page extraction with graded citations, a live
+activity feed, time-boxed depth tiers, the editable governance prompt. If the sibling lacks any of
+that, do that guide first — this one layers on top of it._
+
+## A0. What this guide adds, and the order to do it
+
+| # | Workstream | Why it earned its place | Depends on |
+|---|---|---|---|
+| A1 | Credentialed websites done right | The vault was worthless until login detection stopped lying and native search reached gated content | baseline |
+| A2 | Native in-forum search (platform adapters) | `site:` engine queries see only what engines indexed; gated forums = nothing | A1 |
+| A3 | Web crawling & site behaviour (walls, engines, fallbacks, Bright Data, Tavily/Exa) | Two of three browser engines were returning nothing for days; Cloudflare interstitials were being read as page text | baseline |
+| A4 | Odysseus distilled into the main tool (pre-research on every tier) | Grounds planning and the lanes in a fast headless pass; the old "chained" tier proved it, so it became universal | baseline |
+| A5 | Parallel research lanes + lead review + sequential digger | The best-evidenced protocol in the field (orchestrator-worker gather, single synthesis); ~N× pages per minute | A3 |
+| A6 | Tiers, budgets, 1-hour free-roam | Lanes need a clock that hands time down to the digger and deepening | A5 |
+| A7 | Model split, prompt caching, usage accounting | Lanes on Sonnet + caching took a run from an estimated ~$15 to a measured $0.88 | A5 |
+| A8 | Titled report files, audit additions | Filenames a human can find | any |
+| A9 | Ops: single work tree, poll resilience, no console flashes, env table | The fork between local and hosted copies cost more than any feature | any |
+| A10 | Verification protocol | What "done" looked like | all |
+
+Do A1→A2→A3 in the engine as one coherent pass (they share the browser harness and agent
+files), then A4 in the server/worker, A5→A6→A7 in the agent + client wrapper, A8/A9 anywhere.
+
+## A1. Credentialed websites
+
+**A1.1 One unified site list.** Replace any split between "sources" and "vault domains" with ONE
+list, `config/sources.json`: `[{"url": "avforums.com", "login_required": false|true|null,
+"note": "AV / home-theater", "search_url": "https://…/search?q={q}" (optional)}]`.
+`login_required` drives everything: `false` = searchable logged out, `true` = needs a login,
+`null` = untested (a probe fills it in). The vault is a credential LOOKUP keyed by normalized
+domain, not a second list — the old two-list design orphaned vault logins that weren't also in
+the sources table. Loader: tolerate a UTF-8 BOM (`encoding="utf-8-sig"`) and both old and new
+schemas; normalize `url` to a bare registrable host (`https://www.X.com/forums/` → `x.com`).
+
+**A1.2 Relevance gates every site, every run.** ONE model call over the whole list picks the
+topically relevant sites for THIS question ("return ONLY the domains whose subject matter is
+appropriate; be selective; at most 18; JSON `{"domains": [...]}`"). Public picks (`login_required
+!= true`) go to the open sweep; login-required picks go to the login path. No always-on sites.
+Skip the call when the list is small (≤12) — inject it whole.
+
+**A1.3 Honest login detection (the fix that mattered most).** The old check treated "no
+password field on the login page" as authenticated, which false-positived four forums as
+logged-in while harvesting public content. Verify a login ONLY by (a) a STRONG auth cookie or
+(b) a cleared login form + URL no longer containing `login`/`signin`. Strong cookie names:
+`xf_user` (XenForo), `user_session` / `logged_in` / `dotcom_user` (GitHub), `reddit_session` /
+`token_v2` (Reddit), `auth_token` / `twid` (X), `flarum_remember`, `sapu` (Seeking Alpha),
+`li_at` (LinkedIn), `bb_userid` / `vbulletin_user`; substrings `_user`, `auth_token`,
+`remember_`, `logged_in`, `loggedin`, `wordpress_logged_in`, `phpbb3_sid`. Deliberately EXCLUDE
+guest/session cookies (`xf_session`, bare `*session*`, analytics) — those exist logged-out.
+Under-reporting is safe (falls back to public search + reactive login); over-reporting silently
+harvests public content while claiming success. "Not logged in — public content only" is a
+benign soft state, not a failure: most forums search fine logged out.
+
+**A1.4 Proactive login at the credentialed stage.** `ensure_logged_in(domain, creds)` BEFORE
+searching a login-required site: already-authenticated cookie → done; no creds → proceed logged
+out; else open `login_url` (or `https://domain/`), autofill, wait networkidle, re-verify per A1.3.
+Mark the domain "auth-handled" ONLY on a confirmed login, so a failure doesn't suppress the
+reactive handler later. Autofill selectors: username `input[autocomplete='username']`,
+`input[type='email']`, `input[name*='user' i]`, `input[name*='email' i]`, `input[id*='user' i]`,
+`input[id*='email' i]`, `input[type='text']`; password `input[type='password']`; submit
+`button[type='submit']`, `input[type='submit']`, `button:has-text('Log in'|'Sign in'|'Log In'|
+'Continue')`, else press Enter. Per-site selector overrides live on the vault entry. Known
+failure: Discourse's JS login modal (openwrt) defeats selector autofill — a one-time manual
+sign-in in the tool's persistent Chrome profile fixes it permanently (the profile keeps the
+session like github/reddit). 2FA/captcha logins are skipped and reported, never stalled on.
+
+**A1.5 Reactive wall handler.** On every `open()`, detect a login/paywall wall (URL contains
+`/login`, `/signin`, `/sign-in`, `/sign_in`, `/auth`, `accounts.google`, `/u/login`, `oauth`,
+`/account/login`; OR a password field + short page (<700 chars) or a wall keyword; OR short
+page + keyword: "log in to continue", "sign in to continue", "please log in", "you must be
+logged in", "log in or sign up", "create a free account", "sign up to continue", "subscribe to
+read", "subscribers only", "this content is for", "members only", "verify you are human", "are
+you a robot", "press & hold", "enable javascript and cookies", "access denied", "you've been
+blocked", "unusual traffic", "complete the security check"). Handler order: vault creds →
+autofill → re-read the page; no creds → record the domain as a gated candidate for the batched
+credential prompt; failed stored creds → a user-facing "stored-login warning" in the report.
+Once per domain per run.
+
+**A1.6 Hosted vs local.** The vault (key + encrypted blob) is LOCAL-ONLY and never committed or
+pushed; the hosted instance always shows zero logins by design and gets a ONE-TIME ephemeral
+credential prompt for any relevant login-required site (held in memory for the run, never
+saved). A datacenter-IP headless browser rarely clears gated forums anyway — say so in the
+hosted UI. Credentialed deep-forum research is a local capability; document that, don't fight it.
+
+**A1.7 Source-access probe.** A Sources-panel button that runs each site's logged-out native
+search from THIS server's own browser environment (throwaway profile, headless) and writes a
+✓/✗ verdict onto the site's dot. On the hosted instance that is the true datacenter-IP picture;
+from a residential machine it is optimistic.
+
+## A2. Native in-forum search
+
+**A2.1 Dispatcher.** `native_search(domain, query, search_url)` picks the most reliable method
+per platform and returns `[]` on failure so the caller falls back to the `site:` engine, then to
+Tavily with `include_domains=[domain]`. Platform map (extend as the catalog grows):
+XenForo = avforums, rivianforums, wilderssecurity, forum.wiimhome, teslamotorsclub, head-fi,
+audiosciencereview; Discourse = forum.openwrt.org, forum.bambulab.com; Reddit; GitHub. Unknown
+domains → the `{q}` template if registered → the universal search-box driver.
+
+**A2.2 Adapters (what actually works).**
+- **XenForo:** GET `https://{domain}/search/?q={q}&o=relevance` renders results directly on
+  most installs; read anchors matching `/threads/` or `/posts/` inside `.p-body-content`,
+  `.contentRow-title`, `.block-body`, plus XF1 markup (`.discussionListItem h3.title a`,
+  `.titleText a`, `#content a`). If empty, type into the VISIBLE `input[name='keywords']`
+  (XenForo renders TWO — the first is hidden) and press Enter. If selectors still find nothing
+  but a results container (`.searchResult`, `.discussionListItem`, `.contentRow`) exists, take
+  any `/threads/` link. Skip nav paths (`/whats-new/`, `/forums/`, `/members/`, `/search/`,
+  `/login`, `/tags/`, `/latest-activity`).
+- **Discourse:** try `/search.json?q=` once (clean when not rate-limited; anonymous callers hit
+  "performed this action too many times" fast) → else the HTML `/search?q=` page, wait for the
+  Ember-rendered rows (`.fps-result a.search-link`, `a[href*="/t/"]`) plus ~1.8s settle.
+- **Reddit:** `https://old.reddit.com/search?q={q}&sort=relevance` is server-rendered —
+  `a.search-title`. (New reddit is a JS app; don't scrape it.)
+- **GitHub:** the public REST API `GET https://api.github.com/search/repositories?q=…&sort=
+  stars` — the web `/search` page is a React SPA whose scrape returns nav junk. Anonymous
+  limit ~10 req/min → non-200 returns `[]` → `site:` fallback.
+- **Universal search box:** load the site root, find `input[type='search']`, `input[name='q']`,
+  `input[name='query']`, `input[name='keywords']`, `input[aria-label*='earch' i]`,
+  `input[placeholder*='earch' i]`; fill, Enter, then read anchors with ≥15-char text inside
+  `main`/`#content`/body.
+
+**A2.3 JS-aware reading.** Many forums render results AFTER load. Before reading the DOM, poll up
+to ~8s for known result rows (`.fps-result`, `.search-result`, `.contentRow`, `.block-row`,
+`[data-testid="post-container"]`, `.search-results li`, `.SearchResult`) OR for the anchor
+count to stop growing across two polls. Reading immediately after `domcontentloaded` was the
+reason native search returned 0 on JS forums.
+
+**A2.4 Agent tool.** `forum_search {domain, query}` — "the SITE'S OWN search, run in the
+logged-in browser; reaches content engines never indexed, including credential-walled areas;
+falls back to engine `site:` search". Log the fallback in the result text so the feed shows it.
+
+## A3. Web crawling & site behaviour
+
+**A3.1 Bot-challenge interstitials are not pages.** Cloudflare's "Just a moment…" / "Performing
+security verification" was being captured AS the page text, and the agent burned opens and
+extensions re-opening it. In `open()`: after the first read, if the title contains any of
+"just a moment", "attention required", "access denied", "please wait", "checking your browser",
+"security verification" (and the text is <2500 chars), OR the text contains "performing
+security verification", "verify you are human", "verifying you are not a bot", "checking your
+browser before accessing", "checking if the site connection is secure", "enable javascript and
+cookies to continue", "cf-chl", "ray id:", "needs to review the security of your connection",
+"press & hold", "complete the security check", "unusual traffic from your computer network" →
+poll every 0.8s for up to 9s for the challenge to clear (headed Chrome usually passes a managed
+challenge on its own); if it never clears, return `blocked=True` + an error so the caller's
+fetch fallback (A3.3) takes over. Log both outcomes to the feed.
+
+**A3.2 Read the whole forum page.** Forum software wraps EVERY post in its own `<article>`.
+"Prefer the first `<article>`" kept only the opening post (494 chars of a 4,000-char thread).
+Rule for both the browser text extractor and any HTML→text helper: exactly one `<article>` =
+the page's content; several = read `main` / `[role=main]` / body so replies survive. Drop
+`script, style, noscript, nav, header, footer, aside, form, svg, button, iframe`.
+
+**A3.3 Fetch fallback chain when Chrome can't read a URL** (blocked, 403, timeout):
+Bright Data Web Unlocker → Tavily extract → Exa contents. A recovered page enters the harvest
+with `via="<stage>+<provider>"`, is listed in the audit under "Pages Chrome could not read,
+fetched via unblocking providers", and its links (from the unlocker's HTML) are offered to the
+agent like any page. Tool result text says "Opened via brightdata (Chrome was blocked: …)".
+
+**A3.4 The engine layer (what each engine actually needs now).**
+- **DuckDuckGo:** `https://html.duckduckgo.com/html/?q=` → `a.result__a`; hrefs are wrapped
+  `//duckduckgo.com/l/?uddg=<encoded real url>` — unwrap `uddg`.
+- **Google:** results are `#rso a:has(h3)` but EVERY href is now an opaque `/goto?url=<token>`
+  (the old `/url?q=` is gone), which a junk-host filter drops as google-internal → 0 results
+  for days. The token answers a plain **302 whose Location is the real URL** — resolve it
+  through the page context's own request client (`page.context.request.get(href,
+  max_redirects=0)`, works with session cookies and in remote-browser mode) BEFORE the junk
+  filter. Verified 8/8 real URLs in ~2s. Google has no general web API — scrape + an optional
+  SERP zone is the right stack.
+- **Brave:** the `#results` container is gone; results are Svelte `.snippet` blocks (skip ones
+  inside a `video-cluster`; title from `.title, h2, h3, [class*=title]`; description from
+  `.snippet-description`). After a few rapid hits Brave serves a CAPTCHA page (`.captcha-
+  wrapper`) — detect it in ~1s and return `[]` instead of waiting 8s on a selector. Better:
+  **use the official Brave Search API first** (`GET https://api.search.brave.com/res/v1/web/
+  search?q=…&count=N`, header `X-Subscription-Token`, parse `web.results[].{title,url,
+  description}`; free tier at api-dashboard.search.brave.com) and keep the scrape as fallback.
+- **Engine fallback chain** in ONE function the agent tools and the baseline sweep share:
+  browser engine → Bright Data SERP (if a zone exists) → Tavily → Exa. Tell the agent in the
+  tool description that an empty result already went through the providers, so "empty means
+  the web has nothing for that phrasing — rephrase, don't repeat".
+
+**A3.5 API discovery on by default.** Tavily (`POST https://api.tavily.com/search`
+`{query, search_depth:"advanced", max_results, include_domains?}` → `results[].{title,url,
+content}`; extract `POST /extract {urls, extract_depth:"advanced", format:"markdown"}` →
+`results[].raw_content`; Bearer `tvly-…`) and Exa (`search(type="auto",
+contents={"highlights":True})`, `find_similar`, `get_contents(text={"max_characters":20000})`).
+Enabled whenever the key is present; `DRT_TAVILY=0` / `DRT_EXA=0` are kill switches. Uses:
+(1) two extra baseline-sweep queries each, added to the reranked pool (a different index
+each); (2) engine fallbacks; (3) agent tools — `web_search engine="tavily"` (offered only when
+keyed) and `exa_search` / `exa_find_similar` when the plan's "API discovery" channel is on
+(UI toggle, default on). Don't use the Tavily/Exa MCP servers for the tool — the engine isn't
+an MCP client; the REST calls are the same API.
+
+**A3.6 Bright Data (three products, one token).** `BRIGHTDATA_API_KEY` (account token) plus,
+per product, the zone NAME from the dashboard (NOT the zone password/UUID — pasting the UUID
+gives `zone "<uuid>" not found`):
+- **Web Unlocker** (`BRIGHTDATA_UNLOCKER_ZONE`): `POST https://api.brightdata.com/request`
+  `{"zone": "<name>", "url": "<target>", "format": "raw"}`, Bearer token → raw HTML. The A3.3
+  fetch path. Live-verified reading a Cloudflare-walled forum thread in full.
+- **SERP API** (`BRIGHTDATA_SERP_ZONE`): same endpoint with a Google/Bing/DDG search URL plus
+  `&brd_json=1` → parsed JSON; parse `organic[].{link|url, title, description}` defensively.
+  Optional; Tavily already fills the fallback role.
+- **Browser API / Scraping Browser** (`BRIGHTDATA_BROWSER_WSS`): a remote unblocking Chrome
+  reached with `playwright.chromium.connect_over_cdp(wss_url)`. Copy the FULL `wss://brd-
+  customer-<id>-zone-<zone>:<password>@brd.superproxy.io:9222` line with the dashboard's copy
+  icon — a retyped one failed `407 wrong_password` (password truncated). Their sessions are
+  **one domain each** (`navigate_domains_limit`), max 60 min, 5-min idle timeout → open a
+  FRESH CDP session per tab and close it with the tab; only probe the credentials at startup;
+  never treat a remote session as logged in. Use it for HEADLESS/hosted mode only — the local
+  headed Chrome with the real profile is always better. Remote actions take 10-50s each.
+- Remove UA-spoof / `navigator.webdriver` shims once Bright Data is in: they were the wrong
+  tool (Cloudflare reacts to automation signals, not IP, and the shims didn't clear it).
+
+**A3.7 Baseline sweep hygiene.** Semantic rerank of the pooled results (fastembed
+`BAAI/bge-small-en-v1.5`, identity fallback). Query craft everywhere: compact keyword strings,
+2-6 terms, proper nouns first, no question words, `?` stripped; the verbatim-question fallback
+is replaced by stopword-stripped compression + `problems`/`review`/`forum` variants.
+
+## A4. Odysseus distilled into the main tool
+
+The "Odysseus" engine is the vendored Alibaba IterResearch loop (plan → per-round query
+generation → parallel search → per-page goal extraction → evolving report → stop decision →
+final report), headless (DuckDuckGo via `ddgs`/HTML + `curl` page fetch with an SSRF guard).
+The sibling has it as a separate A/B sub-tool; the reference tool proved a chained "Odysseus
+then browser pipeline" tier, then made it universal:
+
+- **Every tier opens with an Odysseus pre-pass**, first stage in the stage list, sized per tier
+  (`standard` 2 rounds / 150s · `deep` 4 / 300s · `exhaustive` 6 / 600s), run BEFORE the research
+  clock starts (like document intake), so tier windows are untouched. STOP / Skip-stage cancel
+  it cooperatively (`researcher.cancel()` from a watcher thread). Local-model runs skip it.
+- **Its report is fed in EXACTLY like a dropped file:** append `"[Odysseus pre-research
+  findings]\n" + report` to the run's document parts; the document-intake analyst (one model
+  call: "distill THIS file against the question — KEY FACTS/CLAIMS · ENTITIES & TERMS worth
+  searching (incl. insider vocabulary) · OPEN QUESTIONS · SEARCH LEADS (2-4); signal only")
+  turns it into a brief that grounds the planner, the lane planner and the lane prompts via the
+  clarifications channel, while the FULL text reaches synthesis as trusted user material.
+- The pre-pass report is also appended to the audit ("Odysseus pre-research (headless pass
+  that grounded this run)") and returned as `result["odysseus_report_md"]`.
+- Pre-pass failure or an empty/"search unavailable" result degrades to a plain run — it is an
+  enhancer, never a blocker. Measured: 2 rounds → ~14K-char report from ~22 URLs → ~3.4K-char
+  brief → plan → lanes. Effective durations ≈ standard 7-8 min · deep 15 · 1-hour ~70.
+- Run its model calls at the cheap "route" role (extraction/query-gen work).
+- **Windows:** the per-page `curl` spawns each flashed a console window under `pythonw` —
+  dozens per run. Spawn with `creationflags=CREATE_NO_WINDOW`, `stdin=DEVNULL` (guard
+  `os.name == "nt"`). Same for any `git` the server shells out to.
+- Remove the separate "Deep + Odysseus" tier/worker once this is in; map its legacy value to
+  `deep`.
+
+## A5. Parallel research lanes + lead review + sequential digger
+
+**A5.1 Shape.** After the baseline sweep: ONE planner call decomposes the question into 1..N
+lanes → N copies of the existing stage tool-loop run in parallel threads → a lead-review call
+picks ONE hot trail → a single sequential "digger" loop follows it on the remaining Stage-2
+time → the existing credentialed stage → the existing single synthesis. Breadth is parallel,
+depth is sequential (the field's own caveat: multi-agent is poor for sequential, high-
+dependency work — which is exactly "chase the hot trail"). N per tier: standard 3 / deep 4 /
+1-hour 5 (env override, max 8). A single-lane plan falls back to the classic loop.
+
+**A5.2 Lane planner (system prompt, verbatim):** "You are the LEAD of a parallel deep-research
+team. Decompose the user's question into 1 to {N} independent research LANES that separate
+researchers can pursue AT THE SAME TIME without overlapping. A lane is a distinct angle,
+sub-question, stakeholder, source type, or community whose findings are NEEDED for the SPECIFIC
+question — not a generic outline. Do not manufacture lanes: a narrow question may need only 1
+or 2. Good lane splits: primary/official evidence vs. practitioner/forum discussion vs.
+adversarial (complaints/failures/lawsuits) vs. a specific named entity or version vs. a
+specific community to mine. For each lane give: name (3-6 words), mission (2 sentences:
+exactly what to find and where it most likely lives), queries (2-3 ENGINE queries — compact
+keyword strings, 2-6 terms, proper nouns / product names / insider vocabulary first, no
+question words). Respond with ONLY JSON: {"lanes": [{"name","mission","queries"}]}". User
+message = question + context + the baseline brief.
+
+**A5.3 Per-lane task suffix:** "YOUR RESEARCH LANE (L{i} of {N}; the other lanes run in parallel
+and cover the other angles): {name} / MISSION: {mission} / SEED QUERIES (engine-optimized —
+refine as you learn): … / Stay on your lane. Finish when your lane is exhausted — do not tour."
+Lane system prompt = the normal stage prompt + a "LANE L{i}: …" focus line.
+
+**A5.4 Sharing and accounting.** Each lane gets its own soft allocation (Stage-2 searches/pages
+÷ N, floors 4/5) and draws from the SHARED global pool; the harvest list, seen-URL set, pool,
+discovered forums and `curated_searched` are mutated only under one re-entrant lock. Lanes'
+`finish` reasons are recorded per lane (`lane_reports`), not into the run's single stop
+reason. Feed lines carry the lane tag AFTER the `[kind]` prefix (`[act] L2 · → open_page …`) so
+kind detection still works. Stage names/`via` = `stage2/L1`… so the audit shows provenance.
+Lanes get ~70% of the Stage-2 time share; the digger gets the rest plus whatever lanes leave.
+The user's "skip this stage" flag is cleared by the orchestrator after ALL lanes have seen it.
+
+**A5.5 The browser must live on ONE thread.** Playwright's sync API is greenlet-bound: calls
+from a second thread fail. Run the harness on a dedicated single-worker executor; every public
+method (`search`, `native_search`, `site_native_search`, `open`, `ensure_logged_in`) is a
+decorator that submits to that executor and waits, executing directly when already on the
+owner thread. Model turns overlap freely; page actions serialize — since a turn is dominated by
+model latency, N lanes still ≈ N× throughput.
+
+**A5.6 Lead review (system prompt, verbatim):** "You are the LEAD reviewing what parallel
+research lanes just gathered. Decide whether there is ONE hot trail — a specific thread,
+community, document, author, version, or angle where the research was visibly closing in on the
+user's SPECIFIC question but stopped short (clock ran out, wall hit, one hop away from the
+primary source). If so, describe it concretely so a single researcher can continue it
+immediately: where to start (URLs already seen that should be re-read deeper / paginated /
+followed), and 2-4 ENGINE queries (compact keyword strings). If the lanes genuinely exhausted
+the question, or nothing stands out, set hot_trail to an empty string. Respond with ONLY JSON:
+{"hot_trail","why","queries","start_urls"}". Input = each lane's mission, finish reason and
+note tail, plus the list of pages harvested. Skip the dig when <45s remain. The digger's task:
+"LEAD REVIEW — CONTINUE THE HOT TRAIL … Follow it as far as it goes — pagination, replies, cited
+primaries, the author's other posts. Finish when it is exhausted." Observed: the digger noticed
+both lanes had opened a Reddit thread, fetched its `.json` view for the full comment tree, and
+captured the resolution.
+
+**A5.7 Transcript compaction (required for long lanes).** Each opened page appends ~8K chars
+to the lane transcript forever; a 30-minute lane overflows context. Past ~280K chars of
+transcript, mechanically replace page bodies in tool results older than the last 6 turns with a
+one-line "[… page body elided — full text is stored in the harvest …]" marker (no model call;
+the harvest keeps the full page for extraction). Log one feed line per compaction.
+
+## A6. Tiers and budgets
+
+| Tier | Window | Synthesis reserve | Search / page pools | Turns | Lanes | Odysseus pre-pass | Deepening rounds |
+|---|---|---|---|---|---|---|---|
+| standard (~5 min + pre-pass) | 300s | 100s | 120 / 150 | 120 | 3 | 2 rounds / 150s | 1 |
+| deep (~10 min + pre-pass) | 600s | 130s | 240 / 300 | 240 | 4 | 4 / 300s | 2 |
+| exhaustive "Oh, Very Deep" (1 h + pre-pass) | 3600s | 300s | 900 / 900 | 400 | 5 | 6 / 600s | 8 |
+
+Time is the governor; pools are runaway ceilings sized so the clock ends the 1-hour tier, not
+the pool. Stage 2 gets ~60% of the gathering window (lanes 70% of that, digger the rest); the
+credentialed stage the remainder; the batched-credentials stage a fixed 60-90s grace window.
+`request_extension` grants +60s (never past the hard window) plus +4 searches / +6 opens
+(capped by the pool). **Gap/deepening rounds must receive a deadline** — without one, an
+extension there granted "+0s" (observed in a trace); soft share per round 4 min (12 on the
+1-hour tier), never past `run_deadline − 75s`. Deepening = stop-judge ("does this DIRECTLY
+answer the specific question with well-sourced evidence?") → gap queries ("fill the key gap or
+CONTINUE THE HOTTEST TRAIL") → a small gather loop → re-synthesis. Keep the depth aliases
+(`quick`→standard, `verydeep`→deep, `hour`/`1h`/`max`→exhaustive, old `odysseus`→deep).
+
+## A7. Model split, prompt caching, usage accounting
+
+**A7.1 Roles → models** (the orchestrator-worker split the field converged on: a strong lead,
+cheaper workers): `search` (lane navigators, credentialed/gated stages, gap rounds) =
+`claude-sonnet-5`; `extract` (per-page extraction, classify) = Sonnet 5; `route` (relevance
+filters, stop-judge, gap queries, titles, baseline query-gen, the Odysseus pre-pass) = Sonnet 5;
+`plan` (planner, lane planner, lead review) = `claude-opus-4-8`; `dig` (the hot-trail digger,
+NEW role) = Opus 4.8; `synthesize` (the deliverable) = Opus 4.8. The stage loop takes a
+`model=` argument; the digger passes the `dig` role. Navigation needs taste and stamina, not
+frontier reasoning; the lead review, the dig and the report are where quality shows. Local
+models: the machinery works end to end (a 30B tool-calling instruct model drove a full run) but
+loses parallelism (one request at a time), context (32-64K usable), and synthesis quality;
+extraction is the one role where a local model pays cleanly.
+
+**A7.2 Prompt caching in the wrapper (the single biggest cost lever).** The agent loops resend
+an ever-growing transcript each turn, so the prefix is identical turn to turn. In the ONE
+client wrapper: (a) send top-level `cache_control: {"type": "ephemeral"}` on every call (via
+`extra_body` so it is SDK-version-proof) — caches the last cacheable block; (b) when `system` is
+a string over ~4K chars, convert it to `[{"type":"text","text":…,"cache_control":{"type":
+"ephemeral"}}]` — the governance + stage prompt is identical across every turn of every lane,
+so parallel lanes share that hit even when their messages diverge. Verified: ~9.2K cached
+tokens per call both on an extended transcript and across lanes. Raise the SDK `max_retries`
+to 5 (parallel lanes draw 429s at lower rate tiers; a lane that exhausts retries aborts while
+the others continue).
+
+**A7.3 Usage accounting.** The wrapper records `usage.{input_tokens, output_tokens,
+cache_read_input_tokens, cache_creation_input_tokens}` per model per run; a `usage_summary()`
+prices it (list prices: Opus 4.8 $5/$25 per M in/out, Sonnet 5 $2/$10; cache write ≈1.25× in,
+cache read ≈0.1× in) and the worker writes one audit line — "**API usage this run ≈ $0.88** —
+`claude-sonnet-5` 30 calls, 2K in + 202K cached + 141K cache-write, 14K out ≈ $0.54 ·
+`claude-opus-4-8` 4 calls … ≈ $0.35" — plus a feed line. That measured standard run (3 Sonnet
+lanes, 2 extensions, 11 pages) compares with an all-Opus, uncached estimate of $10-15; the
+1-hour tier is projected at ~$15-25 instead of $70-120. Anything that bypasses the wrapper
+(the vendored Odysseus adapter, in our case) is neither cached nor counted — route it through.
+
+**A7.4 Wrapper request-shape guards (unchanged, still required):** inject
+`output_config.effort` (env), strip `temperature` and `thinking`, floor `max_tokens` at 4096,
+detect `stop_reason == "refusal"` and pause/fall-over rather than propagating an empty response.
+
+## A8. Reports and audit
+
+- **Titled filenames:** one cheap call after synthesis — "You title finished research reports
+  for a document library. Reply with ONLY the title: 4-9 words, Title Case, specific to the
+  subject and what the report actually established (name the entity/product/version/topic —
+  not the question's phrasing), no quotes, no trailing period, no colon, no 'Report on' /
+  'Analysis of' filler." Filename = `<Title> — YYYY-MM-DD HHMM.docx` (a non-default tool
+  gets ` (Odysseus)` before the dash); slug fallback so a file always exists. The title also
+  goes into `result["title"]`, the Save button, and the results header.
+- **Audit additions:** models per role; the usage line; "Parallel research lanes (N)" with
+  each lane's mission and finish reason plus the digger's; "Pages Chrome could not read,
+  fetched via unblocking providers"; the Odysseus pre-research section; discovered forums;
+  stored-login warnings; stop reason.
+- Keep: only opened-with-signal pages get citation numbers; unread leads render un-numbered;
+  each source carries `source_class` (primary-document | official | news | expert-analysis |
+  forum-discussion | anecdote | marketing | other) and `content_date`.
+
+## A9. Ops
+
+**A9.1 One work tree, no fork.** If local and hosted are separate copies, END IT: make the
+hosted file a strict superset with env-driven differences (auth gate self-disables when
+`AUTH_SECRET` is unset; `PORT`, hub URL and reports dir from env with local defaults; UI hub
+link as a placeholder the server fills), then run LOCAL from the repo clone with the gitignored
+state placed inside it (`.env`, vault key + blob, browser profile, venv, local-only media,
+traces) and point the local launcher/supervisor at the clone. Workflow = edit → restart local →
+test → bump build marker → commit → push → poll hosted `/api/health` for the marker. Verify
+pushes by comparing the remote SHA. Grafting exact edit pairs onto a divergent copy worked but
+aborted on anchor mismatches three times in five; not worth keeping.
+
+**A9.2 Environment variables** (all optional except the API key; hosted = dashboard, `sync:false`):
+`ANTHROPIC_API_KEY` · `DRT_EFFORT` (low…max; medium) · `DRT_LANES` · `DRT_HEADED` /
+`DRT_BROWSER_CHANNEL` · `DRT_SLOWMO` (80) · `DRT_RERANK` · `DRT_TRACE` · `DRT_REPORTS_DIR` ·
+`TAVILY_API_KEY` (`DRT_TAVILY=0` off) · `EXA_API_KEY` (`DRT_EXA=0` off) · `BRAVE_API_KEY`
+(`DRT_BRAVE_API=0`) · `BRIGHTDATA_API_KEY` + `BRIGHTDATA_UNLOCKER_ZONE` + `BRIGHTDATA_SERP_ZONE`
++ `BRIGHTDATA_BROWSER_WSS` (`DRT_BRIGHTDATA=0`) · `LMSTUDIO_URL`. `/api/health` reports a
+`build` marker and a `providers` block (which keys are active) — health never calls the model
+API, so a dead/unfunded key still shows green; the first real run is the proof. Servers read
+`.env` once at startup: edits need a restart.
+
+**A9.3 Status polling must survive a blip.** A single failed status fetch (a proxy/relay
+dropping a pooled connection) ended a run in the UI with "Failed to fetch" while the server
+kept researching and auto-saved the report. Retry transient errors for ~90s with a feed line;
+treat HTTP 404 "unknown job" as a genuine server restart; after 90s say the run may still
+finish server-side and point at the reports folder. Auto-save every finished report to disk
+BEFORE the result reaches the browser. A finished job stays in the registry until its final
+status is read — a lost run's result is recoverable with one GET.
+
+**A9.4 Known traps carried forward:** UTF-8 BOM in JSON configs (`utf-8-sig`); PowerShell
+`Set-Content -Encoding utf8` writes a BOM; Playwright browser cache is virtualized inside some
+sandboxes; a headed run holds the Chrome profile lock (kill leftover `chrome.exe` whose cmdline
+contains the profile path before another headed launch — never during a live run); Windows
+Hyper-V/WSL WinNAT can reserve the tool's port range after a reboot; local vs hosted config
+hashes differ by CRLF/LF only; a safety refusal (HTTP 200, `stop_reason=refusal`) silently
+no-ops a pipeline unless the wrapper detects it.
+
+## A10. Verification protocol (what "done" looked like)
+
+1. **Static:** byte-compile every touched module; import the chain; assert the tool registry
+   (`web_search`, `site_search`, `forum_search`, `register_forum`, `open_page`,
+   `request_extension`, `finish`, `exa_*` when keyed); assert the budget table, the lanes
+   table, the role map; parse the single-file UI's script block(s) with Node `new Function`.
+2. **Wrapper micro-test (live, cheap):** one Sonnet call passing `temperature` + tiny
+   `max_tokens` (guards fire); two identical calls with a ~5K-token system prompt (second shows
+   `cache_read_input_tokens > 0`); a third with different messages (shared-system hit);
+   `usage_summary()` prices it.
+3. **Offline lane harness:** fake client + fake browser: 3 lanes on 3 threads, overlapping
+   wall-clock (< 80% of serial), shared-pool accounting exact, a dead engine falls through to
+   the SERP/Tavily fallback, a blocked open falls through to the unlocker, lane tags after the
+   kind prefix, the digger runs, compaction elides old bodies and leaves the last 6 turns.
+4. **Real headless browser:** owner-thread proxy from 3 concurrent threads; challenge detector
+   unit cases (Cloudflare title/text positive, forum thread negative).
+5. **Provider probes (live):** Tavily search + extract; Exa search; Bright Data unlocker on a
+   URL headed Chrome was walled on; Browser API `connect_over_cdp` then a search + an open
+   (expect the one-domain-per-session error until per-tab sessions are in); Brave API.
+6. **Engine selectors (headed, throwaway profile):** dump the result-page DOM for each engine
+   and confirm ≥5 real result URLs each; re-run after any 0-result day.
+7. **One real standard run, trace on:** Odysseus pre-pass → intake brief → plan → N lanes with
+   tagged feed lines → extensions granted → (deep) lead review + digger → credentialed stage
+   logging in via the persistent profile → graded Sources → "How to go deeper" → titled .docx
+   on disk → the "API usage ≈ $" audit line. Then one deep run; then, with credits, one 1-hour
+   run watched for lane finish reasons and deepening rounds.
+8. **Hosted:** gate test-client pass (health open; unauthed page → redirect; unauthed API →
+   401; a forged-valid SSO token mints the session; authed page serves the new UI); SHA-verified
+   push; health polled for the build marker; `providers` all true.
+
+---
+
+# PART B — THIS TOOL'S SESSION HISTORY (detail; newest first)
+
+## 2026-09-03 → 09-05 sessions — lanes · 1-hour tier · Bright Data · Tavily/Exa · Odysseus-on-every-tier · model split · single work tree (detail)
+
+> _State block as written at the 2026-09-03 close (superseded by STATE NOW above; kept for the specifics):_
 > Build marker **`2026-09-03.odyall`** on `/api/health`, which also reports `providers`. At
 > close BOTH instances show: `brave_api:true · tavily:true · exa:true · brightdata.unlocker:true
 > · brightdata.browser:true · brightdata.serp:false` (SERP zone never created — optional).
