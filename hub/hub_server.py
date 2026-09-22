@@ -626,6 +626,17 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"ok": ok, "message": msg}, 200 if ok else 500)
         if parsed.path == "/api/twixtle/puzzles":
             return self._json(twixtle_load())   # public read — anyone can play the shared set
+        # The cave map (and its data files) are private: same access-code gate as the
+        # rest of the hub. Unauthed visitors bounce to the hub login page. Covers the
+        # pretty route AND the raw file paths, or super().do_GET() would serve them.
+        CAVE_PATHS = ("/cave", "/cave/", "/cave_map.html", "/cave_map_data.csv",
+                      "/CAVE_MAP_README.md")
+        if parsed.path in CAVE_PATHS and not self._authed():
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if parsed.path in ("/", ""):
             self.path = "/index.html"
         elif parsed.path in ("/cave", "/cave/"):
