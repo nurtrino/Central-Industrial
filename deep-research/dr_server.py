@@ -1482,6 +1482,11 @@ def _sources_hash() -> str:
 def deep_research_publish_sources():
     if request.method == "OPTIONS":
         return "", 204
+    # LOCAL-ONLY STANDING ORDER (2026-09-23): nothing is pushed to github.com. This route used to
+    # clone the GitHub repo, commit the site list and `git push` to trigger a Render redeploy.
+    # Disabled unconditionally. To re-enable, the user must explicitly ask for it.
+    return jsonify({"error": "Publishing to GitHub is disabled — this project is local-only. "
+                             "Nothing is pushed to github.com."}), 403
     if _is_hosted_instance():
         return jsonify({"error": "Publishing is local-only — the hosted site is the destination, "
                                  "not the source. Edit the list on the local app and publish from there."}), 403
