@@ -179,7 +179,7 @@ def health():
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-09-05.pollretry",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-10-21.refusalfallback",
                     "sources_hash": _sources_hash(), "providers": providers})
 
 
@@ -1017,7 +1017,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                     job["error"] = str(e); job["done"] = True
                 return
         else:
-            client = make_client("claude", api_key, refusal_hook=_refusal_hook,
+            client = make_client("claude", api_key, log=log_fn, refusal_hook=_refusal_hook,
                                  on_stop=_refusal_stop)
 
         # ── Odysseus pre-research — EVERY tier (2026-09-03). The headless IterResearch

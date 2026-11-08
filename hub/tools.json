@@ -99,6 +99,23 @@
           "HOME_URL": "http://127.0.0.1:5050/"
         }
       }
+    },
+    {
+      "id": "basement-pc-audio",
+      "name": "Basement PC audio (VLC telnet for Home Assistant)",
+      "local_only": true,
+      "hidden": true,
+      "local": {
+        "port": 4212,
+        "cwd": "D:\\_______Claude\\VOICE COMMANDER\\pc-audio-sink",
+        "cmd": [
+          "cmd.exe",
+          "/c",
+          "start_basement_pc_audio.cmd"
+        ],
+        "log": "vlc.log",
+        "autostart": true
+      }
     }
   ]
 }
