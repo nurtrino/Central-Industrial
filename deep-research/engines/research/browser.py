@@ -55,6 +55,21 @@ _ENGINES = {
         "url": "https://html.duckduckgo.com/html/?q={q}",
         "result_sel": "a.result__a",
         "snippet_sel": "a.result__snippet",
+        # Title + SNIPPET per result block (2026-11): the agent chooses what to open
+        # from these lines, and a title alone is a weak basis. Empty rows (markup
+        # drift) fall back to the plain anchor read below.
+        "extract_js": """() => {
+            const rows = [];
+            for (const r of document.querySelectorAll('.result, .web-result')) {
+                const a = r.querySelector('a.result__a');
+                if (!a) continue;
+                const s = r.querySelector('.result__snippet');
+                rows.push({href: a.getAttribute('href') || '',
+                           title: ((a.innerText || '').trim().split('\\n')[0] || '').slice(0, 200),
+                           snippet: ((s && s.innerText) || '').trim().slice(0, 300)});
+            }
+            return {captcha: false, rows};
+        }""",
     },
     # Brave (2026-09): results are Svelte `.snippet` blocks (no #results container any
     # more); each holds the real href on its anchors and a title element. Rate-limited
@@ -136,6 +151,56 @@ class SearchResult:
     url: str
     snippet: str = ""
     engine: str = ""
+    date: str = ""       # result date when the source exposes one (forum searches do)
+
+
+# ── PDFs ─────────────────────────────────────────────────────────────────────
+# Primary documents (manuals, filings, court records, papers) are usually PDFs, and
+# Chrome's viewer exposes no DOM text — they used to come back as an empty "thin →
+# screenshot" page that nothing ever read. They are now downloaded through the
+# browser session's own request client (same cookies) and parsed locally.
+_PDF_MAX_PAGES = 80
+_PDF_MAX_CHARS = 400_000
+
+
+def _looks_like_pdf(url: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        return urlparse(url).path.lower().endswith(".pdf")
+    except Exception:
+        return False
+
+
+def _pdf_text(data: bytes) -> str:
+    """Text of a PDF (first _PDF_MAX_PAGES pages), '' on any failure."""
+    if not data or data[:5] != b"%PDF-":
+        return ""
+    import io
+    out, n = [], 0
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            total = len(pdf.pages)
+            for i, pg in enumerate(pdf.pages[:_PDF_MAX_PAGES], 1):
+                t = (pg.extract_text() or "").strip()
+                if t:
+                    out.append(f"[page {i}]\n{t}")
+                    n += len(t)
+                if n > _PDF_MAX_CHARS:
+                    break
+            if total > _PDF_MAX_PAGES:
+                out.append(f"[… PDF has {total} pages; first {_PDF_MAX_PAGES} read …]")
+    except Exception:
+        return ""
+    return "\n\n".join(out)
+
+
+def _thread_key(url: str) -> str:
+    """Collapse the many URLs of one forum thread (post permalinks, fragments, query
+    strings) to a single key so search results list each thread once."""
+    u = (url or "").split("#")[0].split("?")[0]
+    u = re.sub(r"/(post-\d+|latest|unread)/?$", "/", u)
+    return u.rstrip("/").lower()
 
 
 @dataclass
@@ -252,6 +317,7 @@ class DRTBrowser:
         # (vault autofill then manual pause). Set by the agent/job layer.
         self.login_handler = login_handler
         self._auth_handled: set[str] = set()   # domains already attempted this run
+        self._platform_cache: dict[str, str] = {}   # domain -> detected forum platform
         self._pw = None
         self._ctx = None
         self._remote = None          # Bright Data Scraping Browser (CDP) when in use
@@ -414,6 +480,7 @@ class DRTBrowser:
                         for r in (data.get("rows") or [])]
             else:
                 rows = []
+            if not rows:      # no engine-specific extractor, or it found nothing
                 for a in page.query_selector_all(cfg["result_sel"]):
                     rows.append(((a.get_attribute("href") or "").strip(),
                                  (a.inner_text() or "").strip().split("\n")[0], ""))
@@ -489,9 +556,12 @@ class DRTBrowser:
                     for (const s of sel) { const el = document.querySelector(s); if (el) { scope = el; break; } }
                     scope = scope || document.body;
                     if (!scope) return [];
-                    return Array.from(scope.querySelectorAll('a[href^=http]'))
-                        .slice(0, 500)
-                        .map(a => ({text:(a.innerText||'').trim().slice(0,140), url:a.href}));
+                    // a[href] + the RESOLVED url: forums write relative hrefs, which the
+                    // old a[href^=http] selector never matched.
+                    return Array.from(scope.querySelectorAll('a[href]'))
+                        .slice(0, 800)
+                        .map(a => ({text:(a.innerText||'').trim().slice(0,140), url:a.href}))
+                        .filter(a => /^https?:/i.test(a.url));
                 }"""
             ) or []
             base = url.split("#")[0]
@@ -594,7 +664,38 @@ class DRTBrowser:
             return _PLATFORM_HINTS[d]
         if "reddit.com" in d:
             return "reddit"
-        return "generic"
+        if d == "github.com":
+            return "github"
+        if d not in self._platform_cache:
+            self._platform_cache[d] = self._detect_platform(d)
+        return self._platform_cache[d]
+
+    def _detect_platform(self, domain: str) -> str:
+        """Identify the forum software from the site's own markup (one page load, cached
+        per run). The hard-coded map only ever covered a dozen sites, so every other
+        forum — including each one the agent DISCOVERS — fell to the generic search-box
+        driver, which finds nothing on Discourse or XenForo."""
+        page = self.new_tab()
+        try:
+            page.goto(f"https://{domain}/", wait_until="domcontentloaded", timeout=20000)
+            sig = page.evaluate(
+                """() => ({
+                    gen: ((document.querySelector('meta[name=generator]') || {}).content || '').toLowerCase(),
+                    disc: !!document.querySelector('#data-discourse-setup, meta[name=discourse_theme_id]'),
+                    xf: !!document.querySelector('html[data-app], html#XF, html#XenForo, .p-pageWrapper')
+                })""") or {}
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] platform detect {domain} failed ({type(e).__name__}) → generic")
+            return "generic"
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        plat = ("discourse" if ("discourse" in sig.get("gen", "") or sig.get("disc"))
+                else "xenforo" if sig.get("xf") else "generic")
+        self._log(f"[search] platform of {domain}: {plat}")
+        return plat
 
     def _discourse_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
         """Discourse. The /search.json API is heavily rate-limited for anonymous users
@@ -619,15 +720,23 @@ class DRTBrowser:
             if isinstance(data, dict) and (data.get("posts") or data.get("topics")) and not data.get("failed"):
                 topics = {t.get("id"): t for t in (data.get("topics") or [])}
                 seen = set()
+                # The matching post's blurb + date ride along as the result snippet.
+                blurb = {}
+                for p in (data.get("posts") or []):
+                    blurb.setdefault(p.get("topic_id"),
+                                     ((p.get("blurb") or "").strip()[:300],
+                                      str(p.get("created_at") or "")[:10]))
                 ordered = [topics.get(p.get("topic_id")) for p in (data.get("posts") or [])]
                 ordered += (data.get("topics") or [])
                 for t in ordered:
                     if not t or t.get("id") in seen or len(out) >= limit:
                         continue
                     seen.add(t.get("id"))
+                    sn, dt = blurb.get(t.get("id"), ("", ""))
                     out.append(SearchResult(title=(t.get("title") or "").strip(),
                                url=f"https://{domain}/t/{t.get('slug','t')}/{t.get('id')}",
-                               engine="discourse"))
+                               snippet=sn, engine="discourse",
+                               date=dt or str(t.get("created_at") or "")[:10]))
                 self._log(f"[search] discourse(json) {domain} q={query!r} -> {len(out)} results")
                 return out
             # …else the HTML search page (Ember renders result rows we then read).
@@ -699,18 +808,46 @@ class DRTBrowser:
         return out
 
     def _reddit_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
-        """old.reddit.com/search is server-rendered — no JS gymnastics."""
+        """Reddit's own search. old.reddit.com is server-rendered and clean, but since
+        late 2026 it REQUIRES an account ("Log in to use old Reddit") — logged out it
+        redirects to /login and yields nothing, which silently turned every Reddit
+        forum_search into an engine site: query. So: old.reddit only when the profile
+        holds a Reddit session; otherwise (or if it bounces) the www search page, which
+        works logged out and renders post-title anchors."""
         from urllib.parse import quote_plus
         page = self.new_tab()
         out: list[SearchResult] = []
         try:
-            url = f"https://old.reddit.com/search?q={quote_plus(query)}&sort=relevance"
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            self._human_pause()
-            anchors = page.evaluate(
-                """() => Array.from(document.querySelectorAll('a.search-title, .search-result-link a.search-title'))
-                        .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))"""
-            ) or []
+            anchors = []
+            if self._has_auth_cookie("reddit.com"):
+                url = f"https://old.reddit.com/search?q={quote_plus(query)}&sort=relevance"
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                self._human_pause()
+                if "/login" not in (page.url or ""):
+                    anchors = page.evaluate(
+                        """() => Array.from(document.querySelectorAll('a.search-title, .search-result-link a.search-title'))
+                                .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))"""
+                    ) or []
+            if not anchors:
+                url = f"https://www.reddit.com/search/?q={quote_plus(query)}&sort=relevance"
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                self._human_pause()
+                try:
+                    page.wait_for_selector('a[href*="/comments/"]', timeout=8000)
+                except PWTimeout:
+                    pass
+                anchors = page.evaluate(
+                    """() => {
+                        // post-title anchors first, so each thread is listed under its
+                        // TITLE rather than under a matching comment snippet
+                        const pick = sel => Array.from(document.querySelectorAll(sel));
+                        return pick('a[data-testid="post-title"], a[data-testid="post-title-text"]')
+                            .concat(pick('a[href*="/comments/"]'))
+                            .map(a => ({text:((a.innerText || a.getAttribute('aria-label') || '')).trim().slice(0,160),
+                                        url:a.href}))
+                            .filter(a => /\\/comments\\//.test(a.url));
+                    }"""
+                ) or []
             seen = set()
             for a in anchors:
                 href = (a.get("url") or "").split("?")[0]
@@ -743,12 +880,27 @@ class DRTBrowser:
                       wait_until="domcontentloaded", timeout=30000)
             self._human_pause()
             self._wait_for_results(page)
-            _extract = ("""() => Array.from(document.querySelectorAll(
+            # Result rows first (title + the matching snippet + post date), then the
+            # looser anchor selectors for XenForo 1.x / exotic skins.
+            _extract = ("""() => {
+                const rows = [];
+                for (const r of document.querySelectorAll('.contentRow, li.searchResult')) {
+                    const a = r.querySelector('.contentRow-title a, h3.title a');
+                    if (!a || !/\\/(threads|posts)\\//.test(a.href)) continue;
+                    const s = r.querySelector('.contentRow-snippet, blockquote.snippet');
+                    const t = r.querySelector('time');
+                    rows.push({text: (a.innerText || '').trim().slice(0, 160), url: a.href,
+                               snippet: ((s && s.innerText) || '').trim().replace(/\\s+/g, ' ').slice(0, 300),
+                               date: ((t && t.getAttribute('datetime')) || '').slice(0, 10)});
+                }
+                if (rows.length) return rows;
+                return Array.from(document.querySelectorAll(
                     '.p-body-content a[href*="/threads/"], .contentRow-title a[href*="/threads/"], '
                     + '.contentRow-title a[href*="/posts/"], .block-body a[href*="/threads/"], '
                     + '.discussionListItem h3.title a[href*="/threads/"], '   /* XenForo 1.x */
                     + '.titleText a[href*="/threads/"], #content a[href*="/threads/"]'))
-                    .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))""")
+                    .map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}));
+            }""")
             anchors = page.evaluate(_extract) or []
             # Only if the GET produced nothing, submit via the VISIBLE keywords input
             # (XenForo renders TWO name=keywords fields; the first is hidden).
@@ -756,7 +908,15 @@ class DRTBrowser:
                 try:
                     box = page.locator("input[name='keywords']:visible").first
                     box.fill(query, timeout=5000)
+                    before = page.url
                     box.press("Enter")
+                    # Wait for the NAVIGATION, not a load state: the form page is already
+                    # 'domcontentloaded', so the old wait returned at once and the results
+                    # were read off the still-showing search form (→ "native empty").
+                    try:
+                        page.wait_for_url(lambda u: u != before, timeout=15000)
+                    except PWTimeout:
+                        pass
                     page.wait_for_load_state("domcontentloaded", timeout=15000)
                     self._human_pause()
                     self._wait_for_results(page)
@@ -781,14 +941,17 @@ class DRTBrowser:
             for a in anchors:
                 href = (a.get("url") or "").split("#")[0]
                 text = (a.get("text") or "").strip()
-                if not href.startswith("http") or href in seen or len(text) < 10:
+                key = _thread_key(href)      # one row per thread, not per matching post
+                if not href.startswith("http") or key in seen or len(text) < 10:
                     continue
                 if any(s in href for s in _skip):
                     continue
                 if "/threads/" not in href and "/posts/" not in href:
                     continue
-                seen.add(href)
-                out.append(SearchResult(title=text, url=href, engine="xenforo"))
+                seen.add(key)
+                out.append(SearchResult(title=text, url=href, engine="xenforo",
+                                        snippet=(a.get("snippet") or ""),
+                                        date=(a.get("date") or "")))
                 if len(out) >= limit:
                     break
             self._log(f"[search] xenforo {domain} q={query!r} -> {len(out)} results")
@@ -823,15 +986,21 @@ class DRTBrowser:
             if box is None:
                 return out
             box.fill(query, timeout=4000)
+            before = page.url
             box.press("Enter")
+            try:        # wait for the navigation itself (see _xenforo_search)
+                page.wait_for_url(lambda u: u != before, timeout=10000)
+            except PWTimeout:
+                pass
             page.wait_for_load_state("domcontentloaded", timeout=15000)
             self._wait_for_results(page)
             base = f"https://{domain}"
             anchors = page.evaluate(
                 """() => {
                     const scope = document.querySelector('main')||document.querySelector('#content')||document.body;
-                    return Array.from(scope.querySelectorAll('a[href^=http]'))
-                        .slice(0,400).map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}));
+                    return Array.from(scope.querySelectorAll('a[href]'))
+                        .slice(0,800).map(a => ({text:(a.innerText||'').trim().slice(0,160), url:a.href}))
+                        .filter(a => /^https?:/i.test(a.url));
                 }"""
             ) or []
             seen = set()
@@ -887,6 +1056,52 @@ class DRTBrowser:
             if name in _AUTH_COOKIE_NAMES or any(p in low for p in _AUTH_COOKIE_PATTERNS):
                 return True
         return False
+
+    # ── manual sign-in (2FA / passkey / captcha sites) ─────────
+    # The tool cannot complete these logins itself, but the persistent profile keeps a
+    # session once the USER has signed in. These three calls let the run open the site's
+    # sign-in page in the visible window, watch for the session cookie, and tidy up.
+    _LOGIN_PAGES = {"github.com": "https://github.com/login",
+                    "reddit.com": "https://www.reddit.com/login/",
+                    "x.com": "https://x.com/i/flow/login"}
+
+    @_on_browser_thread
+    def open_login_tab(self, domain: str, login_url: str = ""):
+        """Open (and front) a tab on the site's sign-in page for the user. Returns the
+        page handle, or None when there is no visible local browser to sign in with."""
+        if self.remote_browser or not self.headed or self._ctx is None:
+            return None
+        page = self._ctx.new_page()
+        d = domain.lstrip(".").lower()
+        target = (login_url or "").strip() or self._LOGIN_PAGES.get(d) or f"https://{d}/login"
+        try:
+            resp = page.goto(target, wait_until="domcontentloaded", timeout=30000)
+            if resp is not None and resp.status >= 400:
+                page.goto(f"https://{d}/", wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            try:
+                page.goto(f"https://{d}/", wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+        return page
+
+    @_on_browser_thread
+    def is_signed_in(self, domain: str) -> bool:
+        return self._has_auth_cookie(domain)
+
+    @_on_browser_thread
+    def close_tab(self, page):
+        try:
+            page.close()
+        except Exception:
+            pass
+
+    def mark_auth_handled(self, domain: str):
+        self._auth_handled.add(domain)
 
     # ── proactive login ───────────────────────────────────────
     @_on_browser_thread
@@ -962,7 +1177,26 @@ class DRTBrowser:
         page = self.new_tab()
         pc = PageContent(url=url)
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            # PDFs: no DOM text in Chrome's viewer — download + parse instead.
+            if _looks_like_pdf(url):
+                txt = self._read_pdf(page, url)
+                if len(txt) >= min_chars:
+                    pc.title = url.rsplit("/", 1)[-1][:120]
+                    pc.text = txt
+                    self._log(f"[open] {url} -> PDF, {len(txt)}c")
+                    return pc
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                ctype = ((resp.headers or {}).get("content-type") or "").lower() if resp else ""
+            except Exception:
+                ctype = ""
+            if "application/pdf" in ctype:
+                txt = self._read_pdf(page, url)
+                if len(txt) >= min_chars:
+                    pc.title = url.rsplit("/", 1)[-1][:120]
+                    pc.text = txt
+                    self._log(f"[open] {url} -> PDF, {len(txt)}c")
+                    return pc
             self._human_pause()
             try:
                 page.wait_for_load_state("networkidle", timeout=6000)
@@ -971,6 +1205,13 @@ class DRTBrowser:
             pc.title = (page.title() or "").strip()
             pc.text = self._extract_text(page)
             pc.links = self._extract_links(page)
+            # Discourse virtualizes long topics (only the posts near the viewport are in
+            # the DOM) — read the whole topic from its plain-text /raw endpoint instead.
+            full = self._discourse_full_text(page)
+            if len(full) > len(pc.text):
+                self._log(f"[open] discourse topic read in full via /raw "
+                          f"({len(pc.text)}c in DOM -> {len(full)}c)")
+                pc.text = full
 
             # Bot challenge (Cloudflare "Just a moment…" & co.)? Give it time to clear,
             # then re-read. Still walled → blocked (caller falls back to Bright Data).
@@ -1037,52 +1278,212 @@ class DRTBrowser:
         return pc
 
     # ── internals ─────────────────────────────────────────────
+    def _read_pdf(self, page, url: str) -> str:
+        """Download a PDF through the session's request client and return its text."""
+        try:
+            r = page.context.request.get(url, timeout=45000)
+            if not r.ok:
+                return ""
+            return _pdf_text(r.body())
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[open] PDF fetch failed ({type(e).__name__}) · {url}")
+            return ""
+
+    def _discourse_full_text(self, page) -> str:
+        """Whole Discourse topic as plain text ('user | date | #n' per post) from
+        /raw/<topic_id> — '' when the page is not a Discourse topic or the fetch fails."""
+        try:
+            m = re.search(r"^(https?://[^/]+)/t/(?:[^/]+/)?(\d+)", page.url or "")
+            if not m:
+                return ""
+            is_disc = page.evaluate(
+                """() => /discourse/i.test((document.querySelector('meta[name=generator]') || {}).content || '')
+                        || !!document.querySelector('#data-discourse-setup')""")
+            if not is_disc:
+                return ""
+            base, tid = m.group(1), m.group(2)
+            parts = []
+            for pg in range(1, 6):          # 100 posts per page → up to 500 posts
+                r = page.context.request.get(f"{base}/raw/{tid}?page={pg}", timeout=15000)
+                t = (r.text() if r.ok else "").strip()
+                if not t:
+                    break
+                parts.append(t)
+                if t.count("\n-------------------------\n") < 95:
+                    break                   # short page = last page
+            if not parts:
+                return ""
+            title = (page.title() or "").strip()
+            return (title + "\n\n" + "\n\n-------------------------\n\n".join(parts)).strip()
+        except Exception:
+            return ""
+
     def _extract_text(self, page) -> str:
-        """Readability-lite: prefer <article>/<main>, strip chrome, collapse ws."""
+        """Readable text of the page, read from the LIVE DOM.
+
+        2026-11 rework. The old version cloned a node and read the clone's innerText —
+        but a detached clone has no layout, so innerText degrades to textContent and
+        returns HIDDEN content too (collapsed menus, a manual's whole table of contents:
+        one Denon manual page came back as 14,154 chars of which 2,113 were visible).
+        Now page chrome is hidden in place for the read and restored afterwards, so the
+        text is what a reader actually sees. Forum threads (several top-level <article>
+        posts) are emitted post by post with [post N] markers so per-post attribution
+        survives; Reddit threads are rebuilt from their comment elements (author, score,
+        date, depth) because the visible page shows only a fraction of the tree."""
         try:
             txt = page.evaluate(
                 """() => {
-                    const drop = ['script','style','noscript','nav','header','footer',
-                                  'aside','form','svg','button'];
-                    // Forum threads wrap EVERY post in its own <article>; one article
-                    // = the page's content, several = read main/body so replies survive.
-                    const arts = document.querySelectorAll('article');
-                    const pick = (arts.length === 1 ? arts[0] : null)
-                              || document.querySelector('main')
-                              || document.querySelector('[role=main]')
-                              || document.body;
-                    if (!pick) return '';
-                    const clone = pick.cloneNode(true);
-                    drop.forEach(t => clone.querySelectorAll(t).forEach(n => n.remove()));
-                    return clone.innerText || '';
+                    // ── Reddit thread: structured post + comment tree ──
+                    const sp = document.querySelector('shreddit-post');
+                    if (sp) {
+                        const g = (el, a) => (el.getAttribute(a) || '');
+                        const body = (sp.querySelector('[slot="text-body"]') || {}).innerText || '';
+                        const out = [`${g(sp, 'post-title')}\\n[post] u/${g(sp, 'author')} · `
+                            + `${g(sp, 'created-timestamp').slice(0, 10)} · score ${g(sp, 'score')} · `
+                            + `${g(sp, 'comment-count')} comments\\n${body.trim()}`];
+                        for (const c of document.querySelectorAll('shreddit-comment')) {
+                            const b = c.querySelector(':scope > [slot="comment"]') || c.querySelector('[slot="comment"]');
+                            const t = ((b && b.innerText) || '').trim();
+                            if (!t) continue;
+                            const d = parseInt(g(c, 'depth') || '0', 10) || 0;
+                            const when = g(c, 'created') || ((c.querySelector('time') || {}).dateTime || '');
+                            out.push(`${'  '.repeat(Math.min(d, 6))}[comment${d ? ' · reply' : ''}] u/${g(c, 'author')} · `
+                                + `${when.slice(0, 10)} · score ${g(c, 'score')}\\n${t}`);
+                        }
+                        const joined = out.join('\\n\\n');
+                        if (joined.length > 200) return joined;
+                    }
+                    const drop = 'script,style,noscript,nav,header,footer,aside,form,svg,button';
+                    const hidden = [];
+                    const hide = (root) => root.querySelectorAll(drop).forEach(n => {
+                        // keep a <form> that wraps the posts (XenForo 1.x) and a post's own header (date / post no.)
+                        if (n.tagName === 'FORM' && n.querySelector('article, .message, .post, .postbody')) return;
+                        if (n.tagName === 'HEADER' && n.closest('article')) return;
+                        hidden.push([n, n.style.getPropertyValue('display'), n.style.getPropertyPriority('display')]);
+                        n.style.setProperty('display', 'none', 'important');
+                    });
+                    const restore = () => hidden.forEach(([n, v, p]) => {
+                        if (v) n.style.setProperty('display', v, p); else n.style.removeProperty('display');
+                    });
+                    try {
+                        if (!document.body) return '';
+                        const arts = Array.from(document.querySelectorAll('article'))
+                            .filter(a => !(a.parentElement && a.parentElement.closest('article')));
+                        const whole = document.querySelector('main') || document.querySelector('[role=main]') || document.body;
+                        if (arts.length === 1) {
+                            hide(arts[0]);
+                            const one = arts[0].innerText || '';
+                            if (one.length >= 200) return one;
+                        }
+                        hide(document.body);
+                        const all = whole.innerText || '';
+                        if (arts.length > 1) {
+                            const posts = arts.map(a => (a.innerText || '').trim()).filter(Boolean);
+                            const joined = posts.map((t, i) => `[post ${i + 1}]\\n${t}`).join('\\n\\n');
+                            // posts must carry the bulk of the page — otherwise this is a
+                            // listing/home page built from article cards, read it whole
+                            if (joined.length >= 0.5 * all.length) return joined;
+                        }
+                        return all;
+                    } finally { restore(); }
                 }"""
             ) or ""
         except Exception:
             txt = ""
+        if len(txt.strip()) < 200:
+            # Fallback: the pre-2026-11 detached-clone read (also returns hidden text —
+            # better than nothing on pages that render their content invisibly).
+            try:
+                txt2 = page.evaluate(
+                    """() => {
+                        const drop = ['script','style','noscript','nav','header','footer',
+                                      'aside','form','svg','button'];
+                        const arts = document.querySelectorAll('article');
+                        const pick = (arts.length === 1 ? arts[0] : null)
+                                  || document.querySelector('main')
+                                  || document.querySelector('[role=main]')
+                                  || document.body;
+                        if (!pick) return '';
+                        const clone = pick.cloneNode(true);
+                        drop.forEach(t => clone.querySelectorAll(t).forEach(n => n.remove()));
+                        return clone.innerText || '';
+                    }"""
+                ) or ""
+            except Exception:
+                txt2 = ""
+            if len(txt2.strip()) > len(txt.strip()):
+                txt = txt2
         txt = re.sub(r"[ \t]+", " ", txt)
         txt = re.sub(r"\n\s*\n\s*\n+", "\n\n", txt)
         return txt.strip()
 
-    def _extract_links(self, page, limit: int = 60) -> list:
+    def _extract_links(self, page, limit: int = 110) -> list:
+        """The page's followable links, as [{text, url, kind}] — the crawling surface.
+
+        2026-11 rework. The old selector was a[href^=http], which matches the href
+        ATTRIBUTE as written — and forums write relative hrefs. On an AVForums thread 416
+        of 440 links (every thread, post and page link) were invisible, so the agent was
+        never offered "next page". Now every anchor is read with its RESOLVED url and
+        tagged: next (rel=next / next-page control) · page (pagination) · content (inside
+        the post/article/main area) · nav (everything else on the same site)."""
         try:
             links = page.evaluate(
-                """() => Array.from(document.querySelectorAll('a[href^=http]'))
-                        .slice(0, 300)
-                        .map(a => ({text:(a.innerText||'').trim().slice(0,120), url:a.href}))
-                        .filter(l => l.text)"""
+                """() => {
+                    const out = [], seen = new Set(), at = new Map();
+                    const host = location.host;
+                    const here = location.href.split('#')[0];
+                    const pagSel = '.pageNav, .pageNavWrapper, .pagination, .pager, .paging, '
+                                 + '[class*="pagination" i], nav[aria-label*="pag" i], .page-numbers';
+                    const contSel = 'article, main, [role=main], .message-body, .cooked, .post, '
+                                  + '.postbody, .bbWrapper, #content, .content, shreddit-comment';
+                    for (const a of Array.from(document.querySelectorAll('a[href]')).slice(0, 2500)) {
+                        let u = a.href || '';
+                        if (!/^https?:/i.test(u)) continue;
+                        u = u.split('#')[0];
+                        if (!u || u === here) continue;
+                        const text = ((a.innerText || a.getAttribute('aria-label') || a.title || '')
+                                      .trim().replace(/\\s+/g, ' ')).slice(0, 120);
+                        const rel = (a.getAttribute('rel') || '').toLowerCase();
+                        const cls = (a.className && a.className.baseVal !== undefined) ? '' : String(a.className || '');
+                        if (seen.has(u)) {
+                            // the "Next" control usually points at a URL already listed as
+                            // "page 2" — promote that entry rather than dropping the signal
+                            if (rel.includes('next') || /pageNav-jump--next|next-page|pagination-next/i.test(cls))
+                                out[at.get(u)].kind = 'next';
+                            continue;
+                        }
+                        let same = false;
+                        try { same = new URL(u).host === host; } catch (e) {}
+                        let kind = 'nav';
+                        if (same && (rel.includes('next') || /pageNav-jump--next|next-page|pagination-next/i.test(cls)
+                                     || /^(next|next page|older|older posts|load more)\\b|^[›»→]$/i.test(text)))
+                            kind = 'next';
+                        else if (same && a.closest(pagSel) && /^\\d{1,5}$/.test(text)) kind = 'page';
+                        else if (a.closest(contSel) && !a.closest('nav, header, footer, aside')) kind = 'content';
+                        else if (!same) kind = 'external';
+                        if (!text && kind !== 'next') continue;
+                        seen.add(u);
+                        at.set(u, out.length);
+                        out.push({text: text || 'Next page', url: u, kind});
+                    }
+                    return out;
+                }"""
             ) or []
         except Exception:
             links = []
-        # dedup by url
-        seen, out = set(), []
-        for l in links:
-            if l["url"] in seen:
-                continue
-            seen.add(l["url"])
-            out.append(l)
-            if len(out) >= limit:
-                break
-        return out
+        # Order by usefulness, cap each class so navigation chrome can't crowd out content.
+        caps = {"next": 2, "page": 8, "content": 70, "external": 20, "nav": 20}
+        out = []
+        for kind in ("next", "page", "content", "external", "nav"):
+            n = 0
+            for l in links:
+                if l.get("kind") != kind:
+                    continue
+                out.append(l)
+                n += 1
+                if n >= caps[kind]:
+                    break
+        return out[:limit]
 
     def _maybe_dismiss_consent(self, page, engine: str):
         """Best-effort click of Google/EU consent walls so results render."""

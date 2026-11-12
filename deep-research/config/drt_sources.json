@@ -23,7 +23,7 @@
     },
     {
       "url": "github.com",
-      "login_required": false,
+      "login_required": true,
       "note": "code, repos, issues, tooling"
     },
     {
@@ -65,6 +65,10 @@
       "url": "forum.openwrt.org",
       "login_required": true,
       "note": "router firmware / networking (Discourse)"
+    },
+    {
+      "url": "community.home-assistant.io",
+      "login_required": true
     }
   ]
 }

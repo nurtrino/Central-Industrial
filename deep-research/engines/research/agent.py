@@ -36,7 +36,7 @@ from .tavily_search import tavily_search, tavily_extract, is_enabled as tavily_e
 from .brave_search import brave_search as brave_api_search, is_enabled as brave_api_enabled
 from .brightdata import (serp_search as bd_serp_search, serp_enabled as bd_serp_enabled,
                          unlock_fetch as bd_unlock_fetch, unlock_enabled as bd_unlock_enabled)
-from .login import normalize_domain
+from .login import normalize_domain, host_of
 from .models import get_model
 
 # ── depth tiers — TIME-boxed: each tier maximizes the outcome within a wall-clock
@@ -62,6 +62,68 @@ _LEGACY_DEPTHS = {"quick": "standard", "verydeep": "deep",
 def normalize_depth(depth: str) -> str:
     d = _LEGACY_DEPTHS.get((depth or "").strip().lower(), (depth or "").strip().lower())
     return d if d in DEPTH_BUDGETS else "standard"
+
+# ── pausable run clock (2026-11) ──────────────────────────────────────────────
+# Every deadline in this module is measured on RUN_CLOCK, not the wall clock, so a
+# PAUSE freezes the research window instead of eating it. One run at a time by design
+# (a headed run already holds the single Chrome profile). wait_if_paused() is called
+# at every step boundary — turn starts and each tool call — so a pause takes effect as
+# soon as the in-flight model call or page load returns; nothing gathered is lost.
+class _RunClock:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._paused_at = None
+        self._offset = 0.0
+
+    def now(self) -> float:
+        with self._lock:
+            ref = self._paused_at if self._paused_at is not None else time.time()
+            return ref - self._offset
+
+    @property
+    def paused(self) -> bool:
+        return self._paused_at is not None
+
+    def pause(self):
+        with self._lock:
+            if self._paused_at is None:
+                self._paused_at = time.time()
+
+    def resume(self):
+        with self._lock:
+            if self._paused_at is not None:
+                self._offset += time.time() - self._paused_at
+                self._paused_at = None
+
+    def reset(self):
+        with self._lock:
+            self._paused_at = None
+            self._offset = 0.0
+
+    def credit(self, seconds):
+        """Time the run spent waiting on the USER (a sign-in prompt) is not research time."""
+        with self._lock:
+            self._offset += max(0.0, float(seconds))
+
+    def wait_if_paused(self, stop_event=None, log=None, where=""):
+        if self._paused_at is None:
+            return
+        if log:
+            log(f"[pause] {where or 'run'}: paused — everything gathered so far is kept")
+        while self._paused_at is not None:
+            if stop_event is not None and stop_event.is_set():
+                return
+            time.sleep(0.4)
+        if log:
+            log(f"[pause] {where or 'run'}: resumed")
+
+
+RUN_CLOCK = _RunClock()
+
+
+def _now() -> float:
+    return RUN_CLOCK.now()
+
 
 _MODEL = get_model("search")   # browser agent tool-use loop (Sonnet); other roles below
 _PAGE_TEXT_TO_AGENT = 8000   # chars of page text the agent sees (full text is stored)
@@ -186,6 +248,10 @@ class HarvestResult:
     lanes: list = field(default_factory=list)          # [{name, mission}] parallel Stage-2 lanes this run
     lane_reports: list = field(default_factory=list)   # [{lane, reason}] each lane's / digger's finish reason
     fallback_fetches: list = field(default_factory=list)  # [{url, via, reason}] pages Chrome couldn't read, fetched via Bright Data/Tavily/Exa
+    planned_sites: list = field(default_factory=list)     # [{domain, login_required, credentialed}] sites the plan selected for THIS query
+    source_alerts: list = field(default_factory=list)     # [{domain, kind, detail, credentialed, at}] — see _alert()
+    native_stats: dict = field(default_factory=dict)      # domain -> {"ok": n, "empty": n} for the site's own search
+    duplicate_pages: list = field(default_factory=list)   # [{url, same_as}] pages whose text duplicated an already-harvested page
     exa_searches: int = 0     # neural Exa queries run this run
     exa_similar: int = 0      # Exa find_similar calls run this run
     exa_urls: list = field(default_factory=list)   # URLs Exa surfaced (for provenance/A-B)
@@ -292,7 +358,13 @@ def _tool_defs(include_web_search: bool = True, include_site_search: bool = True
                         "harvest."),
         "input_schema": {"type": "object", "properties": {
             "url": {"type": "string"},
-            "source_type": {"type": "string", "description": "web|forum|substack|news|primary|gated"}},
+            "source_type": {"type": "string", "description": "web|forum|substack|news|primary|gated"},
+            "offset": {"type": "integer",
+                       "description": ("Character offset to start reading from. A long page shows "
+                                       "its first chunk and says how many chars remain — call "
+                                       "open_page again with the same url and offset=<chars already "
+                                       "shown> to keep reading. Re-reading a page already opened "
+                                       "costs no budget.")}},
             "required": ["url"]},
     })
     tools.append({
@@ -399,11 +471,128 @@ near-empty harvest is a valid result. Do NOT attempt to log in to anything — g
 you can't read are handled separately; just keep moving."""
 
 
+# ── source alerts (2026-11) ───────────────────────────────────
+# A site the research plan selected for THIS query must never fail quietly. Three kinds:
+#   login_failed — a login-required / credentialed site could not be signed into
+#   unreachable  — the site could not be searched or navigated (own search dead, bot wall)
+#   skipped      — the plan named it but it was not searched (no stored login, no time, …)
+# Each alert is logged with an "[alert]" prefix THE MOMENT it happens (the server lifts
+# that into a sticky banner in the live UI) and is repeated at the top of the report.
+_ALERT_LABEL = {"login_failed": "LOGIN FAILED", "unreachable": "COULD NOT SEARCH / NAVIGATE",
+                "skipped": "SKIPPED"}
+
+
+def _planned(result, domain):
+    """The plan entry for `domain` (suffix-matched), or None if the plan didn't select it."""
+    d = normalize_domain(domain or "")
+    for s in (result.planned_sites or []):
+        sd = s.get("domain", "")
+        if d and sd and (d == sd or d.endswith("." + sd) or sd.endswith("." + d)):
+            return s
+    return None
+
+
+def _alert(result, log, domain, kind, detail, only_planned=True):
+    """Raise one user-facing alert per (domain, kind). By default only for sites the plan
+    selected; credentialed ones are flagged so the UI can rank them first."""
+    ps = _planned(result, domain)
+    if only_planned and ps is None:
+        return
+    dom = (ps or {}).get("domain") or normalize_domain(domain or "") or str(domain)
+    cred = bool((ps or {}).get("credentialed"))
+    with _SHARED_LOCK:
+        if any(a["domain"] == dom and a["kind"] == kind for a in result.source_alerts):
+            return
+        result.source_alerts.append({"domain": dom, "kind": kind, "detail": detail,
+                                     "credentialed": cred, "at": time.strftime("%H:%M:%S")})
+    (log or (lambda m: None))(
+        f"[alert] {dom}{' (credentialed)' if cred else ''} — "
+        f"{_ALERT_LABEL.get(kind, kind.upper())}: {detail}")
+
+
+def _manual_login_gate(br, log, domain, why, manual_login, creds=None):
+    """A plan-selected credentialed site could not be signed into automatically (2FA,
+    passkey, captcha, no stored login). Do NOT move on quietly: open the site's sign-in
+    page in the visible research browser and hold the run — research clock stopped —
+    until the user has signed in (detected by the session cookie), confirms, or
+    explicitly skips. `manual_login(domain, why, check)` is supplied by the job layer and
+    blocks; it returns 'signed_in' | 'continue' | 'skip' | 'timeout'.
+    Returns (ok, detail)."""
+    t0 = time.monotonic()
+    page = None
+    try:
+        page = br.open_login_tab(domain, (creds or {}).get("login_url", ""))
+    except Exception:  # noqa: BLE001
+        page = None
+    log(f"[login] SIGN-IN NEEDED — {domain}: {why}. A sign-in tab is open in the research "
+        f"browser; the run is waiting for you (research clock stopped).")
+    decision, signed = "skip", False
+    try:
+        decision = manual_login(domain, why, lambda: bool(br.is_signed_in(domain)))
+    except Exception as e:  # noqa: BLE001
+        log(f"[login] sign-in prompt failed ({type(e).__name__})")
+    finally:
+        try:
+            signed = bool(br.is_signed_in(domain))
+        except Exception:  # noqa: BLE001
+            signed = False
+        if page is not None:
+            try:
+                br.close_tab(page)
+            except Exception:  # noqa: BLE001
+                pass
+        RUN_CLOCK.credit(time.monotonic() - t0)
+    if signed or decision in ("signed_in", "continue"):
+        try:
+            br.mark_auth_handled(domain)
+        except Exception:  # noqa: BLE001
+            pass
+        return True, ("signed in by hand in the research browser (session kept for future runs)"
+                      if signed else
+                      "you confirmed the sign-in (this site has no session cookie the tool can verify)")
+    return False, (f"{why}; the manual sign-in was "
+                   + ("skipped" if decision == "skip" else "not completed within the waiting time"))
+
+
+# ── URL identity ──────────────────────────────────────────────
+_TRACKING_PARAMS = ("utm_", "fbclid", "gclid", "msclkid", "mc_cid", "mc_eid", "ref_src",
+                    "share_id", "igshid", "context", "rdt")
+
+
+def _canon_url(url: str) -> str:
+    """Identity key for "have we read this page": scheme/host case, www., fragments,
+    tracking parameters and a trailing slash don't make a different page; old./new./np.
+    reddit are the same thread. (Exact-string matching let the same page be opened —
+    and later cited — several times under cosmetically different URLs.)"""
+    from urllib.parse import urlsplit, parse_qsl, urlencode
+    u = (url or "").strip()
+    try:
+        p = urlsplit(u)
+        host = (p.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host in ("old.reddit.com", "new.reddit.com", "np.reddit.com"):
+            host = "reddit.com"
+        q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
+             if not any(k.lower().startswith(t) for t in _TRACKING_PARAMS)]
+        path = p.path.rstrip("/") or ""
+        return f"{host}{path}" + (f"?{urlencode(q)}" if q else "")
+    except Exception:
+        return u.split("#")[0]
+
+
+def _text_fingerprint(text: str) -> str:
+    import hashlib
+    norm = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    return hashlib.sha1(norm.encode("utf-8", "ignore")).hexdigest() if len(norm) >= 400 else ""
+
+
 # ── login handlers (per stage) ────────────────────────────────
-def _record_login_warning(result, domain, detail):
+def _record_login_warning(result, domain, detail, log=None):
     """Record a user-facing warning that a stored login could not be completed."""
     if not any(w.get("domain") == domain for w in result.login_warnings):
         result.login_warnings.append({"domain": domain, "detail": detail})
+    _alert(result, log, domain, "login_failed", detail, only_planned=False)
 
 
 def _record_skip_handler(result, log):
@@ -428,11 +617,15 @@ def _curated_login_handler(vault, result, log, label="stage2"):
                     result.logged_in.append(domain)
                 return True
             _record_login_warning(result, domain,
-                                  "stored login did not go through (wrong password, 2FA, or captcha)")
+                                  "stored login did not go through (wrong password, 2FA, or captcha)",
+                                  log)
             log(f"[{label}] {domain}: stored login failed → warning")
             return False
         result.gated_candidates.setdefault(domain, "login/paywall hit during open-web search")
         log(f"[{label}] gated {domain} → recorded for Stage 4; skipping")
+        _alert(result, log, domain, "skipped",
+               "hit a login wall and no login is stored for it — content behind the wall "
+               "was not read (you will be asked for a one-time login at the end of gathering)")
         return False
     return h
 
@@ -450,7 +643,11 @@ def _vault_handler(vault, result, log, label, ephemeral=None):
             return True
         if creds:   # had stored creds but they didn't get us in → warn the user
             _record_login_warning(result, domain,
-                                  "stored login did not go through (wrong password, 2FA, or captcha)")
+                                  "stored login did not go through (wrong password, 2FA, or captcha)",
+                                  log)
+        else:
+            _alert(result, log, domain, "skipped",
+                   "hit a login wall and there is no login to use — content behind it was not read")
         result.gated_candidates.setdefault(domain, "needs login; stored credentials did not get in")
         if domain not in result.skipped_gated:
             result.skipped_gated.append(domain)
@@ -459,27 +656,48 @@ def _vault_handler(vault, result, log, label, ephemeral=None):
     return h
 
 
-def _page_links_section(links, page_url, seen_urls, limit: int = 20) -> str:
+# Links that are never the trail: account/profile/share/report plumbing.
+_LINK_NOISE = re.compile(
+    r"(/login|/logout|/register|/signup|/sign-up|/account/|/members/|/member\.php|/user/|/u/[^/]+/?$|"
+    r"/misc/|/privacy|/terms|/report|/react|/bookmark|/attachments/|"
+    r"mailto:|javascript:|/whats-new|/latest-activity|[?&](do|action)=(report|reply|quote))", re.I)
+
+
+def _page_links_section(links, page_url, seen_urls, limit: int = 24) -> str:
     """Format an opened page's followable links for the agent — the crawling surface.
     Filters already-seen URLs, junk hosts, and thin anchors; substantive anchors first."""
-    picked, seen = [], set()
-    base = (page_url or "").split("#")[0]
+    nxt, pages, content, other, seen = [], [], [], [], set()
+    base = _canon_url(page_url or "")
     for l in links or []:
         u = (l.get("url") or "").split("#")[0]
         t = re.sub(r"\s+", " ", (l.get("text") or "")).strip()
-        if not u or u == base or u in seen or u in seen_urls:
+        kind = l.get("kind") or "content"
+        key = _canon_url(u)
+        if not u or key == base or key in seen or key in seen_urls:
             continue
-        if len(t) < 4 or _JUNK_HOST.search(u):
+        if _JUNK_HOST.search(u) or _LINK_NOISE.search(u):
             continue
-        seen.add(u)
-        picked.append((t, u))
+        if kind == "next":
+            seen.add(key); nxt.append(("NEXT PAGE →", u)); continue
+        if kind == "page":
+            seen.add(key); pages.append((f"page {t}", u)); continue
+        if len(t) < 4:
+            continue
+        seen.add(key)
+        (content if kind in ("content", "external") else other).append((t, u))
+    # Pagination first — on a forum thread it is THE way deeper — then links from the
+    # post/article body (substantive anchor text first), then a little site navigation.
+    content.sort(key=lambda p: -min(len(p[0]), 60))
+    other.sort(key=lambda p: -min(len(p[0]), 60))
+    room = max(0, limit - len(nxt[:1]) - len(pages[:4]))
+    picked = nxt[:1] + pages[:4] + content[:max(0, room - 3)]
+    picked += other[:max(0, limit - len(picked))]
     if not picked:
         return ""
-    picked.sort(key=lambda p: -min(len(p[0]), 60))   # substantive anchor text first
     lines = "\n".join(f"L{i}. {t[:110]} — {u}" for i, (t, u) in enumerate(picked[:limit], 1))
     return ("\n\nLINKS ON THIS PAGE:\n" + lines +
-            "\nFollow any of these with open_page if they smell like the trail — thread "
-            "replies, citations, pagination, an author's other posts.")
+            "\nFollow any of these with open_page if they smell like the trail — NEXT PAGE "
+            "of a thread, replies, citations, an author's other posts.")
 
 
 _SHARED_LOCK = threading.RLock()   # guards harvest / pool / seen_urls across parallel lanes
@@ -580,7 +798,7 @@ def _fetch_fallback(url, log):
 _COMPACT_AT_CHARS = 280_000      # ≈70K tokens
 _COMPACT_KEEP_TURNS = 6
 _ELIDED = ("\n[… page body elided from the transcript to save context — the full text is "
-           "stored in the harvest; re-open only if you truly need to re-read it …]")
+           "stored in the harvest; open_page the same url again to re-read it (free) …]")
 
 
 def _transcript_chars(messages) -> int:
@@ -613,8 +831,8 @@ def _compact_messages(messages, log) -> int:
         for b in messages[i]["content"]:
             if isinstance(b, dict) and b.get("type") == "tool_result":
                 c = b.get("content")
-                if isinstance(c, str) and len(c) > 1500 and c.startswith("Opened") \
-                        and _ELIDED not in c:
+                if isinstance(c, str) and len(c) > 1500 \
+                        and c.startswith(("Opened", "Re-read")) and _ELIDED not in c:
                     b["content"] = c.split("\n\n", 1)[0] + _ELIDED
                     n += 1
     if n:
@@ -643,7 +861,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
     def _left():
         if dl["t"] is None:
             return None
-        return max(0, int(dl["t"] - time.time()))
+        return max(0, int(dl["t"] - _now()))
 
     def _clock():
         s = _left()
@@ -661,7 +879,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
         """Spend one search/page against BOTH the stage allocation and the global pool.
         Returns None when spent OK, else the message the agent gets instead. TIME is
         checked first — it is the governor; the unit pools are safety ceilings."""
-        if dl["t"] is not None and time.time() > dl["t"]:
+        if dl["t"] is not None and _now() > dl["t"]:
             if hard_deadline is not None and dl["t"] < hard_deadline - 5:
                 return ("STAGE TIME SHARE SPENT. If you are on a genuinely HOT TRAIL toward "
                         "the user's specific question, call request_extension(reason) for "
@@ -689,6 +907,24 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             result.items.append(item)
             return len(result.items)
 
+    def _dup_of(text, url):
+        """If this page's text is identical to one already harvested (the same document
+        under another URL — region/case variants, cross-posts, mirrors), don't harvest
+        it twice: two copies of one page would later read as two corroborating sources.
+        Returns the message for the agent, or '' when the page is new."""
+        fp = _text_fingerprint(text)
+        if not fp:
+            return ""
+        with _SHARED_LOCK:
+            for it in result.items:
+                if it.via != "stage1" and _text_fingerprint(it.text) == fp:
+                    result.duplicate_pages.append({"url": url, "same_as": it.url})
+                    log(f"[open] duplicate content — {url[:80]} is the same page as {it.url[:80]}")
+                    return (f"This URL serves the SAME content as a page already harvested "
+                            f"({it.url}). Not harvested twice — it is one source, not two.\n\n"
+                            f"{_budget()}")
+        return ""
+
     def dispatch(name, inp):
         if name == "finish":
             reason = inp.get("reason", "")
@@ -706,7 +942,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                 # Time grant: push the stage deadline up to +60s, never past the hard window.
                 gt = 0
                 if dl["t"] is not None and hard_deadline is not None:
-                    new_t = min(hard_deadline, max(dl["t"], time.time()) + 60)
+                    new_t = min(hard_deadline, max(dl["t"], _now()) + 60)
                     gt = max(0, int(new_t - dl["t"]))
                     dl["t"] = new_t
                 if gs <= 0 and gp <= 0 and gt <= 0:
@@ -750,11 +986,26 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                         surl = next((str(s.get("search_url") or "").strip() for s in srcs
                                      if normalize_domain(s.get("domain", "")) == dom), "")
                         res = br.native_search(dom, inp["query"], search_url=surl, limit=10)
+                        with _SHARED_LOCK:
+                            st = result.native_stats.setdefault(dom, {"ok": 0, "empty": 0})
+                            st["ok" if res else "empty"] += 1
+                            n_ok, n_empty = st["ok"], st["empty"]
                         if res:
                             via = f"native:{dom} {inp['query']}"
                         else:
                             res = br.site_search(inp["query"], dom, limit=10)
                             via = f"site:{dom} {inp['query']} (native empty — engine fallback)"
+                            # The site's own search is the whole point of forum_search. A
+                            # credentialed site is flagged on the first miss; a public one
+                            # once it has missed twice without ever working.
+                            ps = _planned(result, dom)
+                            if n_ok == 0 and ps and (ps.get("credentialed") or n_empty >= 2):
+                                _alert(result, log, dom, "unreachable",
+                                       f"the site's own search returned nothing ({n_empty}× so far, "
+                                       f"last query: {inp['query'][:60]!r}) — falling back to a "
+                                       f"search-engine site: query, which only sees public, "
+                                       f"engine-indexed pages"
+                                       + ("" if res else "; that returned nothing either"))
                     else:
                         res = br.site_search(inp["query"], dom, limit=10)
                         via = f"site:{dom} {inp['query']}"
@@ -772,10 +1023,19 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                 log(f"[forum] {via} -> {len(res)} results")
             progress(stage_name, None, f"searched — {via}")
             with _SHARED_LOCK:
-                fresh = [r for r in res if r.url not in seen_urls]
+                fresh = [r for r in res if _canon_url(r.url) not in seen_urls]
             for r in fresh[:3]:       # feed: top hits cascading by
                 log(f"[hit] {(r.title or r.url)[:80]} → {r.url[:90]}")
-            lines = [f"{i+1}. {r.title[:90]}\n   {r.url}" for i, r in enumerate(fresh)]
+
+            def _row(i, r):
+                # Title + url, plus the snippet/date when the source gave one — a title
+                # alone is a thin basis for deciding what is worth an open.
+                d = getattr(r, "date", "") or ""
+                sn = re.sub(r"\s+", " ", (getattr(r, "snippet", "") or "")).strip()
+                extra = " · ".join(x for x in (d, sn[:220]) if x)
+                return (f"{i + 1}. {r.title[:110]}\n   {r.url}"
+                        + (f"\n   ↳ {extra}" if extra else ""))
+            lines = [_row(i, r) for i, r in enumerate(fresh)]
             body = "\n".join(lines) if lines else "(no new results)"
             return f"Results for [{via}]:\n{body}\n\n{_budget()}", False
         if name in ("exa_search", "exa_find_similar"):
@@ -805,58 +1065,109 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                         continue
                     if u not in result.exa_urls:
                         result.exa_urls.append(u)
-                    if u not in seen_urls:
+                    if _canon_url(u) not in seen_urls:
                         lines.append(f"{len(lines)+1}. {hit.get('title', '')[:90]}\n   {u}")
             body = "\n".join(lines) if lines else "(no new results)"
             return f"Results for [{via}]:\n{body}\n\n{_budget()}", False
         if name == "open_page":
             url = inp["url"]
+            key = _canon_url(url)
+            try:
+                offset = max(0, int(inp.get("offset") or 0))
+            except (TypeError, ValueError):
+                offset = 0
+
+            def _window(txt):
+                """The slice of a page the agent sees, plus how to get the rest."""
+                shown = txt[offset:offset + _PAGE_TEXT_TO_AGENT]
+                left = len(txt) - (offset + len(shown))
+                head = f"[chars {offset}–{offset + len(shown)} of {len(txt)}]\n" if offset else ""
+                tail = "" if left <= 0 else (
+                    f"\n…[+{left} more chars stored — open_page(url, offset="
+                    f"{offset + len(shown)}) reads on, free of charge]")
+                return head + shown + tail
+
             with _SHARED_LOCK:
-                if url in seen_urls:
-                    return "Already opened this URL. Skip it.", False
+                already = key in seen_urls
+                prior = next((it for it in result.items
+                              if it.via != "stage1" and _canon_url(it.url) == key), None) \
+                    if already else None
+            if already:
+                # RE-READ (free): the lead review hands the digger "start here" URLs that a
+                # lane already opened, and a long page needs its later chunks read. The old
+                # "Already opened this URL. Skip it." made both impossible.
+                if prior is None:
+                    return ("Already tried this URL this run and it could not be read. "
+                            "Move on.", False)
+                if offset >= len(prior.text):
+                    return f"No more text — that page is {len(prior.text)} chars in total.", False
+                return (f"Re-read (already harvested — no budget spent): {prior.title}\n"
+                        f"URL: {prior.url}\n\n{_window(prior.text)}\n\n{_budget()}", False)
             denied = _consume("pages")
             if denied:
                 return denied, False
             with _SHARED_LOCK:
-                seen_urls.add(url)
+                seen_urls.add(key)
             progress(stage_name, None, f"reading — {url[:70]}")
             pc = br.open(url)     # br logs the "[open] …" feed line itself
+            if not pc.error and pc.used_screenshot:
+                # Thin text (JS-only shell, viewer, soft 404): nothing reads the screenshot,
+                # so try the fetch providers before settling for an empty page.
+                fb, prov = _fetch_fallback(url, log)
+                if fb and len(fb.get("text") or "") > max(400, len(pc.text) * 2):
+                    pc.error = "page rendered almost no readable text"
+                    _thin_fb = (fb, prov)
+                else:
+                    _thin_fb = None
+            else:
+                _thin_fb = None
+            if pc.blocked:
+                _alert(result, log, host_of(url), "unreachable",
+                       "pages are behind an anti-bot wall that did not clear in the browser"
+                       " — reading through an unblocking provider where possible")
             if pc.error:
                 # Resilience: Chrome couldn't read it (bot challenge / 403 / timeout).
                 # Fetch it through the unblocking providers so the page isn't lost —
                 # Bright Data Web Unlocker → Tavily extract → Exa contents.
-                fb, prov = _fetch_fallback(url, log)
+                fb, prov = _thin_fb if _thin_fb else _fetch_fallback(url, log)
                 if fb:
+                    dup = _dup_of(fb["text"], url)
+                    if dup:
+                        return dup, False
                     n = _harvest(HarvestItem(
                         url=url, title=fb.get("title") or inp.get("title") or url,
                         text=fb["text"], source_type=inp.get("source_type", "web"),
-                        via=f"{stage_name}+{prov}", retrieved_at=time.time()))
+                        via=f"{stage_name}+{prov}", retrieved_at=_now()))
                     with _SHARED_LOCK:
                         result.fallback_fetches.append({"url": url, "via": prov,
                                                         "reason": pc.error[:80]})
-                    txt = fb["text"]
-                    shown = txt[:_PAGE_TEXT_TO_AGENT]
-                    tail = "" if len(txt) <= _PAGE_TEXT_TO_AGENT else \
-                           f"\n…[+{len(txt) - _PAGE_TEXT_TO_AGENT} more chars stored]"
                     with _SHARED_LOCK:
                         links_sec = _page_links_section(fb.get("links"), url, seen_urls)
-                    return (f"Opened via {prov} (Chrome was blocked: {pc.error}):\n"
-                            f"URL: {url}\n\n{shown}{tail}{links_sec}\n\n"
+                    return (f"Opened via {prov} (Chrome could not read it: {pc.error}):\n"
+                            f"URL: {url}\n\n{_window(fb['text'])}{links_sec}\n\n"
                             f"[harvested {n} total] {_budget()}", False)
                 return f"Could not open ({pc.error}) and no unblocking provider could fetch it.", False
+            if pc.used_screenshot:
+                # Nothing readable and no provider could do better — do NOT harvest an
+                # empty shell (it only adds a dead source for extraction to reject).
+                return (f"Opened but found almost no readable text ({len(pc.text)} chars): "
+                        f"{pc.title or url}\n{pc.text[:300]}\nNot harvested. Try another "
+                        f"route to this content (a different URL for it, or search for a "
+                        f"copy).\n\n{_budget()}", False)
+            dup = _dup_of(pc.text, pc.url)
+            if dup:
+                return dup, False
+            with _SHARED_LOCK:
+                seen_urls.add(_canon_url(pc.url))     # the post-redirect URL counts as read too
             # Store the RAW page text — goal-based extraction + junk filtering happens
             # post-hoc in synthesize.py (Pass A), which needs the full page.
             n = _harvest(HarvestItem(
                 url=pc.url, title=pc.title, text=pc.text,
                 source_type=inp.get("source_type", "web"), via=stage_name,
-                used_screenshot=pc.used_screenshot, retrieved_at=time.time()))
-            shown = pc.text[:_PAGE_TEXT_TO_AGENT]
-            tail = "" if len(pc.text) <= _PAGE_TEXT_TO_AGENT else \
-                   f"\n…[+{len(pc.text)-_PAGE_TEXT_TO_AGENT} more chars stored]"
-            note = " (thin → screenshot)" if pc.used_screenshot else ""
+                used_screenshot=pc.used_screenshot, retrieved_at=_now()))
             with _SHARED_LOCK:
                 links_sec = _page_links_section(pc.links, pc.url, seen_urls)
-            return (f"Opened: {pc.title}{note}\nURL: {pc.url}\n\n{shown}{tail}{links_sec}\n\n"
+            return (f"Opened: {pc.title}\nURL: {pc.url}\n\n{_window(pc.text)}{links_sec}\n\n"
                     f"[harvested {n} total] {_budget()}", False)
         return f"Unknown tool {name!r}.", False
 
@@ -877,6 +1188,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
     for _turn in range(cap.get("max_turns", 40)):
         # User pressed STOP → halt the whole run here (do NOT clear — the signal is
         # pipeline-level, so every later stage is skipped too). Harvest is preserved.
+        RUN_CLOCK.wait_if_paused(stop_event, log, stage_name)     # user pressed PAUSE
         if stop_event is not None and stop_event.is_set():
             notes.append(f"[{stage_name}] stopped by user.")
             log(f"[stop] {stage_name}: halted by user — preserving harvest")
@@ -891,7 +1203,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             log(f"[{stage_name}] skipped by user")
             break
         # Time governor: when the (possibly extended) stage window is gone, move on.
-        if dl["t"] is not None and time.time() > max(dl["t"], hard_deadline or dl["t"]):
+        if dl["t"] is not None and _now() > max(dl["t"], hard_deadline or dl["t"]):
             notes.append(f"[{stage_name}] time window closed.")
             log(f"[{stage_name}] time window closed — moving on")
             break
@@ -913,6 +1225,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
         trs, fin = [], False
         for b in resp.content:
             if getattr(b, "type", "") == "tool_use":
+                RUN_CLOCK.wait_if_paused(stop_event, log, stage_name)
                 log(f"[act] → {b.name}: {_compact_input(b.name, b.input)}")
                 _trace(f"[{stage_name} · turn {_turn + 1}] TOOL CALL → {b.name}"
                        f"({json.dumps(b.input or {}, ensure_ascii=False)})")
@@ -1381,9 +1694,9 @@ def _run_stage2_lanes(client, br, result, seen_urls, *, query, task, clarificati
                 "max_turns": cap2["max_turns"]}
     # Lanes get ~70% of the Stage-2 share; the digger gets the rest — plus whatever the
     # lanes leave unused when they exhaust themselves early (the 1-hour tier's intent).
-    lanes_end = min(stage2_end, time.time() + 0.7 * max(0, stage2_end - time.time()))
+    lanes_end = min(stage2_end, _now() + 0.7 * max(0, stage2_end - _now()))
     log(f"[lane] running {n} lanes in parallel · each {lane_cap['searches']}s/"
-        f"{lane_cap['pages']}p soft · lanes window {int(lanes_end - time.time())}s")
+        f"{lane_cap['pages']}p soft · lanes window {int(lanes_end - _now())}s")
     progress("stage2", None, f"{n} parallel lanes: " + " · ".join(l["name"] for l in lanes)[:120])
     lane_notes = [[] for _ in lanes]
 
@@ -1424,7 +1737,7 @@ def _run_stage2_lanes(client, br, result, seen_urls, *, query, task, clarificati
         return
 
     # ── lead review → sequential hot-trail dig on the remaining Stage-2 time ──
-    remaining = stage2_end - time.time()
+    remaining = stage2_end - _now()
     if remaining < 45:
         log("[lane] no Stage-2 time left for a hot-trail follow-up — moving on")
         return
@@ -1521,6 +1834,7 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
         _trace(f"[local-baseline] {label} → {len(results)} results ({len(pool)} unique so far)")
 
     for i, q in enumerate(queries):
+        RUN_CLOCK.wait_if_paused(stop_event, log, "baseline sweep")
         if stop_event is not None and stop_event.is_set():
             log("[stop] baseline sweep halted by user")
             break
@@ -1578,7 +1892,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                browser: DRTBrowser | None = None, log=None, progress=None,
                request_credentials=None, vault=None, skip_event=None,
                channel_overrides=None, client=None, provider="claude",
-               deadline=None, stop_event=None) -> HarvestResult:
+               deadline=None, stop_event=None, manual_login=None) -> HarvestResult:
     """Run the deterministic 4-stage pipeline. Returns a HarvestResult.
 
     progress(stage, pct, msg): UI hook (stages: stage1..stage4).
@@ -1648,8 +1962,8 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
     # TIME is the governor: the gathering window ends at `gather_deadline` (the tier's
     # total minus the synthesis reserve). Stage time shares are soft; request_extension
     # pushes a hot stage toward the hard window. The unit pools below are safety ceilings.
-    gather_deadline = deadline or (time.time() + max(60, b["seconds"] - b["reserve"]))
-    log(f"[plan] research window: {max(0, int(gather_deadline - time.time()))}s of gathering "
+    gather_deadline = deadline or (_now() + max(60, b["seconds"] - b["reserve"]))
+    log(f"[plan] research window: {max(0, int(gather_deadline - _now()))}s of gathering "
         f"({depth} tier, ~{b['seconds'] // 60} min total)")
     pool = {"searches": b["searches"], "pages": b["pages"]}
     cap2 = {"searches": max(2, round(b["searches"] * 0.6)),
@@ -1692,7 +2006,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
             result.items.append(HarvestItem(
                 url="(baseline browser sweep)", title="Stage 1 — baseline browser brief",
                 text=s1["findings_md"], source_type="api", via="stage1",
-                retrieved_at=time.time()))
+                retrieved_at=_now()))
         result.stage1_sources = s1.get("sources", [])
         stage1_brief = s1.get("findings_md", "")
 
@@ -1720,6 +2034,80 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         if selected_sites:
             log(f"[plan] selected {len(selected_sites)} relevant site(s): "
                 f"{len(public_selected)} public 🟢, {len(login_selected)} login-required 🔴")
+
+        def _has_creds(dom):
+            c = vault.get(dom) if vault else None
+            return bool(c and (c.get("username") or "").strip())
+
+        # What the plan committed to for THIS query — the yardstick for source alerts.
+        result.planned_sites = [
+            {"domain": s["domain"], "login_required": s.get("login_required"),
+             "credentialed": bool(s.get("login_required") is True or _has_creds(s["domain"]))}
+            for s in selected_sites]
+        have_login = [s for s in login_selected if _has_creds(s["domain"])]
+        need_prompt = [s for s in login_selected if not _has_creds(s["domain"])]
+        # SIGN IN FIRST (2026-11): logins used to happen at Stage 3, minutes into the run,
+        # so a dead login was discovered late and the parallel lanes searched those sites
+        # logged out. Now every selected site with a stored login is signed into before
+        # Stage 2, and a failure raises an alert immediately.
+        signed_in = []
+        # Manual sign-in is possible only with a visible local browser (not headless/hosted).
+        _can_nag = (manual_login is not None and getattr(br, "headed", False)
+                    and not getattr(br, "remote_browser", False))
+
+        def _halted():
+            return stop_event is not None and stop_event.is_set()
+
+        for s in have_login + [x for x in public_selected if _has_creds(x["domain"])]:
+            if _halted():
+                break
+            dom = s["domain"]
+            creds = (vault.get(dom) if vault else None) or {}
+            progress("stage2", None, f"Signing in to {dom}…")
+            try:
+                ok, detail = br.ensure_logged_in(dom, creds)
+            except Exception as e:  # noqa: BLE001
+                ok, detail = False, f"login error: {type(e).__name__}"
+            if not ok and _can_nag and s in have_login and not _halted():
+                # 2FA / passkey / captcha: the stored login cannot finish the job — the
+                # user can. Hold the run and ask, instead of searching the site logged out.
+                progress("stage2", None, f"Waiting for you to sign in to {dom}…")
+                ok, detail = _manual_login_gate(br, log, dom, detail, manual_login, creds)
+            if ok:
+                signed_in.append(s)
+                if dom not in result.logged_in:
+                    result.logged_in.append(dom)
+                log(f"[login] signed in: {dom} ({detail})")
+            else:
+                _record_login_warning(result, dom, detail, log)
+                log(f"[login] could NOT sign in to {dom} — {detail}")
+        for s in list(need_prompt):
+            dom = s["domain"]
+            # No stored login — but the profile may already hold a session from an earlier
+            # manual sign-in (the normal state for 2FA sites such as GitHub).
+            try:
+                ok, detail = br.ensure_logged_in(dom, {})
+            except Exception as e:  # noqa: BLE001
+                ok, detail = False, f"login error: {type(e).__name__}"
+            if not ok and _can_nag and not _halted():
+                progress("stage2", None, f"Waiting for you to sign in to {dom}…")
+                ok, detail = _manual_login_gate(
+                    br, log, dom, "no login is stored for this site and the research browser "
+                    "holds no session for it", manual_login)
+            if ok:
+                need_prompt.remove(s)
+                have_login.append(s)
+                signed_in.append(s)
+                if dom not in result.logged_in:
+                    result.logged_in.append(dom)
+                log(f"[login] signed in: {dom} ({detail})")
+                continue
+            result.gated_candidates.setdefault(
+                dom, "login-required site selected as relevant to this query")
+            _alert(result, log, dom, "skipped",
+                   "login-required and not signed in (" + detail + ") — it is NOT being searched "
+                   "logged-in this run. Supply a login when prompted at the end of gathering, "
+                   "or afterwards with 'Add/Fix Specific Sources'")
         if use_engines or use_sites or use_neural:
             if use_neural:
                 log("[plan] API discovery on for Stage 2: "
@@ -1730,7 +2118,10 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
             # The plan decides whether to lean on the curated list; the relevance filter still
             # picks WHICH specific sites (by Description), kept signal-dense over the full table.
             if use_sites:
-                seed_for_browser = public_selected     # 🟢 public sites → open sweep
+                # 🟢 public sites + any 🔴 site we are now signed into (the lanes mine
+                # them in parallel; Stage 3 then does the dedicated sweep).
+                seed_for_browser = public_selected + [s for s in signed_in
+                                                      if s not in public_selected]
             else:
                 seed_for_browser = []
                 log("[plan] curated-site queries off for this run")
@@ -1751,8 +2142,12 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                                 include_neural=(use_neural and exa_enabled()),
                                 include_register_forum=True)
             # Stage 2's soft time share: ~60% of whatever gathering window remains.
-            stage2_end = min(gather_deadline,
-                             time.time() + 0.6 * max(0, gather_deadline - time.time()))
+            # When credentialed sites are in play, Stage 2 may NOT extend into the last
+            # quarter of the window: request_extension used to let the lanes run to the
+            # hard deadline and starve the credentialed sweep of any time at all.
+            _win = max(0, gather_deadline - _now())
+            stage2_hard = gather_deadline - (max(60, 0.25 * _win) if (use_sites and have_login) else 0)
+            stage2_end = min(stage2_hard, _now() + 0.6 * _win)
             if stop_event is None or not stop_event.is_set():
                 try:
                     _run_stage2_lanes(
@@ -1760,7 +2155,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                         clarifications=clarifications, governance=governance,
                         listing=_listing(seed_for_browser), focus=focus, tools=tools2,
                         cap2=cap2, pool=pool, depth=depth, stage1_brief=stage1_brief,
-                        stage2_end=stage2_end, gather_deadline=gather_deadline,
+                        stage2_end=stage2_end, gather_deadline=stage2_hard,
                         progress=progress, log=log, notes=notes, skip_event=skip_event,
                         stop_event=stop_event, sources=sources)
                 except Exception as e:  # noqa: BLE001
@@ -1779,47 +2174,28 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         if not use_sites:
             log("[plan] Stage 3 (login-required sites) skipped — curated sites off")
         if credentialed:
-            have_login, need_prompt = [], []
-            for s in credentialed:
-                dom = s["domain"]
-                creds = vault.get(dom) if vault else None
-                if creds and (creds.get("username") or "").strip():
-                    have_login.append(s)
-                else:
-                    need_prompt.append(s)
-                    result.gated_candidates.setdefault(
-                        dom, "login-required site selected as relevant to this query")
             if need_prompt:
                 log(f"[stage3] login-required, no stored login → one-time prompt (Stage 4): "
                     f"{[s['domain'] for s in need_prompt]}")
-            if have_login:
+            if have_login and not (stop_event is not None and stop_event.is_set()):
                 doms = [s["domain"] for s in have_login]
-                progress("stage3", None, f"Logging into: {', '.join(doms)}")
-                for dom in doms:
-                    creds = vault.get(dom) if vault else None
-                    try:
-                        ok, detail = br.ensure_logged_in(dom, creds or {})
-                    except Exception as e:  # noqa: BLE001
-                        ok, detail = False, f"login error: {type(e).__name__}"
-                    if ok:
-                        if dom not in result.logged_in:
-                            result.logged_in.append(dom)
-                        log(f"[stage3] logged in: {dom} ({detail})")
-                    elif "public content only" in detail:
-                        log(f"[stage3] {dom}: not logged in — searching public + reactive login on wall")
-                    else:
-                        _record_login_warning(result, dom, detail)
-                        log(f"[stage3] login could not be completed: {dom} — {detail}")
-                progress("stage3", None, f"Searching: {', '.join(doms)}")
-                br.login_handler = _vault_handler(vault, result, log, "stage3", ephemeral=ephemeral_creds)
-                _guarded_stage(
-                    "stage3",
-                    system=_stage_system("credentialed", governance, _listing(have_login), cap3,
-                                         stage1_brief, pool=pool),
-                    task=task, tools=_tool_defs(include_web_search=False), cap=cap3,
-                    progress=progress, log=log, notes=notes, skip_event=skip_event,
-                    question=query, sources=sources, pool=pool,
-                    deadline=gather_deadline, hard_deadline=gather_deadline)
+                if _now() > gather_deadline - 20:
+                    for dom in doms:
+                        _alert(result, log, dom, "skipped",
+                               "the research window was spent before the dedicated "
+                               "credentialed sweep could start")
+                else:
+                    progress("stage3", None, f"Searching: {', '.join(doms)}")
+                    br.login_handler = _vault_handler(vault, result, log, "stage3",
+                                                      ephemeral=ephemeral_creds)
+                    _guarded_stage(
+                        "stage3",
+                        system=_stage_system("credentialed", governance, _listing(have_login),
+                                             cap3, stage1_brief, pool=pool),
+                        task=task, tools=_tool_defs(include_web_search=False), cap=cap3,
+                        progress=progress, log=log, notes=notes, skip_event=skip_event,
+                        question=query, sources=sources, pool=pool,
+                        deadline=gather_deadline, hard_deadline=gather_deadline)
         else:
             log("[stage3] no login-required sites relevant to this query; skipping")
 
@@ -1833,6 +2209,8 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 if not creds or not (creds.get("username") or "").strip():
                     if dom not in result.skipped_gated:
                         result.skipped_gated.append(dom)
+                    _alert(result, log, dom, "skipped",
+                           "no login was supplied at the prompt — gated content was not read")
                     continue
                 # ONE-TIME credentials: held in memory for this run only, NEVER written to the
                 # vault. (The vault is populated separately + locally; hosted stays credential-free.)
@@ -1855,12 +2233,28 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                     # deadline: credentials the user just typed in must stay usable
                     # even if stages 2-3 drained the clock and the pool.
                     pool={"searches": cap4["searches"], "pages": cap4["pages"]},
-                    deadline=time.time() + 60, hard_deadline=time.time() + 90)
+                    deadline=_now() + 60, hard_deadline=_now() + 90)
         elif result.gated_candidates:
             log(f"[stage4] {len(result.gated_candidates)} gated candidates but no credential prompt; skipping")
+            for dom in list(result.gated_candidates):
+                _alert(result, log, dom, "skipped",
+                       "needs a login and there was no way to ask for one in this run")
     finally:
         if own_browser:
             br.close()
+
+    # Anything the plan selected that was never searched or read → say so, loudly.
+    touched = {normalize_domain(d) for d in result.curated_searched}
+    touched |= {normalize_domain(host_of(it.url)) for it in result.items if it.via != "stage1"}
+    touched.discard("")
+    _halted = stop_event is not None and stop_event.is_set()
+    for s in result.planned_sites:
+        d = s["domain"]
+        if not any(t == d or t.endswith("." + d) or d.endswith("." + t) for t in touched):
+            _alert(result, log, d, "skipped",
+                   "selected by the research plan but never searched or read this run ("
+                   + ("the run was stopped first" if _halted else
+                      "the agents spent the window on other sources") + ")")
 
     result.agent_notes = "\n\n".join(notes)
     if not result.stopped_reason:
@@ -1887,7 +2281,7 @@ def run_gap_round(client, browser, harvest, gaps, governance=None, sources=None,
     progress = progress or (lambda *a, **k: None)
     governance = governance if governance is not None else _load_governance()
     sources = sources if sources is not None else load_sources()
-    seen = {it.url for it in harvest.items}
+    seen = {_canon_url(it.url) for it in harvest.items}
     depth = getattr(harvest, "depth", "standard")
     if cap is None:
         cap = ({"searches": len(gaps) + 6, "pages": 14, "max_turns": 40} if depth == "exhaustive"
@@ -1905,7 +2299,7 @@ def run_gap_round(client, browser, harvest, gaps, governance=None, sources=None,
             "then finish:\n" + "\n".join(f"- {g}" for g in gaps))
     before = len(harvest.items)
     # Soft share for this round: up to 4 min (12 on exhaustive), never past the deadline.
-    soft = time.time() + (720 if depth == "exhaustive" else 240)
+    soft = _now() + (720 if depth == "exhaustive" else 240)
     round_deadline = min(deadline, soft) if deadline else None
     try:
         _run_browser_stage(
@@ -1920,6 +2314,111 @@ def run_gap_round(client, browser, harvest, gaps, governance=None, sources=None,
     except Exception as e:  # noqa: BLE001
         log(f"[deepen] gap round failed: {type(e).__name__}: {e}")
     return len(harvest.items) - before
+
+
+def run_focus_sources(client, browser, harvest, domains, vault=None, ephemeral=None,
+                      governance=None, sources=None, prior_report="", progress=None,
+                      log=None, skip_event=None, stop_event=None, seconds=None,
+                      manual_login=None):
+    """"Add/Fix Specific Sources": a NARROW pass over a handful of named sites — the ones
+    a finished run could not get into or skipped — after the user has supplied logins.
+    No new plan, no baseline sweep, no lanes: sign in to each site, then one sequential
+    sweep of ONLY those sites with the existing report as context. New pages are appended
+    to `harvest` (mutated); the caller re-synthesizes. Returns the number of pages added."""
+    from .login import CredentialVault
+    log = log or (lambda m: None)
+    progress = progress or (lambda *a, **k: None)
+    governance = governance if governance is not None else _load_governance()
+    sources = sources if sources is not None else load_sources()
+    vault = vault or CredentialVault()
+    ephemeral = ephemeral or {}
+    doms = []
+    for d in domains or []:
+        nd = normalize_domain(d)
+        if nd and nd not in doms:
+            doms.append(nd)
+    if not doms:
+        return 0
+
+    def _creds(dom):
+        return ephemeral.get(dom) or (vault.get(dom) if vault else None) or {}
+
+    harvest.planned_sites = [{"domain": d, "login_required": True,
+                              "credentialed": bool((_creds(d).get("username") or "").strip())}
+                             for d in doms]
+    harvest.source_alerts = []          # this pass reports on ITS sites only
+    harvest.native_stats = {}
+    harvest.login_warnings = []
+    harvest.skipped_gated = []
+    harvest.gated_candidates = {}
+    before = len(harvest.items)
+    seen = {_canon_url(it.url) for it in harvest.items}
+    budget_s = seconds or min(600, 150 + 90 * len(doms))
+    deadline = _now() + budget_s
+    log(f"[plan] focused source pass: {', '.join(doms)} · {budget_s}s window")
+
+    _can_nag = (manual_login is not None and getattr(browser, "headed", False)
+                and not getattr(browser, "remote_browser", False))
+    for dom in doms:
+        if stop_event is not None and stop_event.is_set():
+            break
+        c = _creds(dom)
+        has = bool((c.get("username") or "").strip())
+        progress("stage3", None, f"Signing in to {dom}…")
+        try:
+            ok, detail = browser.ensure_logged_in(dom, c if has else {})
+        except Exception as e:  # noqa: BLE001
+            ok, detail = False, f"login error: {type(e).__name__}"
+        if not ok and _can_nag and has:
+            # A login was supplied and still did not get in (2FA / captcha) → ask the user
+            # to finish it by hand rather than scanning the site logged out.
+            progress("stage3", None, f"Waiting for you to sign in to {dom}…")
+            ok, detail = _manual_login_gate(browser, log, dom, detail, manual_login, c)
+        if ok:
+            if dom not in harvest.logged_in:
+                harvest.logged_in.append(dom)
+            log(f"[login] signed in: {dom} ({detail})")
+        elif has:
+            _record_login_warning(harvest, dom, detail, log)
+            log(f"[login] could NOT sign in to {dom} — {detail}")
+        else:
+            log(f"[login] {dom}: no login supplied and no session in the browser — "
+                f"scanning it logged out")
+
+    listing = _listing([{"name": d, "domain": d, "type": "forum"} for d in doms])
+    cap = {"searches": 6 * len(doms) + 4, "pages": 10 * len(doms) + 6, "max_turns": 60}
+    pool = {"searches": cap["searches"] + 6, "pages": cap["pages"] + 10}
+    task = (f"USER RESEARCH QUESTION:\n{harvest.query}\n\n"
+            "FOCUSED SOURCE PASS. A full research run on this question is already finished "
+            "(its report is below). Your ONLY job now is to scour the specific sources listed "
+            "in scope — they were skipped, walled, or unreadable in that run and have just "
+            "been fixed — for material that ADDS TO, CORRECTS, or CONTRADICTS the report. "
+            "Use each site's own search (forum_search) with several phrasings, open the "
+            "strongest threads, read them through (NEXT PAGE links, open_page offset), and "
+            "follow in-site links. Do not re-research what the report already establishes "
+            "and do not wander to other sites. Finish when these sources are exhausted.\n\n"
+            f"EXISTING REPORT (context — do not repeat it):\n{(prior_report or '')[:6000]}")
+    browser.login_handler = _vault_handler(vault, harvest, log, "focus", ephemeral=ephemeral)
+    try:
+        _run_browser_stage(
+            client, browser, harvest, seen, stage_name="focus",
+            system=_stage_system("credentialed", governance, listing, cap, "", pool=pool),
+            task=task, tools=_tool_defs(include_web_search=False), cap=cap,
+            progress=progress, log=log, notes=[], skip_event=skip_event,
+            question=harvest.query, sources=sources, pool=pool,
+            deadline=deadline, hard_deadline=deadline + 120, stop_event=stop_event)
+    except Exception as e:  # noqa: BLE001
+        log(f"[focus] source pass failed: {type(e).__name__}: {e}")
+
+    touched = {normalize_domain(d) for d in harvest.curated_searched}
+    touched |= {normalize_domain(host_of(it.url)) for it in harvest.items[before:]}
+    for d in doms:
+        if not any(t and (t == d or t.endswith("." + d) or d.endswith("." + t)) for t in touched):
+            _alert(harvest, log, d, "skipped",
+                   "the focused pass ended without searching or reading this source")
+    added = len(harvest.items) - before
+    log(f"[pipeline] focused pass done: {added} new page(s) from {', '.join(doms)}")
+    return added
 
 
 # Manual smoke test:  python -m engines.research.agent "your question" [depth]

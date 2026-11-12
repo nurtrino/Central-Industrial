@@ -179,7 +179,7 @@ def health():
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-10-21.refusalfallback",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-12.signal",
                     "sources_hash": _sources_hash(), "providers": providers})
 
 
@@ -379,6 +379,8 @@ _EVENT_KIND_MAP = {
     "lane": "lane",   # parallel-lane planning / lead review / hot-trail dig
     "brightdata": "search", "tavily": "search", "exa": "search", "local-baseline": "search",
     "deepen": "synth", "stage2": "stage", "stage3": "stage", "stage4": "stage",
+    "alert": "alert",   # a plan-selected site failed login / could not be searched / was skipped
+    "pause": "stage", "focus": "stage", "pipeline": "stage",
 }
 
 
@@ -402,6 +404,13 @@ def _push_event(job_id, kind, text):
             job["eseq"] = seq
             evs = job.setdefault("events", [])
             evs.append([seq, kind, str(text or "")[:_EVENT_TEXT_CAP]])
+            if kind == "alert":
+                # Alerts are STICKY: kept on the job (the rolling event buffer is trimmed)
+                # and returned whole on every status poll, so the UI banner cannot miss one.
+                al = job.setdefault("alerts", [])
+                line = re.sub(r"^\s*\[alert\]\s*", "", str(text or ""))[:600]
+                if line not in al:
+                    al.append(line)
             if len(evs) > _EVENT_CAP:
                 del evs[:len(evs) - _EVENT_CAP]
     except Exception:
@@ -834,6 +843,15 @@ def _dr_harvest_to_md(query, h):
         out.append("**⚠ Stored-login warnings:** "
                    + "; ".join(f"{w.get('domain')} — {w.get('detail')}" for w in h.login_warnings)
                    + "\n")
+    if getattr(h, "duplicate_pages", None):
+        out.append(f"**Duplicate pages not counted twice ({len(h.duplicate_pages)}):** "
+                   + "; ".join(f"{d.get('url', '')[:60]} = {d.get('same_as', '')[:60]}"
+                               for d in h.duplicate_pages[:8]) + "\n")
+    ns = getattr(h, "native_stats", None) or {}
+    if ns:
+        out.append("**Sites' own search (worked / returned nothing):** "
+                   + "; ".join(f"{d} {v.get('ok', 0)}/{v.get('empty', 0)}" for d, v in ns.items())
+                   + "\n")
     if getattr(h, "skipped_gated", None):
         out.append(f"**Gated sources skipped** (login failed / needed 2FA): "
                    f"{', '.join(h.skipped_gated)}\n")
@@ -881,7 +899,21 @@ def _dr_wrap_report(query, h, synth_md, ody_md=""):
                        + ody_md.strip())
     synth_md = (synth_md or "").strip()
     warn = ""
-    if getattr(h, "login_warnings", None):
+    alerts = list(getattr(h, "source_alerts", None) or [])
+    if alerts:
+        lab = {"login_failed": "LOGIN FAILED", "unreachable": "COULD NOT SEARCH / NAVIGATE",
+               "skipped": "SKIPPED"}
+        alerts.sort(key=lambda a: (not a.get("credentialed"), a.get("domain", "")))
+        rows = "\n".join(
+            f"> - **{a.get('domain')}**{' (credentialed)' if a.get('credentialed') else ''} — "
+            f"**{lab.get(a.get('kind'), str(a.get('kind')).upper())}**: {a.get('detail')}"
+            for a in alerts)
+        warn = (f"> ⚠ **Source problems this run** — {len({a.get('domain') for a in alerts})} "
+                "site(s) the research plan selected were not fully searched, so their material "
+                "may be missing from this report:\n" + rows +
+                "\n>\n> Use **Add/Fix Specific Sources** (below the report) to supply or correct "
+                "logins and re-scan just these sites.\n\n")
+    elif getattr(h, "login_warnings", None):
         lines = "; ".join(f"**{w.get('domain')}** ({w.get('detail')})" for w in h.login_warnings)
         warn = ("> ⚠ **Stored-login warning:** the tool could not complete the saved login for "
                 + lines + ". Results from those sites may be limited to publicly visible content — "
@@ -899,7 +931,7 @@ def _dr_wrap_report(query, h, synth_md, ody_md=""):
 _DOC_ANALYSIS_CHARS = 40000   # per-file slice fed to the analyst (full text still reaches synthesis)
 
 
-def _analyze_docs(client, query, doc_parts, log=lambda m: None):
+def _analyze_docs(client, query, doc_parts, log=lambda m: None, unverified=False):
     """Distill each uploaded document against the research question — one call per file
     through the wrapped client (Fable 5 at the standard effort). Returns a compact
     combined brief used to ground planning + searching; a file whose analysis fails
@@ -917,6 +949,21 @@ def _analyze_docs(client, query, doc_parts, log=lambda m: None):
         "- SEARCH LEADS (2-4) the file suggests pursuing on the live web.\n"
         "Signal only, no filler. If the file has nothing relevant to the question, say so "
         "in one line.")
+    if unverified:
+        # The Odysseus pre-pass is machine-written from pages nobody has checked — it is
+        # NOT a user attachment and must not be distilled as if its claims were given facts.
+        sys_p = (
+            "You are the intake analyst of a deep web-research tool. Below are NOTES FROM AN "
+            "AUTOMATED PRE-RESEARCH PASS — a fast headless sweep that ran before the real "
+            "research. They are UNVERIFIED: treat every statement as a claim to be checked, "
+            "not a fact. Distill them against the question into a terse brief:\n"
+            "- CLAIMS TO VERIFY (tight bullets, each phrased as a claim — 'the notes say …' — "
+            "with any source the notes name; mark the ones the answer would hinge on).\n"
+            "- ENTITIES & TERMS worth searching (insider vocabulary, model numbers, names).\n"
+            "- OPEN QUESTIONS the notes leave unanswered or answer shakily.\n"
+            "- SEARCH LEADS (2-4) worth pursuing on the live web, including where the notes "
+            "might be WRONG.\n"
+            "Signal only, no filler.")
     for part in doc_parts or []:
         head, _, body = part.partition("\n")
         name = head.strip().strip("[]") or "document"
@@ -939,6 +986,273 @@ def _analyze_docs(client, query, doc_parts, log=lambda m: None):
             log(f"[docs] ✗ analysis failed for {name} ({type(e).__name__}) — using raw excerpt")
         briefs.append(f"### {name} (raw excerpt — analysis unavailable)\n{body[:2000]}")
     return "\n\n".join(briefs)
+
+
+# ── manual sign-in prompt (2FA / passkey / captcha sites) ─────────────────────────────
+_DR_MANUAL = {}     # job_id -> threading.Event (user pressed Continue / Skip)
+_MANUAL_LOGIN_WAIT_S = 600
+
+
+def _make_manual_login(job_id, stop_ev):
+    """Build the blocking callback the engine calls when a plan-selected credentialed site
+    needs the USER to sign in. It flags the job (the UI shows the sign-in panel and nags),
+    then waits until the session appears in the browser, the user answers, or 10 minutes
+    pass. Returns 'signed_in' | 'continue' | 'skip' | 'timeout'."""
+    import time as _t
+
+    def _cb(domain, detail, check):
+        ev = _DR_MANUAL.setdefault(job_id, threading.Event())
+        ev.clear()
+        with _JOBS_LOCK:
+            job = _JOBS.get(job_id)
+            if job is None:
+                return "skip"
+            job["awaiting_manual_login"] = {"domain": domain, "detail": str(detail or "")[:300]}
+            job["manual_login_decision"] = None
+            job["message"] = f"Waiting for you to sign in to {domain}…"
+        decision, t_end = "timeout", _t.time() + _MANUAL_LOGIN_WAIT_S
+        while _t.time() < t_end:
+            if stop_ev.is_set():
+                decision = "skip"
+                break
+            try:
+                if check():
+                    decision = "signed_in"
+                    break
+            except Exception:
+                pass
+            if ev.wait(timeout=2.5):
+                with _JOBS_LOCK:
+                    decision = (_JOBS.get(job_id) or {}).get("manual_login_decision") or "continue"
+                break
+        with _JOBS_LOCK:
+            if job_id in _JOBS:
+                _JOBS[job_id]["awaiting_manual_login"] = None
+        return decision
+    return _cb
+
+
+# ── finished runs kept in memory for "Add/Fix Specific Sources" ───────────────────────
+_DR_KEEP = {}            # job_id -> {"h", "cache", "gov", "category", "doc_context", …}
+_DR_KEEP_MAX = 4
+
+
+def _dr_keep(job_id, state):
+    with _JOBS_LOCK:
+        _DR_KEEP[job_id] = state
+        while len(_DR_KEEP) > _DR_KEEP_MAX:
+            _DR_KEEP.pop(next(iter(_DR_KEEP)))
+
+
+def _dr_fixable(h):
+    """Sites worth offering in the Add/Fix Specific Sources panel after this run."""
+    out, seen = [], set()
+
+    def add(dom, why):
+        d = (dom or "").strip().lower()
+        if d and d not in seen:
+            seen.add(d)
+            out.append({"domain": d, "reason": why})
+    lab = {"login_failed": "login failed", "unreachable": "could not be searched",
+           "skipped": "skipped"}
+    for a in (getattr(h, "source_alerts", None) or []):
+        add(a.get("domain"), f"{lab.get(a.get('kind'), a.get('kind'))} — {a.get('detail', '')[:160]}")
+    for w in (getattr(h, "login_warnings", None) or []):
+        add(w.get("domain"), f"login failed — {w.get('detail', '')[:160]}")
+    for d, r in (getattr(h, "gated_candidates", None) or {}).items():
+        add(d, f"needs a login — {r}")
+    for d in (getattr(h, "skipped_gated", None) or []):
+        add(d, "gated — skipped")
+    return out
+
+
+def _dr_finalize(job_id, client, query, h, report_md_synth, synth_error, ody_report,
+                 log_fn, prog, focus=False):
+    """Shared tail of a run: synthesis-failure note → 'how to go deeper' → usage →
+    audit wrap → docx → title → auto-save. Returns the result dict for the UI."""
+    if synth_error is not None:
+        detail = str(synth_error).strip()
+        if "credit balance is too low" in detail.lower():
+            hint = ("the Anthropic API account is **out of credits** — top up at "
+                    "console.anthropic.com → Plans & Billing, then re-run")
+        else:
+            hint = "re-run once the API is reachable"
+        report_md_synth = (
+            f"> ⚠️ **Report synthesis was interrupted** ({type(synth_error).__name__}); "
+            f"{hint}. The web harvest completed and the gathered sources are preserved below.\n>\n"
+            f"> _Detail: {detail[:300]}_\n\n"
+            + (report_md_synth or "")
+        )
+
+    go_deeper = ""
+    if client and report_md_synth and synth_error is None:
+        try:
+            from engines.research.synthesize import deeper_assessment
+            go_deeper = (deeper_assessment(client, query, report_md_synth, h,
+                                           log=log_fn) or "").strip()
+        except Exception:
+            go_deeper = ""
+        if go_deeper:
+            report_md_synth = report_md_synth + "\n\n" + go_deeper
+
+    prog("report", None, "Assembling report…")
+    try:      # real spend for the audit (ClaudeClient counts every call's usage)
+        h.usage = client.usage_summary() if hasattr(client, "usage_summary") else None
+        if h.usage:
+            log_fn(f"[synth] API usage this run ≈ ${h.usage['total_usd']:.2f} "
+                   f"({h.usage['totals']['input']//1000}K in, "
+                   f"{h.usage['totals']['cache_read']//1000}K cached, "
+                   f"{h.usage['totals']['output']//1000}K out)")
+    except Exception:
+        h.usage = None
+    report_md, docx_md = _dr_wrap_report(query, h, report_md_synth, ody_md=ody_report)
+    try:
+        docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()
+    except Exception:
+        docx_b64 = ""
+    title = _report_title(query, report_md_synth, client) if client else _report_title(query)
+    log_fn(f"[synth] title: {title}")
+    sources = [{"title": it.title, "url": it.url, "type": it.source_type,
+                "chars": len(it.text)} for it in h.items if it.via != "stage1"]
+    return {"query": query, "title": title, "report_md": report_md, "sources": sources,
+            "source_count": len(sources), "docx_b64": docx_b64,
+            "saved_path": _autosave_report(docx_b64, query, "Deep Research", title=title),
+            "go_deeper_md": go_deeper,
+            "odysseus_report_md": ody_report,
+            "discovered_forums": getattr(h, "discovered_forums", []) or [],
+            "category": getattr(h, "category", ""),
+            "plan": getattr(h, "plan", {}),
+            "job_id": job_id, "focus": bool(focus),
+            "report_md_synth": report_md_synth,
+            "source_alerts": list(getattr(h, "source_alerts", None) or []),
+            "fixable_sources": _dr_fixable(h),
+            "stats": {"searches": h.searches_used, "pages": h.pages_used,
+                      "category": getattr(h, "category", "") or "general",
+                      "stopped": h.stopped_reason}}
+
+
+DR_FOCUS_STAGES = ["stage3", "synthesize", "report"]
+
+
+def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report, provider):
+    """"Add/Fix Specific Sources": a narrow pass over the named sites, then the report is
+    re-synthesized from the ORIGINAL harvest plus the new pages (when the original run is
+    still in memory) — or an addendum is appended to the existing report (when it is not)."""
+    job = _JOBS[job_id]
+    skip_ev = _DR_SKIP[job_id]
+    stop_ev = _DR_STOP[job_id]
+
+    def prog(stage, pct, message):
+        with _JOBS_LOCK:
+            job["stage"] = stage
+            job["pct"] = pct
+            job["message"] = message
+        _push_event(job_id, "stage", message)
+
+    log_fn = lambda m: _push_event(job_id, _event_kind(m), m)  # noqa: E731
+    try:
+        from engines.research.agent import (run_focus_sources, HarvestResult, _load_governance,
+                                            RUN_CLOCK as _rc)
+        from engines.research.browser import DRTBrowser
+        from engines.research.synthesize import synthesize, classify_category
+        from engines.research.llm import make_client, is_local, LocalLLMUnavailable
+        _rc.reset()
+
+        def _stop():
+            stop_ev.set()
+            with _JOBS_LOCK:
+                job["stop_mode"] = "assemble"
+
+        if is_local(provider):
+            try:
+                client = make_client("local")
+            except LocalLLMUnavailable as e:
+                with _JOBS_LOCK:
+                    job["error"] = str(e); job["done"] = True
+                return
+        else:
+            client = make_client("claude", os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+                                 log=log_fn, on_stop=_stop)
+
+        with _JOBS_LOCK:
+            kept = _DR_KEEP.get(prior_job)
+        if kept:
+            h, cache = kept["h"], kept["cache"]
+            gov = kept.get("gov") or _load_governance()
+            category = kept.get("category") or ""
+            doc_context, clar = kept.get("doc_context") or "", kept.get("clarifications") or ""
+            ody_report = kept.get("ody_report") or ""
+            prev_synth = kept.get("report_md_synth") or ""
+            log_fn(f"[plan] extending the earlier run's harvest ({len(h.items)} items in memory)")
+        else:
+            h, cache = HarvestResult(query=query, depth="standard"), {}
+            gov, category, doc_context, clar, ody_report = _load_governance(), "", "", "", ""
+            prev_synth = prior_report
+            log_fn("[plan] the earlier run is no longer in memory — the new sources will be "
+                   "written up as an addendum to the existing report")
+
+        prog("stage3", None, f"Focused pass: {', '.join(domains)}")
+        br = DRTBrowser(log=log_fn).start()
+        report_md_synth, synth_error, added = prev_synth, None, 0
+        try:
+            added = run_focus_sources(client, br, h, domains, ephemeral=ephemeral, governance=gov,
+                                      prior_report=prev_synth or prior_report, progress=prog,
+                                      log=log_fn, skip_event=skip_ev, stop_event=stop_ev,
+                                      manual_login=_make_manual_login(job_id, stop_ev))
+        finally:
+            try:
+                br.close()
+            except Exception:
+                pass
+        if stop_ev.is_set() and (job.get("stop_mode") == "abort"):
+            with _JOBS_LOCK:
+                job["aborted"] = True; job["message"] = "Stopped — discarded."
+                job["done"] = True
+            return
+        if added:
+            try:
+                prog("synthesize", None, f"Folding {added} new page(s) into the report…")
+                if kept:
+                    category = category or classify_category(client, query)
+                    synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
+                                       category=category, user_docs=doc_context, log=log_fn,
+                                       context=clar, prior_research=ody_report)
+                    report_md_synth = synth.get("report_md", "") or prev_synth
+                else:
+                    synth = synthesize(
+                        h, gov, client, progress=prog, nugget_cache=cache, category="general",
+                        log=log_fn,
+                        user_docs="[Existing report from the earlier run]\n" + (prior_report or ""),
+                        context=("ADDENDUM MODE. The existing report is supplied as a user "
+                                 "document. Write ONLY an addendum headed '## Addendum — newly "
+                                 "added sources': what the numbered sources below ADD to, CORRECT "
+                                 "or CONTRADICT in that report. Do not restate the report."))
+                    add_md = (synth.get("report_md", "") or "").strip()
+                    report_md_synth = ((prior_report or "").strip() + "\n\n---\n\n" + add_md).strip()
+            except Exception as e:  # noqa: BLE001
+                synth_error = e
+        else:
+            log_fn("[synth] the focused pass added no new pages — the report is unchanged")
+            report_md_synth = ((prev_synth or "").strip()
+                               + "\n\n> _Add/Fix Specific Sources pass ("
+                               + ", ".join(domains) + "): no new readable material was found._")
+
+        result = _dr_finalize(job_id, client, query, h, report_md_synth, synth_error,
+                              ody_report, log_fn, prog, focus=True)
+        result["focus_added"] = added
+        result["focus_domains"] = list(domains)
+        _dr_keep(job_id, {"h": h, "cache": cache, "gov": gov, "category": category,
+                          "doc_context": doc_context, "clarifications": clar,
+                          "ody_report": ody_report, "report_md_synth": report_md_synth,
+                          "query": query})
+        with _JOBS_LOCK:
+            job["result"] = result
+            job["stage"] = "report"; job["pct"] = 100; job["message"] = "Done"
+            job["done"] = True
+    except Exception:
+        with _JOBS_LOCK:
+            job["error"] = traceback.format_exc()
+            job["done"] = True
 
 
 def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overrides=None,
@@ -979,6 +1293,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         from engines.research.llm import make_client, is_local, LocalLLMUnavailable
         gov = _load_governance()
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        from engines.research.agent import RUN_CLOCK as _rc
+        _rc.reset()          # a fresh, un-paused research clock for this run
         # Refusal hook: if Claude declines (safety refusal), pause the pipeline right
         # there, flag the UI, and wait (up to 10 min) for the user's choice. "local"
         # → the wrapper swaps to LM Studio and RESUMES from the refused call; "abort"
@@ -1039,11 +1355,13 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         else:
             log_fn("[ody] Odysseus pre-research skipped (local model run)" if is_local(provider)
                    else "[ody] Odysseus pre-research skipped")
-        if ody_report:
-            ody_part = ("[Odysseus pre-research findings]\n"
-                        + _truncate_words(ody_report, _DOC_WORD_CAP))
-            doc_parts = list(doc_parts or []) + [ody_part]
-            doc_context = (doc_context + "\n\n" + ody_part).strip() if doc_context else ody_part
+        # 2026-11: the pre-pass is NO LONGER merged into the user's documents. It used to
+        # reach synthesis labelled "trusted material the user uploaded … authoritative",
+        # and the lanes were told to corroborate "the uploaded document" — so unchecked
+        # claims from a headless sweep were both the prior to confirm and citable-free
+        # report content. It now travels separately, marked UNVERIFIED, everywhere.
+        ody_part = (("[Automated pre-research notes]\n" + _truncate_words(ody_report, _DOC_WORD_CAP))
+                    if ody_report else "")
 
         # ── Uploaded documents: extract → parse (done at POST) → ANALYZE here.
         # Each file is distilled against the question (facts, entities, open questions,
@@ -1063,6 +1381,17 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             else:
                 clar = (clar + "\n\nSUPPORTING DOCUMENT EXCERPTS (user-provided):\n"
                         + doc_context).strip()
+        if ody_part:
+            ody_brief = ""
+            if client:
+                prog("stage1", None, "Distilling the pre-research notes into leads…")
+                ody_brief = _analyze_docs(client, query, [ody_part], log=log_fn, unverified=True)
+            clar = (clar + "\n\nAUTOMATED PRE-RESEARCH LEADS — UNVERIFIED. A fast headless pass "
+                    "wrote these before this run. They are NOT the user's material and NOT "
+                    "established facts: use them for vocabulary, entities and places to look, "
+                    "then VERIFY OR REFUTE each claim against pages you actually open — and "
+                    "report it plainly when the evidence contradicts them:\n"
+                    + (ody_brief or ody_part[:3000])).strip()
 
         prog("stage1", None, "Starting…")
         br = DRTBrowser(log=log_fn).start()
@@ -1075,12 +1404,13 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             from engines.research.agent import DEPTH_BUDGETS as _DB, normalize_depth as _nd
             depth = _nd(depth)
             _b = _DB[depth]
-            run_deadline = _time.time() + _b["seconds"]
+            run_deadline = _rc.now() + _b["seconds"]     # RUN_CLOCK: a pause freezes it
             h = run_search(query, depth=depth, clarifications=clar, browser=br,
                            progress=prog, log=log_fn,
                            request_credentials=request_credentials, skip_event=skip_ev,
                            channel_overrides=channel_overrides, client=client, provider=provider,
-                           deadline=run_deadline - _b["reserve"], stop_event=stop_ev)
+                           deadline=run_deadline - _b["reserve"], stop_event=stop_ev,
+                           manual_login=_make_manual_login(job_id, stop_ev))
             # User pressed STOP and chose "start a new query" → discard, no report.
             if stop_ev.is_set() and (job.get("stop_mode") == "abort"):
                 with _JOBS_LOCK:
@@ -1089,13 +1419,15 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                 return
             if stop_ev.is_set():
                 log_fn("[stop] assembling report from what was gathered before stop…")
-            if client and (h.items or doc_context):
+            if client and (h.items or doc_context or ody_report):
                 try:
+                    _rc.wait_if_paused(stop_ev, log_fn, "before synthesis")
                     prog("synthesize", None, "Synthesizing the report…")
                     category = getattr(h, "category", "") or classify_category(client, query)
                     cache = {}
                     synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
-                                       category=category, user_docs=doc_context, log=log_fn)
+                                       category=category, user_docs=doc_context, log=log_fn,
+                                       context=clarifications, prior_research=ody_report)
                     report_md_synth = synth.get("report_md", "")
                     h.category = category
                     extra = DEEPEN_ROUNDS.get(depth, 1)
@@ -1104,7 +1436,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                             break     # user stopped — no extra gathering, just synthesize
                         if skip_ev.is_set():
                             skip_ev.clear(); break
-                        if _time.time() > run_deadline - 75:
+                        _rc.wait_if_paused(stop_ev, log_fn, "deepening")
+                        if _rc.now() > run_deadline - 75:
                             log_fn("[synth] time window spent — skipping further deepening")
                             break
                         stop, reason = stop_judge(client, query, report_md_synth, log=log_fn)
@@ -1121,7 +1454,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                         if not added:
                             break
                         synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
-                                           category=category, user_docs=doc_context, log=log_fn)
+                                           category=category, user_docs=doc_context, log=log_fn,
+                                           context=clarifications, prior_research=ody_report)
                         report_md_synth = synth.get("report_md", "")
                 except Exception as e:  # noqa: BLE001 — preserve the harvest
                     synth_error = e
@@ -1132,65 +1466,13 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             except Exception:
                 pass
 
-        if synth_error is not None:
-            detail = str(synth_error).strip()
-            if "credit balance is too low" in detail.lower():
-                hint = ("the Anthropic API account is **out of credits** — top up at "
-                        "console.anthropic.com → Plans & Billing, then re-run")
-            else:
-                hint = "re-run once the API is reachable"
-            report_md_synth = (
-                f"> ⚠️ **Report synthesis was interrupted** ({type(synth_error).__name__}); "
-                f"{hint}. The web harvest completed and the gathered sources are preserved below.\n>\n"
-                f"> _Detail: {detail[:300]}_\n\n"
-                + (report_md_synth or "")
-            )
-
-        # "How to go deeper" assessment — appended to the report (display + docx)
-        # and surfaced separately for the UI's framed panel. Best-effort.
-        go_deeper = ""
-        if client and report_md_synth and synth_error is None:
-            try:
-                from engines.research.synthesize import deeper_assessment
-                go_deeper = (deeper_assessment(client, query, report_md_synth, h,
-                                               log=log_fn) or "").strip()
-            except Exception:
-                go_deeper = ""
-            if go_deeper:
-                report_md_synth = report_md_synth + "\n\n" + go_deeper
-
-        prog("report", None, "Assembling report…")
-        try:      # real spend for the audit (ClaudeClient counts every call's usage)
-            h.usage = client.usage_summary() if hasattr(client, "usage_summary") else None
-            if h.usage:
-                log_fn(f"[synth] API usage this run ≈ ${h.usage['total_usd']:.2f} "
-                       f"({h.usage['totals']['input']//1000}K in, "
-                       f"{h.usage['totals']['cache_read']//1000}K cached, "
-                       f"{h.usage['totals']['output']//1000}K out)")
-        except Exception:
-            h.usage = None
-        report_md, docx_md = _dr_wrap_report(query, h, report_md_synth, ody_md=ody_report)
-        try:
-            docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()
-        except Exception:
-            docx_b64 = ""
-        # Subject-appropriate document title (one cheap call) → the saved filename,
-        # the Save & open button, and the results header.
-        title = _report_title(query, report_md_synth, client) if client else _report_title(query)
-        log_fn(f"[synth] title: {title}")
-        sources = [{"title": it.title, "url": it.url, "type": it.source_type,
-                    "chars": len(it.text)} for it in h.items if it.via != "stage1"]
-        result = {"query": query, "title": title, "report_md": report_md, "sources": sources,
-                  "source_count": len(sources), "docx_b64": docx_b64,
-                  "saved_path": _autosave_report(docx_b64, query, "Deep Research", title=title),
-                  "go_deeper_md": go_deeper,
-                  "odysseus_report_md": ody_report,
-                  "discovered_forums": getattr(h, "discovered_forums", []) or [],
-                  "category": getattr(h, "category", ""),
-                  "plan": getattr(h, "plan", {}),
-                  "stats": {"searches": h.searches_used, "pages": h.pages_used,
-                            "category": getattr(h, "category", "") or "general",
-                            "stopped": h.stopped_reason}}
+        result = _dr_finalize(job_id, client, query, h, report_md_synth, synth_error,
+                              ody_report, log_fn, prog)
+        # Keep this run's harvest so "Add/Fix Specific Sources" can extend it later.
+        _dr_keep(job_id, {"h": h, "cache": cache if "cache" in dir() else {}, "gov": gov,
+                          "category": getattr(h, "category", ""), "doc_context": doc_context,
+                          "clarifications": clarifications, "ody_report": ody_report,
+                          "report_md_synth": report_md_synth, "query": query})
         with _JOBS_LOCK:
             job["result"] = result
             job["stage"] = "report"; job["pct"] = 100; job["message"] = "Done"
@@ -1296,6 +1578,9 @@ def deep_research_status():
             "awaiting_refusal_choice": job.get("awaiting_refusal_choice"),
             "events": [e for e in (job.get("events") or []) if e[0] > after],
             "eseq": job.get("eseq", 0),
+            "alerts": list(job.get("alerts") or []),
+            "paused": bool(job.get("paused")),
+            "awaiting_manual_login": job.get("awaiting_manual_login"),
         }
         payload["aborted"] = bool(job.get("aborted"))
         if job["done"] and not job["error"]:
@@ -1341,6 +1626,14 @@ def deep_research_stop():
     ev = _DR_STOP.get(job_id)
     if ev:
         ev.set()
+    try:                            # a paused run must be released to act on the stop
+        from engines.research.agent import RUN_CLOCK
+        RUN_CLOCK.resume()
+        with _JOBS_LOCK:
+            if job_id in _JOBS:
+                _JOBS[job_id]["paused"] = False
+    except Exception:
+        pass
     skip = _DR_SKIP.get(job_id)     # break the current stage promptly too
     if skip:
         skip.set()
@@ -1348,6 +1641,125 @@ def deep_research_stop():
     if cred:
         cred.set()
     return jsonify({"ok": True, "mode": mode})
+
+
+@app.route("/api/deep_research/manual_login", methods=["POST", "OPTIONS"])
+def deep_research_manual_login():
+    """Answer the manual sign-in prompt. Body `decision`: 'continue' (I have signed in) |
+    'skip' (leave this site out — it is then flagged in the report, never dropped quietly)."""
+    if request.method == "OPTIONS":
+        return "", 204
+    job_id = request.args.get("job", "") or (request.form.get("job") or "")
+    data = request.get_json(silent=True) or {}
+    decision = (data.get("decision") or "continue").strip().lower()
+    if decision not in ("continue", "skip"):
+        decision = "continue"
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return jsonify({"error": "unknown job"}), 404
+        job["manual_login_decision"] = decision
+    ev = _DR_MANUAL.get(job_id)
+    if ev:
+        ev.set()
+    return jsonify({"ok": True, "decision": decision})
+
+
+@app.route("/api/deep_research/pause", methods=["POST", "OPTIONS"])
+def deep_research_pause():
+    """PAUSE / RESUME a running job. Body `mode`: 'pause' | 'resume'. Pausing freezes the
+    research clock (engines.research.agent.RUN_CLOCK) and holds every agent at its next
+    step boundary; nothing gathered is discarded and the browser session stays open."""
+    if request.method == "OPTIONS":
+        return "", 204
+    job_id = request.args.get("job", "") or (request.form.get("job") or "")
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or request.args.get("mode") or "pause").strip().lower()
+    from engines.research.agent import RUN_CLOCK
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return jsonify({"error": "unknown job"}), 404
+        job["paused"] = (mode != "resume")
+    if mode == "resume":
+        RUN_CLOCK.resume()
+        _push_event(job_id, "stage", "[pause] resumed by user")
+    else:
+        RUN_CLOCK.pause()
+        _push_event(job_id, "stage", "[pause] paused by user — finishing the step in flight, "
+                                     "then holding. Everything gathered so far is kept.")
+    return jsonify({"ok": True, "paused": mode != "resume"})
+
+
+@app.route("/api/deep_research/focus_sources", methods=["POST", "OPTIONS"])
+def deep_research_focus_sources():
+    """"Add/Fix Specific Sources": start a NARROW follow-up pass over named sites.
+    JSON: {query, domains: [...], credentials: {domain: {username, password, login_url,
+    save}}, prior_job, prior_report, provider}. Logins flagged `save` go to the local
+    vault (local app only); the rest are used for this pass and discarded."""
+    if request.method == "OPTIONS":
+        return "", 204
+    data = request.get_json(silent=True) or {}
+    query = (data.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+    from engines.research.login import normalize_domain, CredentialVault
+    domains = []
+    for d in (data.get("domains") or []):
+        nd = normalize_domain(str(d))
+        if nd and nd not in domains:
+            domains.append(nd)
+    if not domains:
+        return jsonify({"error": "name at least one site to scan"}), 400
+    domains = domains[:8]
+    ephemeral, saved = {}, []
+    hosted = _is_hosted_instance()
+    for dom, c in (data.get("credentials") or {}).items():
+        nd = normalize_domain(str(dom))
+        if nd not in domains or not isinstance(c, dict):
+            continue
+        user = (c.get("username") or "").strip()
+        if not user:
+            continue
+        entry = {"username": user, "password": c.get("password") or "",
+                 "login_url": (c.get("login_url") or "").strip()}
+        ephemeral[nd] = entry
+        if c.get("save") and not hosted:
+            try:
+                CredentialVault().set(nd, entry["username"], entry["password"], entry["login_url"])
+                saved.append(nd)
+                # …and make sure the site is on the source list (🔴 login-required), or no
+                # future research plan could ever select it.
+                with open(_DR_SOURCES_PATH, encoding="utf-8-sig") as fh:
+                    cfg = json.load(fh)
+                lst = cfg.get("sources", []) if isinstance(cfg, dict) else cfg
+                known = {normalize_domain(str(x.get("url") or x.get("domain") or ""))
+                         for x in lst if isinstance(x, dict)}
+                if nd not in known:
+                    lst.append({"url": nd, "login_required": True, "note": ""})
+                    with open(_DR_SOURCES_PATH, "w", encoding="utf-8") as fh:
+                        json.dump(cfg if isinstance(cfg, dict) else lst, fh, indent=2,
+                                  ensure_ascii=False)
+            except Exception:
+                pass
+    job_id = os.urandom(8).hex()
+    with _JOBS_LOCK:
+        _JOBS[job_id] = {
+            "stage": "stage3", "pct": None, "message": "Starting the focused source pass…",
+            "done": False, "error": None, "result": None,
+            "awaiting_credentials": None, "submitted_credentials": None,
+            "events": [], "eseq": 0,
+        }
+    _DR_EVENTS[job_id] = threading.Event()
+    _DR_SKIP[job_id] = threading.Event()
+    _DR_STOP[job_id] = threading.Event()
+    _DR_REFUSAL[job_id] = threading.Event()
+    threading.Thread(target=_dr_focus_worker,
+                     args=(job_id, query, domains, ephemeral, (data.get("prior_job") or ""),
+                           (data.get("prior_report") or ""),
+                           (data.get("provider") or "claude").strip().lower()),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "stages": DR_FOCUS_STAGES, "saved": saved}), 202
 
 
 @app.route("/api/deep_research/refusal_choice", methods=["POST", "OPTIONS"])
@@ -1982,6 +2394,9 @@ def odysseus_research_status():
             "stats": job.get("stats", {}), "done": job["done"], "error": job["error"],
             "events": [e for e in (job.get("events") or []) if e[0] > after],
             "eseq": job.get("eseq", 0),
+            "alerts": list(job.get("alerts") or []),
+            "paused": bool(job.get("paused")),
+            "awaiting_manual_login": job.get("awaiting_manual_login"),
         }
         if job["done"] and not job["error"]:
             payload["result"] = job["result"]

@@ -284,6 +284,21 @@
     .dr-skip-note { margin-top: 16px; font-size: 12px; color: var(--text-muted); }
     /* stop control + two-choice panel */
     .dr-run-controls { margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    /* source alerts: a plan-selected site failed login / could not be searched / was skipped */
+    .dr-alert-banner { border: 1px solid #b04a4a; background: rgba(255,107,107,.13); color: #ffd6d6;
+      border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; line-height: 1.5; }
+    .dr-alert-banner .dr-alert-head { font-weight: 700; color: #ff9c9c; margin-bottom: 6px; letter-spacing: .02em; }
+    .dr-alert-banner ul { margin: 0; padding-left: 18px; }
+    .dr-alert-banner li { margin: 3px 0; }
+    .dr-alert-banner .dr-alert-foot { margin-top: 8px; color: #e6b3b3; font-size: 12px; }
+    .ak-alert { color: #ff9c9c; font-weight: 700; background: rgba(255,107,107,.10); }
+    .ak-alert .act-g { color: #ff6b6b; }
+    .dr-pause-btn { padding: 8px 18px; border-radius: 8px; background: rgba(240,190,90,.12);
+      color: #f0c674; border: 1px solid #7a6230; font-family: inherit; font-size: 12.5px; cursor: pointer; }
+    .dr-pause-btn:hover { border-color: #f0c674; background: rgba(240,190,90,.2); }
+    .dr-fix-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1.2fr auto; gap: 8px; align-items: start; margin-bottom: 10px; }
+    .dr-fix-reason { grid-column: 1 / -1; font-size: 11.5px; color: var(--text-muted); margin-top: -4px; }
+    @media (max-width: 900px) { .dr-fix-row { grid-template-columns: 1fr 1fr; } }
     .dr-run-controls .dr-skip-btn { margin-top: 0; }
     .dr-stop-btn {
       padding: 8px 18px; border-radius: 8px; background: rgba(255,107,107,.12);
@@ -644,6 +659,7 @@ const ACT_KINDS = {
   forum:   { g: '☗', cls: 'ak-forum' },
   stage:   { g: '⚑', cls: 'ak-stage' },
   login:   { g: '🔑', cls: 'ak-login' },
+  alert:   { g: '⚠', cls: 'ak-alert' },    // a plan-selected site failed / was skipped
   plan:    { g: '≡', cls: 'ak-plan' },
   ody:     { g: '~', cls: 'ak-ody' },
   act:     { g: '→', cls: 'ak-open' },     // every tool call as it fires
@@ -721,6 +737,7 @@ function _actAfter(owner) {
                 clarify: null, clarAns: {}, sources: null, srcOpen: false,
                 provider: 'claude', localModel: null, localErr: false,
                 deeperOpen: false, deeperFiles: [], deeperQuery: '',
+                alerts: [], paused: false, fixOpen: false, fixRows: [], _lastStart: null,
                 extractOpen: false, extractUrl: '', extractMode: 'scrape', extractLimit: 25,
                 extractBusy: false, extractResult: null, extractError: null,
                 extractMsg: '', extractPct: null, _extractGen: 0,
@@ -1013,6 +1030,7 @@ function _actAfter(owner) {
       ${_goDeeperMdPanel(d)}
       ${_forumsPanelHtml(d.discovered_forums, 'dr')}
       ${_drDeeperPanel()}
+      ${_drFixPanel()}
       ${_drExtractPanel()}`;
   }
 
@@ -1100,8 +1118,14 @@ function _actAfter(owner) {
             <div class="dr-deeper-cta-title">Go deeper?</div>
             <div class="dr-deeper-cta-sub">Re-run the full research with this memo as context —
               restate or sharpen the question and add any new materials to push the next pass further.</div>
+            <div class="dr-deeper-cta-sub" style="margin-top:6px"><strong>Add/Fix Specific Sources</strong> is the
+              narrow option: give logins for forums or sites that were skipped or walled${_drFixCount() ? ` (${_drFixCount()} flagged in this run)` : ''},
+              and only those sources are scanned — the findings are folded into this report. No new research plan.</div>
           </div>
-          <button class="dr-run-btn" onclick="drGoDeeperOpen()">Go deeper →</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="dr-run-btn" onclick="drGoDeeperOpen()">Go deeper →</button>
+            <button class="dr-run-btn dr-run-secondary" onclick="drFixOpen()">Add/Fix Specific Sources →</button>
+          </div>
         </div>`;
     }
     const depths = [
@@ -1203,6 +1227,75 @@ function _actAfter(owner) {
     _dr.data = null;
     _dr.deeperOpen = false;
     drStartJob('');
+  }
+
+  // ── Add/Fix Specific Sources: logins for skipped/walled sites → narrow re-scan ──
+  function _drFixCount() {
+    const d = _dr.data || {};
+    return (d.fixable_sources || []).length;
+  }
+  function drFixOpen() {
+    const d = _dr.data || {};
+    _dr.fixRows = (d.fixable_sources || []).map(f => ({
+      domain: f.domain, reason: f.reason || '', username: '', password: '', login_url: '', save: true }));
+    if (!_dr.fixRows.length) _dr.fixRows.push({ domain: '', reason: '', username: '', password: '', login_url: '', save: true });
+    _dr.fixOpen = true; _dr.deeperOpen = false;
+    _drRender();
+    setTimeout(() => { const el = document.getElementById('dr-fix-box'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 50);
+  }
+  function drFixClose() { _dr.fixOpen = false; _drRender(); }
+  function drFixSet(i, k, v) { if (_dr.fixRows[i]) _dr.fixRows[i][k] = v; }
+  function drFixAdd() { _dr.fixRows.push({ domain: '', reason: '', username: '', password: '', login_url: '', save: true }); _drRender(); }
+  function drFixRemove(i) { _dr.fixRows.splice(i, 1); _drRender(); }
+  function _drFixPanel() {
+    if (!_dr.fixOpen) return '';
+    const hosted = _drIsHosted();
+    const rows = _dr.fixRows.map((r, i) => `
+      <div class="dr-fix-row">
+        <input class="dr-src-in" placeholder="forum.example.com" value="${_esc(r.domain)}" oninput="drFixSet(${i},'domain',this.value)">
+        <input class="dr-src-in" placeholder="username / email" value="${_esc(r.username)}" autocomplete="off" oninput="drFixSet(${i},'username',this.value)">
+        <input class="dr-src-in" type="password" placeholder="password" value="${_esc(r.password)}" autocomplete="new-password" oninput="drFixSet(${i},'password',this.value)">
+        <input class="dr-src-in" placeholder="login page URL (optional)" value="${_esc(r.login_url)}" oninput="drFixSet(${i},'login_url',this.value)">
+        <button class="dr-src-del" onclick="drFixRemove(${i})" title="Remove this site">✕</button>
+        ${r.reason ? `<div class="dr-fix-reason">⚠ ${_esc(r.reason)}</div>` : ''}
+        ${hosted ? '' : `<label class="dr-fix-reason" style="cursor:pointer"><input type="checkbox" ${r.save ? 'checked' : ''} onchange="drFixSet(${i},'save',this.checked)"> save this login to my local vault and add the site to my source list</label>`}
+      </div>`).join('');
+    return `
+      <div class="dr-deeper-box" id="dr-fix-box">
+        <div class="dr-refine-head">Add / fix specific sources</div>
+        <div class="dr-deeper-cta-sub" style="margin-bottom:14px">List the forums or sites to scan and, where they need one, the login.
+          The tool signs in, searches <em>only these sources</em> for material on the same question, and folds what it finds into
+          this report. A site with no login filled in is scanned logged out. This does not build a new research plan — use
+          <strong>Go deeper</strong> for that.</div>
+        ${rows}
+        <div class="dr-src-actions" style="margin-top:4px">
+          <button class="dr-src-btn" onclick="drFixAdd()">+ Add another site</button>
+        </div>
+        <div class="dr-run-row" style="margin-top:14px">
+          <button class="dr-run-btn" onclick="drRunFix()">Scan these sources →</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drFixClose()">Cancel</button>
+          <span id="dr-fix-msg" class="dr-src-msg"></span>
+        </div>
+      </div>`;
+  }
+  function drRunFix() {
+    const d = _dr.data || {};
+    const msg = document.getElementById('dr-fix-msg');
+    const rows = _dr.fixRows.filter(r => (r.domain || '').trim());
+    if (!rows.length) { if (msg) { msg.textContent = 'Enter at least one site'; msg.style.color = '#ff8888'; } return; }
+    const credentials = {};
+    rows.forEach(r => {
+      if ((r.username || '').trim())
+        credentials[r.domain.trim()] = { username: r.username.trim(), password: r.password || '',
+                                         login_url: (r.login_url || '').trim(), save: !!r.save };
+    });
+    const payload = { query: d.query || _dr.query, domains: rows.map(r => r.domain.trim()), credentials,
+                      prior_job: d.job_id || '', prior_report: d.report_md_synth || d.report_md || '',
+                      provider: _dr.provider || 'claude' };
+    _dr.query = payload.query;
+    ++_dr.gen;
+    _dr.data = null; _dr.fixOpen = false;
+    drStartJob('', { focus: payload });
   }
 
   // ── Extract a source: scrape one page / crawl a site (Firecrawl → Exa) ──────
@@ -1354,7 +1447,11 @@ function _actAfter(owner) {
   // so credentialed research is a local-only capability. Used to flag the hosted Sources panel.
   function _drIsHosted() {
     const h = (location.hostname || '').toLowerCase();
-    return !(h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '');
+    // Local = loopback by any name. The local hub serves this tool at
+    // research.localhost:5050 (a *.localhost name), and location.hostname reports
+    // IPv6 loopback WITH brackets ("[::1]") — both used to read as "hosted".
+    return !(h === 'localhost' || h.endsWith('.localhost') || h === '127.0.0.1'
+             || h === '::1' || h === '[::1]' || h === '');
   }
 
   // Source-access self-probe: run each site's logged-out native search from the SERVER that
@@ -1439,15 +1536,17 @@ function _actAfter(owner) {
         // Vault-login affordance only where it matters: login-required rows — and ONLY on the
         // local app. The hosted site never stores credentials; a relevant 🔴 site there is
         // satisfied by the one-time prompt at search time instead.
-        const lock = (lr === true && dom && !_drIsHosted())
+        // 2026-11: the key is offered on EVERY row of the local app (it used to appear
+        // only on red-dot rows, so a new site had no visible way to get a login).
+        const lock = (!_drIsHosted())
           ? `<button class="dr-lock ${hasCred?'on':''}" onclick="drToggleCred(${i})"
-                 title="${hasCred?'Login stored in your local vault — click to edit/remove':'Store a login in your local vault (otherwise you\'ll be asked once per search)'}">${hasCred?'🔒':'🔑'}</button>`
+                 title="${hasCred?'Login stored in your local vault — click to edit/remove':'Add a login for this site (stored in your encrypted local vault)'}">${hasCred?'🔒':'🔑'}</button>`
           : '';
-        const editor = (_dr.credOpenIdx === i && dom) ? `
+        const editor = (_dr.credOpenIdx === i) ? `
           <tr class="dr-cred-edit-row"><td colspan="4">
             <div class="dr-cred-edit">
-              <div class="dr-cred-edit-title">Login for <strong>${_esc(dom)}</strong>
-                <span class="dr-src-note" style="margin:0"> — saved to your encrypted local vault; makes this a Stage 3 source.</span></div>
+              <div class="dr-cred-edit-title">Login for <strong>${_esc(dom || '(type the site address in the row above first)')}</strong>
+                <span class="dr-src-note" style="margin:0"> — saved to your encrypted local vault; the site is then marked 🔴 login-required and signed into at the start of any run that selects it.</span></div>
               <input class="dr-src-in" id="dr-cred-u-${i}" placeholder="username / email">
               <input class="dr-src-in" id="dr-cred-p-${i}" type="password" placeholder="password">
               <input class="dr-src-in" id="dr-cred-l-${i}" placeholder="login URL (optional)" value="${_esc(s.search_url&&s.search_url.includes('login')?s.search_url:'')}">
@@ -1476,6 +1575,7 @@ function _actAfter(owner) {
           </table>
           <div class="dr-src-actions">
             <button class="dr-src-btn" onclick="drAddSource()">+ Add source</button>
+            ${_drIsHosted() ? '' : `<button class="dr-src-btn" onclick="drAddSource(true)" title="Add a forum or site together with the login to use for it">🔑 Add site with login</button>`}
             <button class="dr-src-btn dr-src-save" onclick="drSaveSources()">Save sources</button>
             <button class="dr-src-btn" id="dr-probe-btn" onclick="drProbeSources()"
                     title="Run each site's logged-out search from THIS server, to see which work here without a login.">🛰 Test access from ${_drIsHosted() ? 'this server' : 'a headless guest'}</button>
@@ -1560,6 +1660,7 @@ function _actAfter(owner) {
     const username = (document.getElementById('dr-cred-u-'+i)||{}).value || '';
     const password = (document.getElementById('dr-cred-p-'+i)||{}).value || '';
     const login_url = (document.getElementById('dr-cred-l-'+i)||{}).value || '';
+    if (!dom) { if (msg){ msg.textContent='Enter the site address in the row above first'; msg.style.color='#ff8888'; } return; }
     if (!username.trim()) { if (msg){ msg.textContent='Username required'; msg.style.color='#ff8888'; } return; }
     try {
       const r = await fetch(`${PERF_SERVER}/api/deep_research/vault`, {
@@ -1568,7 +1669,9 @@ function _actAfter(owner) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error||'save failed');
       _dr.vaultDomains = j.domains || _dr.vaultDomains;
+      s.login_required = true;          // a stored login means: sign in before searching it
       _dr.credOpenIdx = -1; _drRender();
+      await drSaveSources();            // persist the row itself (it may be brand new)
     } catch (e) { if (msg){ msg.textContent='Save failed: '+e.message; msg.style.color='#ff8888'; } }
   }
   async function drRemoveCred(i) {
@@ -1583,10 +1686,15 @@ function _actAfter(owner) {
       _dr.credOpenIdx = -1; _drRender();
     } catch (_) {}
   }
-  function drAddSource() {
+  function drAddSource(withLogin) {
     _dr.sources = _dr.sources || [];
-    _dr.sources.push({ url:'', login_required:null });
+    _dr.sources.push({ url:'', login_required: withLogin ? true : null });
+    if (withLogin) _dr.credOpenIdx = _dr.sources.length - 1;
     _drRender();
+    if (withLogin) setTimeout(() => {
+      const ins = document.querySelectorAll('.dr-src-url'); const el = ins[ins.length - 1];
+      if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+    }, 30);
   }
   function drRemoveSource(i) { _dr.sources.splice(i, 1); _drRender(); }
   async function drSaveSources() {
@@ -1680,6 +1788,8 @@ function _actAfter(owner) {
 
   async function drStartJob(clarifications, extra) {
     const myGen = _dr.gen;
+    _dr._lastStart = { clarifications, extra };          // for ↻ Restart
+    _dr.alerts = []; _dr.paused = false; _dr._alertSeen = 0;
     _dr.credShown = false; _dr.credInputs = {}; _dr.skipReqStage = null;
     _dr.stopPrompt = false; _dr.stopChoice = false;
     _dr.refusalShown = false; _dr.refusalResolved = null; _dr.refusalLocal = null; _dr.refusalDetails = null;
@@ -1702,7 +1812,10 @@ function _actAfter(owner) {
 
     let job;
     try {
-      const resp = await fetch(`${PERF_SERVER}/api/deep_research`, { method: 'POST', body: form, signal: ctrl.signal });
+      const resp = (extra && extra.focus)
+        ? await fetch(`${PERF_SERVER}/api/deep_research/focus_sources`, { method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(extra.focus), signal: ctrl.signal })
+        : await fetch(`${PERF_SERVER}/api/deep_research`, { method: 'POST', body: form, signal: ctrl.signal });
       job = await resp.json();
       if (myGen !== _dr.gen) return;
       if (!resp.ok) throw new Error(job.error || `Server error ${resp.status}`);
@@ -1748,9 +1861,18 @@ function _actAfter(owner) {
       }
       if (myGen !== _dr.gen) return;
       actIngest(jobId, st);
-      if (st.error) { _dr.abort = null; _drErrorNote(st.error); return; }
-      if (st.done && st.aborted) { _dr.abort = null; return; }   // user discarded — form already shown
-      if (st.done)  { _dr.abort = null; _dr.data = st.result; renderContent(activeTool); return; }
+      // Source alerts are sticky server-side; surface each NEW one at once (toast) and
+      // keep the whole list in a banner above the progress view.
+      _dr.alerts = Array.isArray(st.alerts) ? st.alerts : [];
+      if (_dr.alerts.length > (_dr._alertSeen || 0)) {
+        const fresh = _dr.alerts.slice(_dr._alertSeen || 0);
+        _dr._alertSeen = _dr.alerts.length;
+        try { _toast('⚠ ' + fresh[fresh.length - 1], false); } catch (_) {}
+      }
+      _dr.paused = !!st.paused;
+      if (st.error) { _drNagStop(); _dr.abort = null; _drErrorNote(st.error); return; }
+      if (st.done && st.aborted) { _drNagStop(); _dr.abort = null; return; }   // user discarded — form already shown
+      if (st.done)  { _drNagStop(); _dr.abort = null; _dr.data = st.result; renderContent(activeTool); return; }
       // Stash the latest render args so the Stop / refusal panels can redraw from them.
       _dr._stages = stages; _dr._cur = st.stage; _dr._pct = st.pct; _dr._msg = st.message; _dr._t0 = t0;
       const el = document.getElementById('ws-main-inner');
@@ -1766,6 +1888,19 @@ function _actAfter(owner) {
         // Server cleared the flag → worker resumed (or stopped). Drop the panel.
         _dr.refusalShown = false; _dr.refusalResolved = null;
         _dr.refusalLocal = null; _dr.refusalDetails = null;
+      }
+      // A plan-selected site needs YOU to sign in (2FA / passkey / captcha / no stored
+      // login). The run is holding with its clock stopped — show the panel and keep nagging.
+      if (st.awaiting_manual_login && st.awaiting_manual_login.domain) {
+        const mk = st.awaiting_manual_login.domain;
+        if (_dr.manualShown !== mk) {
+          _dr.manualShown = mk;
+          el.innerHTML = _drShell(_drManualLoginHtml(st.awaiting_manual_login));
+          _drNagStart(mk);
+        }
+        continue;
+      } else if (_dr.manualShown) {
+        _dr.manualShown = null; _drNagStop();
       }
       if (st.awaiting_credentials && st.awaiting_credentials.length && !_dr.stopPrompt && !_dr.stopChoice) {
         if (!_dr.credShown) {
@@ -1799,11 +1934,12 @@ function _actAfter(owner) {
         </div>
       </div>`).join('');
     return `
+      ${_drAlertsHtml()}
       <div class="dr-query-block">
         <div class="dr-clar-head">Log in to ${candidates.length} gated source${candidates.length>1?'s':''}?</div>
         <div class="dr-clar-sub">The agent found these behind a login/paywall and judged them worth pursuing.
-          Enter credentials for any you want it to access (saved to your encrypted local vault for next time),
-          or skip. Sites needing 2FA/captcha are skipped automatically.</div>
+          Enter credentials for any you want it to access — they are used for this run only (to keep a login,
+          store it with the 🔑 in the Sources panel), or skip. Sites needing 2FA/captcha are skipped automatically.</div>
         <div class="dr-cred-list">${rows}</div>
         <div class="dr-run-row">
           <button class="dr-run-btn" onclick="drSubmitCredentials()">Log in &amp; finish →</button>
@@ -1874,7 +2010,18 @@ function _actAfter(owner) {
     // assembling-after-stop it shows a note. Not offered during final synthesis/report.
     const inGather = !['synthesize','report'].includes(cur);
     let controls;
-    if (_dr.stopChoice) {
+    if (_dr.paused && !_dr.stopChoice && !_dr.stopPrompt) {
+      controls = `
+        <div class="dr-stop-panel">
+          <div class="dr-stop-q">⏸ Paused — everything gathered so far is kept, and the research clock is frozen.</div>
+          <div class="dr-stop-actions">
+            <button class="dr-run-btn" onclick="drResume()">▶ Resume</button>
+            <button class="dr-run-btn dr-run-secondary" onclick="drRestart()">↻ Restart from scratch</button>
+            <button class="dr-run-btn dr-run-secondary" onclick="drStopChoose('assemble')">Assemble report from what's gathered</button>
+            <button class="dr-run-btn dr-run-secondary" onclick="drStopChoose('abort')">Discard</button>
+          </div>
+        </div>`;
+    } else if (_dr.stopChoice) {
       controls = `<div class="dr-stop-note">Stopped — assembling the report from what was gathered…</div>`;
     } else if (_dr.stopPrompt) {
       controls = `
@@ -1888,16 +2035,112 @@ function _actAfter(owner) {
     } else {
       const stopBtn = inGather
         ? `<button class="dr-stop-btn" onclick="drStopRun()">⏹ Stop</button>` : '';
-      controls = `<div class="dr-run-controls">${stopBtn}${skipBtn}</div>`;
+      const pauseBtn = (cur !== 'report')
+        ? `<button class="dr-pause-btn" onclick="drPause()" title="Hold the run where it is — nothing gathered is lost; resume or restart afterwards">⏸ Pause</button>` : '';
+      controls = `<div class="dr-run-controls">${pauseBtn}${stopBtn}${skipBtn}</div>`;
     }
     return `
+      ${_drAlertsHtml()}
       <div class="mn-progress">
-        <div class="mn-progress-title">Researching…</div>
+        <div class="mn-progress-title">${_dr.paused ? 'Paused' : 'Researching…'}</div>
         <div class="mn-stages">${rows}</div>
         <div class="mn-bar">${bar}</div>
         <div class="mn-elapsed">elapsed ${elapsed}</div>
         ${controls}
       </div>`;
+  }
+  // ── manual sign-in prompt ──────────────────────────────────────────────────
+  function _drManualLoginHtml(info) {
+    const dom = _esc(info.domain || '');
+    return `
+      ${_drAlertsHtml()}
+      <div class="dr-alert-banner" style="border-color:#c9a04a;background:rgba(240,190,90,.13);color:#ffe9b8" role="alert">
+        <div class="dr-alert-head" style="color:#f0c674;font-size:15px">🔑 Sign-in needed — ${dom}</div>
+        <div>The research plan selected <strong>${dom}</strong>, and the tool could not sign in by itself
+          (${_esc(info.detail || 'login required')}). Sites with two-factor, passkey or captcha logins need you once;
+          the research browser then remembers the session for future runs.</div>
+        <ol style="margin:10px 0 6px 18px;padding:0">
+          <li>Switch to the <strong>research Chrome window</strong> — a tab is open on ${dom}'s sign-in page.</li>
+          <li>Sign in there as you normally would.</li>
+          <li>The run continues by itself the moment the sign-in is detected — or press the button below.</li>
+        </ol>
+        <div class="dr-alert-foot" style="color:#e6d3a3">The research clock is stopped while this waits (up to 10 minutes). Nothing is skipped silently:
+          if you skip, ${dom} is flagged at the top of the report and can be added later with Add/Fix Specific Sources.</div>
+        <div class="dr-run-row" style="margin-top:12px">
+          <button class="dr-run-btn" onclick="drManualLogin('continue')">✓ I'm signed in — continue</button>
+          <button class="dr-run-btn dr-run-secondary" onclick="drManualLogin('skip')">Skip ${dom} this run</button>
+        </div>
+      </div>`;
+  }
+  async function drManualLogin(decision) {
+    if (!_dr.jobId) return;
+    _drNagStop();
+    const el = document.getElementById('ws-main-inner');
+    if (el) el.innerHTML = _drShell(`<div class="pd-dropzone" style="cursor:default"><div class="pd-spinner"></div><div class="pd-drop-title">${decision === 'skip' ? 'Skipping that site…' : 'Checking the sign-in and continuing…'}</div></div>`);
+    try { await fetch(`${PERF_SERVER}/api/deep_research/manual_login?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ decision }) }); } catch (_) {}
+  }
+  // Nag until answered: repeat the pop-up and flash the tab title.
+  function _drNagStart(dom) {
+    _drNagStop();
+    _dr._nagTitle = document.title;
+    let on = false;
+    const tick = () => {
+      on = !on;
+      document.title = on ? `🔑 SIGN IN: ${dom}` : (_dr._nagTitle || 'Deep Research');
+    };
+    try { _toast(`🔑 Sign-in needed for ${dom} — see the research Chrome window`, false); } catch (_) {}
+    _dr._nagFlash = setInterval(tick, 1200);
+    _dr._nagToast = setInterval(() => {
+      try { _toast(`🔑 Still waiting for you to sign in to ${dom}`, false); } catch (_) {}
+    }, 20000);
+  }
+  function _drNagStop() {
+    if (_dr._nagFlash) { clearInterval(_dr._nagFlash); _dr._nagFlash = null; }
+    if (_dr._nagToast) { clearInterval(_dr._nagToast); _dr._nagToast = null; }
+    if (_dr._nagTitle) { document.title = _dr._nagTitle; _dr._nagTitle = null; }
+    _dr.manualShown = null;
+  }
+
+  // Sticky banner listing every source problem raised so far in this run.
+  function _drAlertsHtml() {
+    const al = _dr.alerts || [];
+    if (!al.length) return '';
+    return `
+      <div class="dr-alert-banner" role="alert">
+        <div class="dr-alert-head">⚠ ${al.length} source problem${al.length > 1 ? 's' : ''} in this run</div>
+        <ul>${al.map(a => `<li>${_esc(a)}</li>`).join('')}</ul>
+        <div class="dr-alert-foot">The run continues with the other sources. When it finishes, <strong>Add/Fix Specific Sources</strong>
+          lets you supply or correct logins and re-scan just these sites.</div>
+      </div>`;
+  }
+  function _drRedrawProgress() {
+    const el = document.getElementById('ws-main-inner');
+    if (el) el.innerHTML = _drShell(_drProgressHtml(_dr._stages || [], _dr._cur || 'stage2', _dr._pct, _dr._msg || '', _dr._t0 || Date.now()));
+  }
+  async function drPause() {
+    if (!_dr.jobId) return;
+    _dr.paused = true; _drRedrawProgress();
+    try { await fetch(`${PERF_SERVER}/api/deep_research/pause?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode:'pause' }) }); } catch (_) {}
+  }
+  async function drResume() {
+    if (!_dr.jobId) return;
+    _dr.paused = false; _drRedrawProgress();
+    try { await fetch(`${PERF_SERVER}/api/deep_research/pause?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode:'resume' }) }); } catch (_) {}
+  }
+  // Restart: discard this run and launch the same question again with the same settings.
+  async function drRestart() {
+    if (!_dr.jobId) return;
+    const last = _dr._lastStart || {};
+    try { await fetch(`${PERF_SERVER}/api/deep_research/stop?job=${_dr.jobId}`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ mode:'abort' }) }); } catch (_) {}
+    if (_dr.abort) { try { _dr.abort.abort(); } catch (_) {} _dr.abort = null; }
+    ++_dr.gen;
+    _dr.data = null; _dr.paused = false;
+    await new Promise(r => setTimeout(r, 2500));      // let the old run release the browser profile
+    drStartJob(last.clarifications || '', last.extra);
   }
   async function drSkipStage(stage) {
     if (!_dr.jobId) return;

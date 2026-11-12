@@ -1,6 +1,16 @@
 # Deep Research — Handoff
 
-_Last updated: 2026-09-20 (portable implementation guide added; state as of build `2026-09-05.pollretry`)_
+_Last updated: 2026-11-12 (build `2026-11-12.signal`). Older entry: 2026-09-20, portable implementation guide, build `2026-09-05.pollretry`._
+
+> ## ⭐⭐ 2026-11-12 — READ `..\DEEP_RESEARCH_REVIEW_2026-11-12.md` FIRST
+> Top-down review + rebuild of forum search, page reading, the agent loop and synthesis; new
+> source alerts, Pause / Resume / Restart, and "Add/Fix Specific Sources". That file is the
+> current truth for: why the "hosted site" banner appeared locally (the hub serves the tool at
+> `research.localhost:5050`), what was broken (the sites' own search had returned nothing in
+> the last five traced runs), what changed per file, how it was verified, and the open items.
+> Where it disagrees with anything below, it wins. Still true from below: the pipeline shape,
+> the model roles in `config\drt_models.json`, the provider keys, LOCAL ONLY (nothing is pushed
+> outside the house — the hosted Render copy does not have the 2026-11-12 changes).
 
 > ## ⭐ STATE NOW — read this first
 > **The ONLY codebase is the repo clone `D:\_______Claude\Central-Industrial\deep-research\`**
