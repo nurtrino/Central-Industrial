@@ -266,9 +266,14 @@
     .dr-cred-reason { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
     .dr-cred-fields { flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
     /* per-source login lock in the Sources table */
-    .dr-lock { border:none; background:none; cursor:pointer; font-size:14px; padding:2px 4px; border-radius:5px; opacity:.65; }
+    .dr-lock { border:1px solid transparent; background:none; cursor:pointer; font-size:12px; padding:3px 8px; border-radius:5px; opacity:.6;
+               display:inline-flex; align-items:center; gap:6px; max-width:270px; color:var(--text-muted); font-family:inherit; white-space:nowrap; }
     .dr-lock:hover { opacity:1; background:var(--bg-elevated); }
-    .dr-lock.on { opacity:1; }
+    .dr-lock.on { opacity:1; color:var(--text-primary); border-color:var(--border-mid); }
+    .dr-lock.on .dr-lock-ic { color:#3ddc84; font-weight:700; }
+    .dr-lock-txt { overflow:hidden; text-overflow:ellipsis; }
+    .dr-lock-acct { color:var(--text-secondary); }
+    .dr-src-login-td { text-align:left; white-space:nowrap; width:1%; }
     .dr-lock-na { color:var(--text-muted); }
     .dr-cred-edit-row td { padding: 0 6px 10px; }
     .dr-cred-edit { background: var(--bg-surface); border: 1px solid var(--border-mid); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 7px; }
@@ -359,6 +364,53 @@
     .dr-drop-compact { padding: 22px 24px; gap: 8px; border-radius: 12px; max-width: 560px; margin: 0 auto; }
     .dr-drop-compact .pd-drop-icon svg { width: 26px; height: 26px; }
     .dr-drop-compact .pd-drop-title { font-size: 13.5px; }
+    /* slim one-line strip for the form's supporting-docs drop zone */
+    .dr-drop-slim { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center;
+      gap: 6px 14px; padding: 9px 16px; max-width: none; margin: 0; border-radius: 10px; }
+    .dr-drop-slim .pd-drop-icon { display: flex; }
+    .dr-drop-slim .pd-drop-icon svg { width: 18px; height: 18px; }
+    .dr-drop-slim .pd-drop-title { font-size: 12.5px; font-weight: 600; }
+    .dr-drop-slim .pd-drop-sub { font-size: 11.5px; }
+    .dr-drop-slim .pd-drop-btn { padding: 4px 12px; font-size: 11.5px; margin: 0; }
+    .dr-drop-slim .dr-filelist { flex-basis: 100%; justify-content: center; margin-top: 2px; }
+    .dr-cred-stored { font-size: 12px; line-height: 1.5; color: var(--text-secondary); border: 1px solid var(--border-mid);
+      border-left: 3px solid var(--ws-color, var(--admin-color)); border-radius: 6px; padding: 8px 10px; background: var(--bg-elevated); }
+    /* the prompt that produced a report, boxed and bold above it */
+    .dr-prompt-box { border: 2px solid var(--ws-color, var(--admin-color)); border-radius: 4px;
+      padding: 14px 18px; margin: 0 0 22px; background: var(--bg-surface); }
+    .dr-prompt-label { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 6px; }
+    .dr-prompt-text { font-weight: 700; font-size: 15px; line-height: 1.5; color: var(--text-primary); }
+    .dr-prompt-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
+    /* recent research */
+    .dr-hist { margin-top: 26px; }
+    .dr-hist-head { display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+    .dr-hist-sub { font-size: 11.5px; font-weight: 400; color: var(--text-muted); }
+    .dr-hist-list { border: 1px solid var(--border-dim); border-radius: 10px; background: var(--bg-surface); overflow: hidden; }
+    .dr-hist-row { display: grid; grid-template-columns: 122px minmax(0, 1fr) auto auto; gap: 14px;
+      align-items: center; padding: 7px 14px; font-size: 12.5px; white-space: nowrap;
+      border-top: 1px solid var(--border-dim); }
+    .dr-hist-row:first-child { border-top: none; }
+    .dr-hist-row:hover { background: var(--bg-elevated); }
+    .dr-hist-date { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
+    .dr-hist-title { overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); }
+    .dr-hist-tag { font-size: 10.5px; color: var(--text-muted); border: 1px solid var(--border-mid);
+      border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+    .dr-hist-row a { color: var(--ws-color, var(--admin-color)); text-decoration: none; cursor: pointer; }
+    .dr-hist-row a:hover { text-decoration: underline; }
+    .dr-hist-na { color: var(--text-muted); opacity: .45; }
+    .dr-hist-empty { padding: 12px 14px; font-size: 12.5px; color: var(--text-muted); }
+    .dr-modal-back { position: fixed; inset: 0; background: rgba(0,0,0,.62); z-index: 9000;
+      display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .dr-modal { background: var(--bg-elevated); border: 1px solid var(--border-bright); border-radius: 12px;
+      width: 100%; max-width: 760px; max-height: 82vh; overflow: auto; padding: 20px 22px; }
+    .dr-modal-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+    .dr-modal-meta { font-size: 11.5px; color: var(--text-muted); margin: 4px 0 14px; }
+    .dr-modal-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); margin: 12px 0 5px; }
+    .dr-modal pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13.5px;
+      line-height: 1.55; color: var(--text-primary); background: var(--bg-surface);
+      border: 1px solid var(--border-dim); border-radius: 8px; padding: 12px 14px; margin: 0; }
 
     /* spinner */
     @keyframes pdSpin { to { transform: rotate(360deg); } }
@@ -618,17 +670,22 @@ function _savedBadge(path) {
   const fname = String(path).split('\\').pop();
   return ` &nbsp;·&nbsp; <span style="color:var(--text-muted)" title="Auto-saved on completion to ${_esc(path)}">💾 auto-saved: ${_esc(fname)}</span>`;
 }
-async function saveAndOpen(docx_b64, query, label, fallbackName, title) {
+async function saveAndOpen(docx_b64, query, label, fallbackName, title, savedPath) {
   if (!docx_b64) return;
   if (title) fallbackName = `${title} — ${new Date().toISOString().slice(0, 10)}.docx`;
   _toast('Saving & opening in Word…');
   try {
+    // `saved_path` = the file the run auto-saved when it finished. The server opens THAT
+    // file instead of writing a new copy stamped with the time of the click — a re-saved
+    // copy dated hours later looked exactly like the report of a new run.
     const r = await fetch(`${PERF_SERVER}/api/save_report`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ docx_b64, query, label, title: title || '' }) });
+      body: JSON.stringify({ docx_b64, query, label, title: title || '', saved_path: savedPath || '' }) });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || ('save failed (' + r.status + ')'));
-    if (j.opened) {
+    if (j.opened && j.reused) {
+      _toast('✓ Opened the report saved when this run finished:\n' + j.path);
+    } else if (j.opened) {
       _toast('✓ Saved & opened in Word:\n' + j.path);
     } else {
       // Server saved but can't launch Word for you (hosted/headless box, or Word
@@ -738,6 +795,7 @@ function _actAfter(owner) {
                 provider: 'claude', localModel: null, localErr: false,
                 deeperOpen: false, deeperFiles: [], deeperQuery: '',
                 alerts: [], paused: false, fixOpen: false, fixRows: [], _lastStart: null,
+                history: null, histCanOpen: false,
                 extractOpen: false, extractUrl: '', extractMode: 'scrape', extractLimit: 25,
                 extractBusy: false, extractResult: null, extractError: null,
                 extractMsg: '', extractPct: null, _extractGen: 0,
@@ -923,16 +981,15 @@ function _actAfter(owner) {
           <button class="dr-run-btn dr-run-secondary" onclick="drRun(true)"
                   title="Skip the clarifying questions and research as written">No questions</button>
         </div>
-        <div class="dr-run-note">Opens a visible Chrome and searches the web live. Unless you click “No questions,” it may ask 1–3 quick scoping questions first.</div>
+        <div class="dr-run-note">Opens a visible browser window and searches the web live. Unless you click “No questions,” it may ask 1–3 quick scoping questions first.</div>
       </div>
 
       ${_drSourcesPanel()}
 
-      <div class="dr-attach-head" style="margin-top:30px">
+      <div class="dr-attach-head" style="margin-top:24px;margin-bottom:8px">
         <div class="dr-attach-title">Supporting documents <span style="color:var(--text-muted);font-weight:400">(optional)</span></div>
-        <div class="dr-attach-sub">Drop documents, PDFs, decks, web pages, or notes to ground the research in your own material.</div>
       </div>
-      <div class="pd-dropzone dr-drop-compact" id="dr-drop"
+      <div class="pd-dropzone dr-drop-compact dr-drop-slim" id="dr-drop"
            ondragover="event.preventDefault();this.classList.add('pd-drop-active')"
            ondragleave="this.classList.remove('pd-drop-active')"
            ondrop="drHandleDrop(event)">
@@ -943,15 +1000,114 @@ function _actAfter(owner) {
             <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
         </div>
-        <div class="pd-drop-title">Drag &amp; drop supporting files</div>
-        <div class="pd-drop-sub">PDF, Excel, Word, PowerPoint, text — any document</div>
+        <div class="pd-drop-title">Drop files here to ground the research</div>
+        <div class="pd-drop-sub">PDF, Word, Excel, PowerPoint, text</div>
         <label class="pd-drop-btn" style="background:var(--ws-color, var(--admin-color))">
-          Browse files
+          Browse
           <input type="file" multiple style="display:none" onchange="drHandleFile(this)">
         </label>
         ${fileList}
+      </div>
+
+      ${_drHistoryPanel()}`;
+  }
+
+  // ── Recent research: the last 10 finished jobs — date · title · Prompt · Report ──
+  async function drLoadHistory() {
+    if (_dr._histLoading) return;
+    _dr._histLoading = true;
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/history`);
+      const j = await r.json();
+      _dr.history = Array.isArray(j.jobs) ? j.jobs : [];
+      _dr.histCanOpen = !!j.can_open;
+    } catch (_) { _dr.history = []; }
+    _dr._histLoading = false;
+    // Swap the panel in place — a full re-render would steal focus from the question box.
+    const el = document.getElementById('dr-hist');
+    if (el) el.outerHTML = _drHistoryPanel();
+  }
+  function _drHistoryPanel() {
+    if (!Array.isArray(_dr.history)) {
+      drLoadHistory();
+      return `<div class="dr-hist" id="dr-hist"><div class="dr-hist-head"><span>Recent research</span></div>
+                <div class="dr-hist-list"><div class="dr-hist-empty">Loading…</div></div></div>`;
+    }
+    const jobs = _dr.history.slice(0, 10);
+    const rows = jobs.map((j, i) => `
+      <div class="dr-hist-row">
+        <span class="dr-hist-date">${_esc(j.completed || '')}</span>
+        <span class="dr-hist-title" title="${_esc(j.title || '')}">${_esc(j.title || '(untitled)')}${j.focus ? '<span class="dr-hist-tag">sources pass</span>' : ''}${j.failed ? '<span class="dr-hist-tag" style="color:#ff9c9c;border-color:#7a2e2e" title="This run did not produce a report (for example: the API account was out of credits)">failed</span>' : ''}</span>
+        <a onclick="drHistPrompt(${i})" title="Show the prompt this research was run with">Prompt</a>
+        ${j.has_doc
+          ? `<a onclick="drHistOpen(${i})" title="${_esc(j.file || '')}">Report</a>`
+          : `<span class="dr-hist-na" title="The saved report file was not found">Report</span>`}
+      </div>`).join('');
+    return `
+      <div class="dr-hist" id="dr-hist">
+        <div class="dr-hist-head"><span>Recent research</span>
+          <span class="dr-hist-sub">${jobs.length ? `last ${jobs.length}` : ''}</span></div>
+        <div class="dr-hist-list">${rows || '<div class="dr-hist-empty">No finished research yet.</div>'}</div>
       </div>`;
   }
+  function drHistClose() {
+    const m = document.getElementById('dr-hist-modal');
+    if (m) m.remove();
+  }
+  function drHistPrompt(i) {
+    const j = (_dr.history || [])[i];
+    if (!j) return;
+    drHistClose();
+    const meta = [j.completed, j.depth ? `${j.depth} tier` : '', j.focus ? `sources pass: ${(j.focus_domains || []).join(', ')}` : '',
+                  (typeof j.sources === 'number') ? `${j.sources} pages read` : '',
+                  (typeof j.usd === 'number') ? `$${j.usd.toFixed(2)}` : ''].filter(Boolean).join(' · ');
+    const back = document.createElement('div');
+    back.className = 'dr-modal-back'; back.id = 'dr-hist-modal';
+    back.onclick = e => { if (e.target === back) drHistClose(); };
+    back.innerHTML = `
+      <div class="dr-modal" role="dialog" aria-label="Research prompt">
+        <div class="dr-modal-title">${_esc(j.title || '(untitled)')}</div>
+        <div class="dr-modal-meta">${_esc(meta)}</div>
+        <div class="dr-modal-label">Prompt</div>
+        ${j.query ? `<pre>${_esc(j.query)}</pre>`
+                  : `<pre style="color:var(--text-muted)">The prompt was not recorded for this older report.</pre>`}
+        ${j.clarifications ? `<div class="dr-modal-label">Clarifications / context given</div><pre>${_esc(j.clarifications)}</pre>` : ''}
+        <div class="dr-run-row" style="margin-top:16px">
+          ${j.query ? `<button class="dr-run-btn" onclick="drHistUse(${i})">Use this prompt</button>
+                       <button class="dr-run-btn dr-run-secondary" onclick="drHistCopy(${i})">Copy</button>` : ''}
+          ${j.has_doc ? `<button class="dr-run-btn dr-run-secondary" onclick="drHistOpen(${i})">Open report</button>` : ''}
+          <button class="dr-run-btn dr-run-secondary" onclick="drHistClose()">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+  }
+  function drHistUse(i) {
+    const j = (_dr.history || [])[i];
+    if (!j || !j.query) return;
+    _dr.query = j.query;
+    drHistClose();
+    _drRender();
+    const ta = document.getElementById('dr-query');
+    if (ta) { ta.focus(); ta.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  }
+  async function drHistCopy(i) {
+    const j = (_dr.history || [])[i];
+    if (!j) return;
+    try { await navigator.clipboard.writeText(j.query || ''); _toast('Prompt copied'); } catch (_) {}
+  }
+  async function drHistOpen(i) {
+    const j = (_dr.history || [])[i];
+    if (!j) return;
+    const id = encodeURIComponent(j.id);
+    const download = () => { window.location.href = `${PERF_SERVER}/api/deep_research/history/doc?id=${id}`; };
+    if (!_dr.histCanOpen) return download();
+    _toast('Opening the report in Word…');
+    try {
+      const r = await fetch(`${PERF_SERVER}/api/deep_research/history/open?id=${id}`, { method: 'POST' });
+      if (!r.ok) throw new Error('open failed');
+    } catch (_) { download(); }
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') drHistClose(); });
 
   function drSetDepth(id) { _dr.depth = id; if (id === 'exhaustive') _drEgg(); _drRender(); }
   // "Oh, Very Deep" easter egg: play the tub track, restarting on every press. The click
@@ -971,7 +1127,7 @@ function _actAfter(owner) {
       { k:'api_search',    label:'Baseline sweep',     sub:'fast broad browser search · no page opens' },
       { k:'web_engines',   label:'Open web engines',   sub:'DuckDuckGo · Brave · Google' },
       { k:'site_queries',  label:'Curated sites',      sub:'your forum / blog source list + logins' },
-      { k:'neural_search', label:'API discovery',      sub:'Tavily · Exa · Bright Data fallbacks' },
+      { k:'neural_search', label:'API discovery',      sub:'Tavily · Exa fallbacks' },
     ];
     const rows = items.map(it => `
       <label class="dr-toggle ${_dr.channels[it.k] ? 'on' : 'off'}">
@@ -1414,7 +1570,7 @@ function _actAfter(owner) {
 
   function drDownloadDocx() {
     const d = _dr.data; if (!d || !d.docx_b64) return;
-    saveAndOpen(d.docx_b64, d.query || _dr.query, 'Deep Research', 'Deep Research — Report.docx', d.title);
+    saveAndOpen(d.docx_b64, d.query || _dr.query, 'Deep Research', 'Deep Research — Report.docx', d.title, d.saved_path);
   }
 
   function _drShell(inner) {
@@ -1538,18 +1694,29 @@ function _actAfter(owner) {
         // satisfied by the one-time prompt at search time instead.
         // 2026-11: the key is offered on EVERY row of the local app (it used to appear
         // only on red-dot rows, so a new site had no visible way to get a login).
+        // What is already stored for this site (account name + login page; never the password).
+        const stKey = hasCred ? Object.keys(_dr.vaultLogins || {}).find(d => dom === d || dom.endsWith('.'+d) || d.endsWith('.'+dom)) : null;
+        const st = stKey ? _dr.vaultLogins[stKey] : null;
+        // 2026-11-12: the row SAYS whether a login is stored, and for which account. A bare
+        // padlock icon read as "locked out" rather than "login stored".
         const lock = (!_drIsHosted())
           ? `<button class="dr-lock ${hasCred?'on':''}" onclick="drToggleCred(${i})"
-                 title="${hasCred?'Login stored in your local vault — click to edit/remove':'Add a login for this site (stored in your encrypted local vault)'}">${hasCred?'🔒':'🔑'}</button>`
+                 title="${hasCred?`Login stored in your local vault${st && st.username ? ' — account ' + _esc(st.username) : ''}. Click to view, change or remove`:'No login stored — click to add one (kept in your encrypted local vault)'}">${hasCred
+                   ? `<span class="dr-lock-ic">✓</span><span class="dr-lock-txt">Login stored${st && st.username ? ` · <span class="dr-lock-acct">${_esc(st.username)}</span>` : ''}</span>`
+                   : `<span class="dr-lock-ic">🔑</span><span class="dr-lock-txt">Add login</span>`}</button>`
           : '';
+        const storedNote = hasCred ? `
+              <div class="dr-cred-stored">🔒 <strong>A login is already stored for this site</strong>${st && st.username ? ` — account <strong>${_esc(st.username)}</strong>` : ''}${st && st.has_password === false ? ' (no password stored)' : ''}.
+                Nothing here needs re-entering. Leave the password blank to keep the stored one; change a field and press Save only to replace it.</div>` : '';
         const editor = (_dr.credOpenIdx === i) ? `
           <tr class="dr-cred-edit-row"><td colspan="4">
             <div class="dr-cred-edit">
               <div class="dr-cred-edit-title">Login for <strong>${_esc(dom || '(type the site address in the row above first)')}</strong>
                 <span class="dr-src-note" style="margin:0"> — saved to your encrypted local vault; the site is then marked 🔴 login-required and signed into at the start of any run that selects it.</span></div>
-              <input class="dr-src-in" id="dr-cred-u-${i}" placeholder="username / email">
-              <input class="dr-src-in" id="dr-cred-p-${i}" type="password" placeholder="password">
-              <input class="dr-src-in" id="dr-cred-l-${i}" placeholder="login URL (optional)" value="${_esc(s.search_url&&s.search_url.includes('login')?s.search_url:'')}">
+              ${storedNote}
+              <input class="dr-src-in" id="dr-cred-u-${i}" placeholder="username / email" autocomplete="off" value="${_esc(st && st.username ? st.username : '')}">
+              <input class="dr-src-in" id="dr-cred-p-${i}" type="password" autocomplete="new-password" placeholder="${hasCred ? '•••••••• stored — leave blank to keep it' : 'password'}">
+              <input class="dr-src-in" id="dr-cred-l-${i}" placeholder="login URL (optional)" value="${_esc(st && st.login_url ? st.login_url : (s.search_url&&s.search_url.includes('login')?s.search_url:''))}">
               <div class="dr-src-actions" style="margin-top:8px">
                 <button class="dr-src-btn dr-src-save" onclick="drSaveCred(${i})">Save login</button>
                 ${hasCred?`<button class="dr-src-btn" onclick="drRemoveCred(${i})">Remove</button>`:''}
@@ -1562,7 +1729,7 @@ function _actAfter(owner) {
           <tr>
             <td class="dr-src-dot-td">${dot}</td>
             <td><input class="dr-src-in dr-src-url" value="${_esc(url)}" onchange="drEditSource(${i},'url',this.value)" placeholder="forum.example.com"></td>
-            <td style="text-align:center">${lock}</td>
+            <td class="dr-src-login-td">${lock}</td>
             <td style="text-align:center"><button class="dr-src-del" onclick="drRemoveSource(${i})" title="Remove">✕</button></td>
           </tr>${editor}`;
       }).join('');
@@ -1570,7 +1737,7 @@ function _actAfter(owner) {
         <div class="dr-src-body">
           ${_drIsHosted() ? `<div class="dr-src-hosted-note">🔒 <strong>Credentialed research runs on the local app.</strong> You're on the hosted site — it has no access to your saved vault, logins entered here are temporary, and a cloud server rarely gets past bot-protection on gated forums. For logged-in, deep-forum research, run Deep Research locally.</div>` : ''}
           <table class="dr-src-table dr-src-table-simple">
-            <thead><tr><th title="🟢 searchable without a login · 🔴 needs a login · ⚪ untested"></th><th>Site</th><th></th><th></th></tr></thead>
+            <thead><tr><th title="🟢 searchable without a login · 🔴 needs a login · ⚪ untested"></th><th>Site</th><th style="text-align:left">${_drIsHosted() ? '' : 'Login'}</th><th></th></tr></thead>
             <tbody>${rows || '<tr><td colspan="4" style="color:var(--text-muted);padding:10px">No sources yet.</td></tr>'}</tbody>
           </table>
           <div class="dr-src-actions">
@@ -1587,7 +1754,7 @@ function _actAfter(owner) {
           <div class="dr-src-note">One list, every site eligible — the research plan picks only the sites relevant to each query.
             🟢 searchable without a login (runs here and locally) · 🔴 needs a login: local uses your vault silently; otherwise you're asked once per search and nothing is saved · ⚪ untested.
             Click a dot to set it, or 🛰 Test to measure it from ${_drIsHosted() ? 'this server (Render’s datacenter IP — the true hosted picture)' : 'a headless guest (≈ the hosted environment)'}.
-            ${_drIsHosted() ? 'This hosted site never stores logins — a relevant 🔴 site asks you once per search.' : '🔑/🔒 on a 🔴 row = store / stored login in your local vault.'}</div>
+            ${_drIsHosted() ? 'This hosted site never stores logins — a relevant 🔴 site asks you once per search.' : 'The Login column shows what is in your local vault: “✓ Login stored” with the account name, or “Add login”. The dot is separate — it only says whether the site can be searched without signing in. A site with a stored login is signed into and swept as a credentialed source whatever its dot.'}</div>
         </div>`;
     }
     return `
@@ -1617,7 +1784,8 @@ function _actAfter(owner) {
       const r = await fetch(`${PERF_SERVER}/api/deep_research/vault`);
       const j = await r.json();
       _dr.vaultDomains = Array.isArray(j.domains) ? j.domains : [];
-    } catch { _dr.vaultDomains = []; }
+      _dr.vaultLogins = (j.logins && typeof j.logins === 'object') ? j.logins : {};
+    } catch { _dr.vaultDomains = []; _dr.vaultLogins = {}; }
   }
   function _drSiteDomain(url) {
     return (url || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
@@ -1669,8 +1837,12 @@ function _actAfter(owner) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error||'save failed');
       _dr.vaultDomains = j.domains || _dr.vaultDomains;
-      s.login_required = true;          // a stored login means: sign in before searching it
+      if (j.logins) _dr.vaultLogins = j.logins;
+      // An untested site that gets a login is marked login-required; a dot you have set
+      // yourself (green or red) is left as you set it.
+      if (s.login_required === null || s.login_required === undefined) s.login_required = true;
       _dr.credOpenIdx = -1; _drRender();
+      try { _toast(`Login saved for ${dom}`); } catch (_) {}
       await drSaveSources();            // persist the row itself (it may be brand new)
     } catch (e) { if (msg){ msg.textContent='Save failed: '+e.message; msg.style.color='#ff8888'; } }
   }
@@ -1683,6 +1855,7 @@ function _actAfter(owner) {
         body: JSON.stringify({ domain:dom, delete:true }) });
       const j = await r.json();
       _dr.vaultDomains = j.domains || [];
+      _dr.vaultLogins = j.logins || {};
       _dr.credOpenIdx = -1; _drRender();
     } catch (_) {}
   }
@@ -1864,6 +2037,8 @@ function _actAfter(owner) {
       // Source alerts are sticky server-side; surface each NEW one at once (toast) and
       // keep the whole list in a banner above the progress view.
       _dr.alerts = Array.isArray(st.alerts) ? st.alerts : [];
+      // An alert can be withdrawn (a site's own search missed once, then worked).
+      if (_dr.alerts.length < (_dr._alertSeen || 0)) _dr._alertSeen = _dr.alerts.length;
       if (_dr.alerts.length > (_dr._alertSeen || 0)) {
         const fresh = _dr.alerts.slice(_dr._alertSeen || 0);
         _dr._alertSeen = _dr.alerts.length;
@@ -1872,7 +2047,7 @@ function _actAfter(owner) {
       _dr.paused = !!st.paused;
       if (st.error) { _drNagStop(); _dr.abort = null; _drErrorNote(st.error); return; }
       if (st.done && st.aborted) { _drNagStop(); _dr.abort = null; return; }   // user discarded — form already shown
-      if (st.done)  { _drNagStop(); _dr.abort = null; _dr.data = st.result; renderContent(activeTool); return; }
+      if (st.done)  { _drNagStop(); _dr.abort = null; _dr.history = null; _dr.data = st.result; renderContent(activeTool); return; }
       // Stash the latest render args so the Stop / refusal panels can redraw from them.
       _dr._stages = stages; _dr._cur = st.stage; _dr._pct = st.pct; _dr._msg = st.message; _dr._t0 = t0;
       const el = document.getElementById('ws-main-inner');
@@ -1976,7 +2151,7 @@ function _actAfter(owner) {
 
   const DR_STAGE_LABELS = {
     stage1: 'Baseline sweep',
-    stage2: 'Parallel research lanes (Chrome + APIs)',
+    stage2: 'Parallel research lanes (browser + APIs)',
     stage3: 'Credentialed sources',
     stage4: 'Gated sources (login)',
     odysseus: 'Odysseus pre-research (headless)',
@@ -2060,12 +2235,13 @@ function _actAfter(owner) {
           (${_esc(info.detail || 'login required')}). Sites with two-factor, passkey or captcha logins need you once;
           the research browser then remembers the session for future runs.</div>
         <ol style="margin:10px 0 6px 18px;padding:0">
-          <li>Switch to the <strong>research Chrome window</strong> — a tab is open on ${dom}'s sign-in page.</li>
+          <li>Switch to the <strong>research browser window</strong> — a sign-in tab is open for each site named above.</li>
           <li>Sign in there as you normally would.</li>
           <li>The run continues by itself the moment the sign-in is detected — or press the button below.</li>
         </ol>
-        <div class="dr-alert-foot" style="color:#e6d3a3">The research clock is stopped while this waits (up to 10 minutes). Nothing is skipped silently:
-          if you skip, ${dom} is flagged at the top of the report and can be added later with Add/Fix Specific Sources.</div>
+        <div class="dr-alert-foot" style="color:#e6d3a3">The run waits <strong>one minute at most</strong>, then carries on without the sign-in.
+          The sign-in tab stays open: finish signing in whenever you like and the rest of this run, and every later run, uses the session.
+          Nothing is skipped silently — a site that is still not signed in is flagged at the top of the report and can be added later with Add/Fix Specific Sources.</div>
         <div class="dr-run-row" style="margin-top:12px">
           <button class="dr-run-btn" onclick="drManualLogin('continue')">✓ I'm signed in — continue</button>
           <button class="dr-run-btn dr-run-secondary" onclick="drManualLogin('skip')">Skip ${dom} this run</button>
@@ -2089,7 +2265,7 @@ function _actAfter(owner) {
       on = !on;
       document.title = on ? `🔑 SIGN IN: ${dom}` : (_dr._nagTitle || 'Deep Research');
     };
-    try { _toast(`🔑 Sign-in needed for ${dom} — see the research Chrome window`, false); } catch (_) {}
+    try { _toast(`🔑 Sign-in needed for ${dom} — see the research browser window`, false); } catch (_) {}
     _dr._nagFlash = setInterval(tick, 1200);
     _dr._nagToast = setInterval(() => {
       try { _toast(`🔑 Still waiting for you to sign in to ${dom}`, false); } catch (_) {}
@@ -2322,7 +2498,7 @@ function _actAfter(owner) {
 
   function orDownloadDocx() {
     const d = _or.data; if (!d || !d.docx_b64) return;
-    saveAndOpen(d.docx_b64, d.query || _or.query, 'Odysseus', 'Odysseus Research — Report.docx', d.title);
+    saveAndOpen(d.docx_b64, d.query || _or.query, 'Odysseus', 'Odysseus Research — Report.docx', d.title, d.saved_path);
   }
 
   function _orShell(inner) {

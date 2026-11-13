@@ -3,7 +3,7 @@
 # Uses python:3.12-slim + `playwright install --with-deps chromium` so the image
 # always ships a Chromium that matches the installed Playwright version (no reliance
 # on a pinned Playwright base-image tag). The app talks to that bundled Chromium
-# headless (DRT_HEADED=0, DRT_BROWSER_CHANNEL="" → no "chrome" channel).
+# headless (DRT_HEADED=0; no Brave in the container → Playwright's bundled Chromium, never the "chrome" channel).
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \

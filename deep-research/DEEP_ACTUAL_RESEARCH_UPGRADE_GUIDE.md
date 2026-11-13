@@ -326,7 +326,7 @@ let it read as an empty success.
 - **Env knobs** (all optional, sane defaults): `DRT_EFFORT` (medium) ·
   `DRT_SLOWMO` (80ms browser pacing — the old 250ms makes deep runs take half a
   day) · `DRT_HEADED` / `DRT_BROWSER_CHANNEL` (env-driven browser: headed real
-  Chrome locally, bundled headless Chromium + `--no-sandbox --disable-dev-shm-usage`
+  Brave locally, bundled headless Chromium + `--no-sandbox --disable-dev-shm-usage`
   in containers — ONE canonical harness file for both) · `DRT_RERANK` ·
   `DRT_TRACE` (verbatim agent trace to a file — invaluable for post-run analysis) ·
   `DRT_REPORTS_DIR`.

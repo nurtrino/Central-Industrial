@@ -1,3 +1,13 @@
+> **2026-11-12 - BRIGHT DATA IS REMOVED.** The owner had it ripped out (build `2026-11-12.no-brightdata`): the
+> module `engines\research\brightdata.py`, the Web Unlocker / SERP / Scraping Browser paths, the `BRIGHTDATA_*`
+> settings and the `DRT_BRIGHTDATA` switch no longer exist. A page the browser cannot read goes to Tavily extract,
+> then Exa contents; an empty engine result goes to Tavily, then Exa. Wherever this older record mentions Bright
+> Data, it describes something that is gone. Do not rebuild it.
+
+> **2026-11-12 - BROWSER IS BRAVE.** Deep Research drives the installed Brave (visible by default, headless with
+> `DRT_HEADED=0`), profile `.drt_brave_profile`. Wherever this older record says "Chrome", `channel="chrome"` or
+> `.drt_chrome_profile`, read Brave. House rule and shared launcher: `_KNOWLEDGE\BROWSER_STANDARD.md`.
+
 # Deep Research — Handoff
 
 _Last updated: 2026-11-12 (build `2026-11-12.signal`). Older entry: 2026-09-20, portable implementation guide, build `2026-09-05.pollretry`._
@@ -197,10 +207,10 @@ the page's content; several = read `main` / `[role=main]` / body so replies surv
 `script, style, noscript, nav, header, footer, aside, form, svg, button, iframe`.
 
 **A3.3 Fetch fallback chain when Chrome can't read a URL** (blocked, 403, timeout):
-Bright Data Web Unlocker → Tavily extract → Exa contents. A recovered page enters the harvest
+Tavily extract → Exa contents. A recovered page enters the harvest
 with `via="<stage>+<provider>"`, is listed in the audit under "Pages Chrome could not read,
-fetched via unblocking providers", and its links (from the unlocker's HTML) are offered to the
-agent like any page. Tool result text says "Opened via brightdata (Chrome was blocked: …)".
+fetched via unblocking providers". Tool result text says "Opened via tavily (the browser was
+blocked: …)".
 
 **A3.4 The engine layer (what each engine actually needs now).**
 - **DuckDuckGo:** `https://html.duckduckgo.com/html/?q=` → `a.result__a`; hrefs are wrapped
@@ -220,7 +230,7 @@ agent like any page. Tool result text says "Opened via brightdata (Chrome was bl
   search?q=…&count=N`, header `X-Subscription-Token`, parse `web.results[].{title,url,
   description}`; free tier at api-dashboard.search.brave.com) and keep the scrape as fallback.
 - **Engine fallback chain** in ONE function the agent tools and the baseline sweep share:
-  browser engine → Bright Data SERP (if a zone exists) → Tavily → Exa. Tell the agent in the
+  browser engine → Tavily → Exa. Tell the agent in the
   tool description that an empty result already went through the providers, so "empty means
   the web has nothing for that phrasing — rephrase, don't repeat".
 
@@ -236,25 +246,9 @@ keyed) and `exa_search` / `exa_find_similar` when the plan's "API discovery" cha
 (UI toggle, default on). Don't use the Tavily/Exa MCP servers for the tool — the engine isn't
 an MCP client; the REST calls are the same API.
 
-**A3.6 Bright Data (three products, one token).** `BRIGHTDATA_API_KEY` (account token) plus,
-per product, the zone NAME from the dashboard (NOT the zone password/UUID — pasting the UUID
-gives `zone "<uuid>" not found`):
-- **Web Unlocker** (`BRIGHTDATA_UNLOCKER_ZONE`): `POST https://api.brightdata.com/request`
-  `{"zone": "<name>", "url": "<target>", "format": "raw"}`, Bearer token → raw HTML. The A3.3
-  fetch path. Live-verified reading a Cloudflare-walled forum thread in full.
-- **SERP API** (`BRIGHTDATA_SERP_ZONE`): same endpoint with a Google/Bing/DDG search URL plus
-  `&brd_json=1` → parsed JSON; parse `organic[].{link|url, title, description}` defensively.
-  Optional; Tavily already fills the fallback role.
-- **Browser API / Scraping Browser** (`BRIGHTDATA_BROWSER_WSS`): a remote unblocking Chrome
-  reached with `playwright.chromium.connect_over_cdp(wss_url)`. Copy the FULL `wss://brd-
-  customer-<id>-zone-<zone>:<password>@brd.superproxy.io:9222` line with the dashboard's copy
-  icon — a retyped one failed `407 wrong_password` (password truncated). Their sessions are
-  **one domain each** (`navigate_domains_limit`), max 60 min, 5-min idle timeout → open a
-  FRESH CDP session per tab and close it with the tab; only probe the credentials at startup;
-  never treat a remote session as logged in. Use it for HEADLESS/hosted mode only — the local
-  headed Chrome with the real profile is always better. Remote actions take 10-50s each.
-- Remove UA-spoof / `navigator.webdriver` shims once Bright Data is in: they were the wrong
-  tool (Cloudflare reacts to automation signals, not IP, and the shims didn't clear it).
+**A3.6 Bright Data - removed 2026-11-12.** The owner had it ripped out. There is no unblocking proxy,
+no SERP zone and no remote browser; the fallbacks are Tavily and Exa only (A3.3, A3.4). No UA-spoof or
+`navigator.webdriver` shims either: a site that refuses the browser is reported, not disguised past.
 
 **A3.7 Baseline sweep hygiene.** Semantic rerank of the pooled results (fastembed
 `BAAI/bge-small-en-v1.5`, identity fallback). Query craft everywhere: compact keyword strings,
@@ -447,8 +441,7 @@ aborted on anchor mismatches three times in five; not worth keeping.
 `ANTHROPIC_API_KEY` · `DRT_EFFORT` (low…max; medium) · `DRT_LANES` · `DRT_HEADED` /
 `DRT_BROWSER_CHANNEL` · `DRT_SLOWMO` (80) · `DRT_RERANK` · `DRT_TRACE` · `DRT_REPORTS_DIR` ·
 `TAVILY_API_KEY` (`DRT_TAVILY=0` off) · `EXA_API_KEY` (`DRT_EXA=0` off) · `BRAVE_API_KEY`
-(`DRT_BRAVE_API=0`) · `BRIGHTDATA_API_KEY` + `BRIGHTDATA_UNLOCKER_ZONE` + `BRIGHTDATA_SERP_ZONE`
-+ `BRIGHTDATA_BROWSER_WSS` (`DRT_BRIGHTDATA=0`) · `LMSTUDIO_URL`. `/api/health` reports a
+(`DRT_BRAVE_API=0`) · `LMSTUDIO_URL`. `/api/health` reports a
 `build` marker and a `providers` block (which keys are active) — health never calls the model
 API, so a dead/unfunded key still shows green; the first real run is the proof. Servers read
 `.env` once at startup: edits need a restart.
@@ -485,9 +478,7 @@ no-ops a pipeline unless the wrapper detects it.
    kind prefix, the digger runs, compaction elides old bodies and leaves the last 6 turns.
 4. **Real headless browser:** owner-thread proxy from 3 concurrent threads; challenge detector
    unit cases (Cloudflare title/text positive, forum thread negative).
-5. **Provider probes (live):** Tavily search + extract; Exa search; Bright Data unlocker on a
-   URL headed Chrome was walled on; Browser API `connect_over_cdp` then a search + an open
-   (expect the one-domain-per-session error until per-tab sessions are in); Brave API.
+5. **Provider probes (live):** Tavily search + extract; Exa search; Brave API.
 6. **Engine selectors (headed, throwaway profile):** dump the result-page DOM for each engine
    and confirm ≥5 real result URLs each; re-run after any 0-result day.
 7. **One real standard run, trace on:** Odysseus pre-pass → intake brief → plan → N lanes with

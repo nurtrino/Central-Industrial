@@ -1,4 +1,4 @@
-# Deep Research (standalone) — Python deps. CPU + network + Chrome + Claude API only.
+# Deep Research (standalone) — Python deps. CPU + network + Brave + Claude API only.
 # No torch / whisper / audio / market-data stack (those belonged to other tools in the
 # old monolith). Install into the local venv:  .venv\Scripts\pip install -r requirements.txt
 
@@ -8,8 +8,8 @@ flask>=3.0.0
 # Claude API (planning, search agent, per-page extract, synthesis)
 anthropic>=0.25.0
 
-# Browser-driven research — drives REAL headed Chrome (channel="chrome").
-# After install, the engine uses your installed Google Chrome; no chromium download
+# Browser-driven research — drives the REAL installed Brave (by its executable), headed or headless.
+# After install, the engine uses your installed Brave; no chromium download
 # is needed. If a driver install IS required, point it at a D:\ path to avoid the
 # sandbox-virtualized %LOCALAPPDATA% cache:  set PLAYWRIGHT_BROWSERS_PATH=D:\...
 playwright>=1.60.0

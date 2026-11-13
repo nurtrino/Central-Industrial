@@ -173,14 +173,15 @@ def egg_mp3():
 @app.route("/api/health")
 def health():
     try:
-        from engines.research import brightdata as _bd, tavily_search as _tv, exa_search as _ex
+        from engines.research import tavily_search as _tv, exa_search as _ex
         from engines.research import brave_search as _br
-        providers = {"brightdata": _bd.status(), "tavily": _tv.is_enabled(), "exa": _ex.is_enabled(),
+        providers = {"tavily": _tv.is_enabled(), "exa": _ex.is_enabled(),
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-12.signal",
-                    "sources_hash": _sources_hash(), "providers": providers})
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-13.hosted-guard",
+                    "sources_hash": _sources_hash(), "providers": providers,
+                    "hosted": _is_hosted_instance()})
 
 
 @app.route("/api/firecrawl/<path:fcpath>", methods=["GET", "POST", "OPTIONS"])
@@ -338,15 +339,27 @@ def save_report():
         os.makedirs(_REPORTS_DIR, exist_ok=True)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"could not create the reports folder: {e}"}), 500
-    if not title:
-        title = _report_title(query, data.get("report_md") or "")
-    fname = _report_filename(title, label)
-    path = os.path.join(_REPORTS_DIR, fname)
-    try:
-        with open(path, "wb") as fh:
-            fh.write(raw)
-    except Exception as e:  # noqa: BLE001
-        return jsonify({"error": f"could not save the file: {e}"}), 500
+    # The run already auto-saved this report when it finished. Open THAT file rather than
+    # writing another copy stamped with the time of the click: on 2026-11-12 three such
+    # copies (15:47, 15:58, 17:46) of the 15:46 report were taken for reports of new runs.
+    # Only a file name is accepted, and only inside the reports folder.
+    reused = False
+    path = ""
+    sp = os.path.basename(str(data.get("saved_path") or "").replace("\\", "/"))
+    if sp.lower().endswith(".docx"):
+        cand = os.path.join(_REPORTS_DIR, sp)
+        if os.path.isfile(cand):
+            path, fname, reused = cand, sp, True
+    if not reused:
+        if not title:
+            title = _report_title(query, data.get("report_md") or "")
+        fname = _report_filename(title, label)
+        path = os.path.join(_REPORTS_DIR, fname)
+        try:
+            with open(path, "wb") as fh:
+                fh.write(raw)
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"error": f"could not save the file: {e}"}), 500
     opened = False
     if do_open and hasattr(os, "startfile"):   # Windows only — hosted/Linux reports
         try:                                   # opened=False and the UI downloads it.
@@ -354,7 +367,8 @@ def save_report():
             opened = True
         except Exception:
             opened = False
-    return jsonify({"ok": True, "path": path, "filename": fname, "opened": opened})
+    return jsonify({"ok": True, "path": path, "filename": fname, "opened": opened,
+                    "reused": reused})
 
 
 # ── Async job registry (standalone — no longer shared with other tools) ──────
@@ -377,9 +391,10 @@ _EVENT_KIND_MAP = {
     "act": "act", "hit": "hit", "turn": "turn", "extract": "extract", "synth": "synth",
     "docs": "docs",   # uploaded-document intake analysis
     "lane": "lane",   # parallel-lane planning / lead review / hot-trail dig
-    "brightdata": "search", "tavily": "search", "exa": "search", "local-baseline": "search",
+    "tavily": "search", "exa": "search", "local-baseline": "search",
     "deepen": "synth", "stage2": "stage", "stage3": "stage", "stage4": "stage",
     "alert": "alert",   # a plan-selected site failed login / could not be searched / was skipped
+    "alert-clear": "note",   # …and the withdrawal of one that did not hold (see _push_event)
     "pause": "stage", "focus": "stage", "pipeline": "stage",
 }
 
@@ -404,7 +419,15 @@ def _push_event(job_id, kind, text):
             job["eseq"] = seq
             evs = job.setdefault("events", [])
             evs.append([seq, kind, str(text or "")[:_EVENT_TEXT_CAP]])
-            if kind == "alert":
+            mclr = re.match(r"\s*\[alert-clear\]\s*(?:\S+\s+·\s+)?(\S+)\s+—\s+(.+?)\s+withdrawn",
+                            str(text or ""))
+            if mclr:
+                # An alert that turned out not to hold (a site's own search missed once,
+                # then worked) is taken off the sticky list, so the banner drops it.
+                dom_c, lab_c = mclr.group(1), mclr.group(2)
+                job["alerts"] = [a for a in job.get("alerts", [])
+                                 if not (a.startswith(dom_c + " ") and f"— {lab_c}:" in a)]
+            elif kind == "alert":
                 # Alerts are STICKY: kept on the job (the rolling event buffer is trimmed)
                 # and returned whole on every status poll, so the UI banner cannot miss one.
                 al = job.setdefault("alerts", [])
@@ -486,7 +509,8 @@ def _backup_then_write(path, content):
         fh.write(content)
 
 
-def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
+def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None,
+                        prompt: str = "", prompt_meta: str = "") -> bytes:
     """Convert markdown to a .docx (returned as bytes). Renders GitHub-flavored pipe
     tables as real Word tables, plus headings, bullets, rules, and inline **bold**/*italic*."""
     from docx import Document
@@ -506,31 +530,115 @@ def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
         section.right_margin  = Inches(0.5)
 
     HEADER_BG = "1A1A2E"
-    _INLINE = re.compile(r"(\*\*.+?\*\*|__.+?__|\*.+?\*|_.+?_)")
+    LINK_BLUE = "0563C1"
+    # Inline markdown, in priority order. 2026-11-12: the old pattern treated ANY pair of
+    # underscores as italics, so `probability_cutoff: 0.98 / sliding_window_size` lost its
+    # underscores and a repo URL with underscores in it was mangled; code spans kept their
+    # backticks; and links were written out as raw "[title](url)" text (the first real
+    # report had 119 of those and not one clickable link).
+    #   code   `…`                    → monospace, nothing inside is interpreted
+    #   link   [text](url)            → a real hyperlink (one level of [] inside text is fine)
+    #   url    bare http(s)://…       → a real hyperlink
+    #   bold   **…** / __…__          → bold (inner text parsed again)
+    #   italic *…* / _…_              → italic, ONLY at word boundaries (snake_case is safe)
+    _TOK = re.compile(
+        r"(?P<code>`[^`\n]+`)"
+        r"|(?P<link>\[(?P<lt>(?:[^\[\]]|\[[^\[\]]*\])*)\]\((?P<lu>https?://(?:[^\s()]|\([^\s()]*\))+)\))"
+        r"|(?P<url>https?://[^\s<>\"'`\]]+)"
+        r"|(?P<b>(?<!\\)\*\*(?=\S)(?P<bt>.+?)(?<=[^\s\\])\*\*)"
+        r"|(?P<b2>(?<![A-Za-z0-9_\\])__(?=\S)(?P<b2t>.+?)(?<=[^\s\\])__(?![A-Za-z0-9_(]|\.[A-Za-z0-9]))"
+        r"|(?P<i>(?<![\*\w\\])\*(?=[^\s\*])(?P<it>[^\*\n]+?)(?<=[^\s\*\\])\*(?![\*\w]))"
+        r"|(?P<i2>(?<![A-Za-z0-9_\\])_(?=[^\s_])(?P<i2t>[^\n]+?)(?<=[^\s_\\])_(?![A-Za-z0-9_(]|\.[A-Za-z0-9]))")
+    _UNESC = re.compile(r"\\([\\`*_\[\]()#+\-.!|>~])")
 
-    def _add_runs(paragraph, text: str):
+    def _style(run, bold=False, italic=False, size=None, color=None):
+        if bold:
+            run.bold = True
+        if italic:
+            run.italic = True
+        if size is not None:
+            run.font.size = size
+        if color is not None:
+            run.font.color.rgb = color
+        return run
+
+    def _add_link(paragraph, text: str, url: str, bold=False, italic=False, size=None):
+        """A real, clickable Word hyperlink (blue, underlined)."""
+        try:
+            r_id = paragraph.part.relate_to(
+                url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+                is_external=True)
+        except Exception:
+            _style(paragraph.add_run(text), bold, italic, size)
+            return
+        h = OxmlElement("w:hyperlink")
+        h.set(qn("r:id"), r_id)
+        h.set(qn("w:history"), "1")
+        r = OxmlElement("w:r")
+        rPr = OxmlElement("w:rPr")
+        col = OxmlElement("w:color")
+        col.set(qn("w:val"), LINK_BLUE)
+        rPr.append(col)
+        u = OxmlElement("w:u")
+        u.set(qn("w:val"), "single")
+        rPr.append(u)
+        if bold:
+            rPr.append(OxmlElement("w:b"))
+        if italic:
+            rPr.append(OxmlElement("w:i"))
+        if size is not None:
+            sz = OxmlElement("w:sz")
+            sz.set(qn("w:val"), str(int(size.pt * 2)))
+            rPr.append(sz)
+        r.append(rPr)
+        t = OxmlElement("w:t")
+        t.set(qn("xml:space"), "preserve")
+        t.text = text
+        r.append(t)
+        h.append(r)
+        paragraph._p.append(h)
+
+    def _add_runs(paragraph, text: str, bold=False, italic=False, size=None, color=None):
         pos = 0
-        for m in _INLINE.finditer(text):
-            if m.start() > pos:
-                paragraph.add_run(text[pos:m.start()])
-            tok = m.group(0)
-            if tok.startswith("**") or tok.startswith("__"):
-                paragraph.add_run(tok[2:-2]).bold = True
-            else:
-                paragraph.add_run(tok[1:-1]).italic = True
+
+        def _plain(s):
+            if s:
+                _style(paragraph.add_run(_UNESC.sub(r"\1", s)), bold, italic, size, color)
+
+        for m in _TOK.finditer(text):
+            _plain(text[pos:m.start()])
             pos = m.end()
-        if pos < len(text):
-            paragraph.add_run(text[pos:])
+            if m.group("code"):
+                run = _style(paragraph.add_run(m.group("code")[1:-1]), bold, italic, size, color)
+                run.font.name = "Consolas"
+                if size is None:
+                    run.font.size = Pt(10)
+            elif m.group("link"):
+                label = re.sub(r"[*_`]{1,2}(?=\S)|(?<=\S)[*_`]{1,2}", "", m.group("lt")).strip()
+                _add_link(paragraph, _UNESC.sub(r"\1", label) or m.group("lu"), m.group("lu"),
+                          bold, italic, size)
+            elif m.group("url"):
+                raw = m.group("url")
+                url = raw.rstrip(".,;:!?")
+                while url.endswith(")") and url.count("(") < url.count(")"):
+                    url = url[:-1]          # a closing bracket that belongs to the sentence
+                _add_link(paragraph, url, url, bold, italic, size)
+                _plain(raw[len(url):])
+            elif m.group("b") or m.group("b2"):
+                _add_runs(paragraph, m.group("bt") or m.group("b2t"), True, italic, size, color)
+            else:
+                _add_runs(paragraph, m.group("it") or m.group("i2t"), bold, True, size, color)
+        _plain(text[pos:])
 
     def _add_heading(text: str, level: int):
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        run = p.add_run(text)
-        run.bold = True
-        run.font.size = Pt(13 if level == 1 else 11.5 if level == 2 else 11)
-        run.font.color.rgb = RGBColor(0x1A, 0x1A, 0x2E)
+        _add_runs(p, re.sub(r"^\*\*(.+)\*\*$", r"\1", text.strip()), bold=True,
+                  size=Pt(13 if level == 1 else 11.5 if level == 2 else 11),
+                  color=RGBColor(0x1A, 0x1A, 0x2E))
         p.paragraph_format.space_before = Pt(12 if level == 1 else 8)
         p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.keep_with_next = True
 
     def _add_body(text: str):
         p = doc.add_paragraph()
@@ -538,10 +646,27 @@ def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after  = Pt(4)
 
-    def _add_bullet(text: str):
-        p = doc.add_paragraph(style="List Bullet")
+    def _add_bullet(text: str, level: int = 0, extra_indent: float = 0.0):
+        style = "List Bullet" if level <= 0 else f"List Bullet {min(level + 1, 3)}"
+        try:
+            p = doc.add_paragraph(style=style)
+        except KeyError:
+            p = doc.add_paragraph(style="List Bullet")
+        if extra_indent:
+            p.paragraph_format.left_indent = Inches(0.25 + extra_indent)
         _add_runs(p, text)
         p.paragraph_format.space_after = Pt(2)
+
+    def _add_numbered(num: str, text: str, level: int = 0):
+        """A numbered item that KEEPS ITS NUMBER. Numbered lists used to be turned into
+        bullets, so the Sources list lost the numbers the report's [n] citations point to."""
+        p = doc.add_paragraph()
+        ind = 0.32 + 0.25 * max(0, level)
+        p.paragraph_format.left_indent = Inches(ind)
+        p.paragraph_format.first_line_indent = Inches(-0.32)
+        p.paragraph_format.space_after = Pt(2)
+        _style(p.add_run(f"{num}. "), bold=True)
+        _add_runs(p, text)
 
     def _split_row(line: str):
         s = line.strip()
@@ -604,6 +729,48 @@ def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
         spacer = doc.add_paragraph()
         spacer.paragraph_format.space_after = Pt(2)
 
+    # The research prompt, boxed and bold, at the very top — the question travels with
+    # the answer (a single-cell table = the box; heavy rule on all four sides).
+    if (prompt or "").strip():
+        box = doc.add_table(rows=1, cols=1)
+        box.autofit = True
+        cell = box.rows[0].cells[0]
+        tcPr = cell._tc.get_or_add_tcPr()
+        borders = OxmlElement("w:tcBorders")
+        for edge in ("top", "left", "bottom", "right"):
+            el = OxmlElement(f"w:{edge}")
+            el.set(qn("w:val"), "single")
+            el.set(qn("w:sz"), "18")          # 2.25 pt
+            el.set(qn("w:space"), "0")
+            el.set(qn("w:color"), HEADER_BG)
+            borders.append(el)
+        tcPr.append(borders)
+        _set_cell_bg(cell, "F3F3F8")
+        p0 = cell.paragraphs[0]
+        r0 = p0.add_run("RESEARCH PROMPT")
+        r0.bold = True
+        r0.font.size = Pt(8.5)
+        r0.font.color.rgb = RGBColor(0x55, 0x55, 0x66)
+        p0.paragraph_format.space_before = Pt(5)
+        p0.paragraph_format.space_after = Pt(3)
+        for para in [x.strip() for x in prompt.strip().split("\n") if x.strip()]:
+            pp = cell.add_paragraph()
+            rr = pp.add_run(para)
+            rr.bold = True
+            rr.font.size = Pt(12)
+            rr.font.color.rgb = RGBColor(0x1A, 0x1A, 0x2E)
+            pp.paragraph_format.space_before = Pt(0)
+            pp.paragraph_format.space_after = Pt(4)
+        if (prompt_meta or "").strip():
+            pm = cell.add_paragraph()
+            rm = pm.add_run(prompt_meta.strip())
+            rm.italic = True
+            rm.font.size = Pt(9)
+            rm.font.color.rgb = RGBColor(0x55, 0x55, 0x66)
+            pm.paragraph_format.space_after = Pt(5)
+        gap = doc.add_paragraph()
+        gap.paragraph_format.space_after = Pt(4)
+
     lines = memo_md.splitlines()
     n = len(lines)
     i = 0
@@ -644,19 +811,28 @@ def _memo_to_docx_bytes(memo_md: str, label: str, images: dict = None) -> bytes:
             _add_heading(stripped[3:], 2)
         elif stripped.startswith("# "):
             _add_heading(stripped[2:], 1)
-        elif stripped.startswith(("- ", "* ", "• ")):
-            _add_bullet(stripped[2:])
-        elif re.match(r"^\d+\. ", stripped):
-            _add_bullet(re.sub(r"^\d+\. ", "", stripped))
+        elif stripped.startswith(("- ", "* ", "• ", "+ ")):
+            lead = len(lines[i]) - len(lines[i].lstrip(" \t"))
+            _add_bullet(stripped[2:].strip(), level=min(2, lead // 2))
+        elif re.match(r"^\d+[.)] ", stripped):
+            mnum = re.match(r"^(\d+)[.)] (.*)$", stripped)
+            lead = len(lines[i]) - len(lines[i].lstrip(" \t"))
+            _add_numbered(mnum.group(1), mnum.group(2).strip(), level=min(2, lead // 2))
         elif stripped.startswith("**") and stripped.endswith("**") and stripped.count("**") == 2:
             _add_heading(stripped.strip("*"), 2)
         elif stripped.startswith(">"):
-            q = re.sub(r"^(\s*>+\s?)+", "", stripped)
-            p = doc.add_paragraph()
-            _add_runs(p, q)
-            p.paragraph_format.left_indent = Inches(0.25)
-            p.paragraph_format.space_before = Pt(4)
-            p.paragraph_format.space_after  = Pt(4)
+            q = re.sub(r"^(\s*>+\s?)+", "", stripped).strip()
+            if not q:
+                i += 1
+                continue
+            if q.startswith(("- ", "* ", "• ")):          # a list inside a call-out box
+                _add_bullet(q[2:].strip(), extra_indent=0.25)
+            else:
+                p = doc.add_paragraph()
+                _add_runs(p, q)
+                p.paragraph_format.left_indent = Inches(0.25)
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after  = Pt(4)
         else:
             _add_body(stripped)
         i += 1
@@ -800,6 +976,9 @@ def _dr_harvest_to_md(query, h):
             f"baseline sweep {_w('api_search')} · open engines {_w('web_engines')} · "
             f"curated sites {_w('site_queries')} · API discovery (Tavily/Exa) {ns}{et}. "
             f"_{plan.get('rationale', '').strip()}_\n")
+        if plan.get("topics"):
+            out.append("**Topics you named** (each owned by a lane, and rated in the report's "
+                       "coverage table): " + " · ".join(str(t) for t in plan["topics"]) + "\n")
     try:
         from engines.research.models import all_models
         mm = all_models()
@@ -828,7 +1007,7 @@ def _dr_harvest_to_md(query, h):
         out.append("")
     fbs = getattr(h, "fallback_fetches", None) or []
     if fbs:
-        out.append(f"**Pages Chrome could not read, fetched via unblocking providers ({len(fbs)}):** "
+        out.append(f"**Pages the research browser could not read, fetched via unblocking providers ({len(fbs)}):** "
                    + "; ".join(f"{f.get('url', '')[:70]} ({f.get('via')})" for f in fbs[:12]) + "\n")
     if getattr(h, "curated_searched", None):
         out.append(f"**Curated sites searched ({len(h.curated_searched)}):** "
@@ -852,6 +1031,16 @@ def _dr_harvest_to_md(query, h):
         out.append("**Sites' own search (worked / returned nothing):** "
                    + "; ".join(f"{d} {v.get('ok', 0)}/{v.get('empty', 0)}" for d, v in ns.items())
                    + "\n")
+    sw = getattr(h, "site_sweeps", None) or []
+    if sw:
+        out.append("**Dedicated site sweeps** (each plan-selected site, searched through its own "
+                   "search by its own agent):\n"
+                   + "\n".join(
+                       f"- {r.get('domain')}{' (signed in)' if r.get('signed_in') else ' (not signed in)'}"
+                       f" — {r.get('searches', 0)} searches · {r.get('results', 0)} results · "
+                       f"{r.get('pages', 0)} pages read"
+                       + (f" — {str(r.get('note'))[:220]}" if r.get('note') else "")
+                       for r in sw) + "\n")
     if getattr(h, "skipped_gated", None):
         out.append(f"**Gated sources skipped** (login failed / needed 2FA): "
                    f"{', '.join(h.skipped_gated)}\n")
@@ -859,6 +1048,34 @@ def _dr_harvest_to_md(query, h):
         out.append(f"**Gated sources not pursued:** {', '.join(h.gated_candidates)}\n")
     if h.stopped_reason:
         out.append(f"**Stop reason:** {h.stopped_reason}\n")
+    cc = getattr(h, "citation_check", None)
+    if isinstance(cc, dict) and cc.get("stats"):
+        st = cc["stats"]
+        out.append(f"**Citation check:** {st.get('checked', 0)} cited statements tested against the "
+                   f"findings of the sources they cite — {st.get('supported', 0)} supported · "
+                   f"{st.get('corrected', 0)} corrected · {st.get('removed', 0)} removed · "
+                   f"{st.get('requalified', 0)} kept but marked as resting on search results only · "
+                   f"{st.get('cites_dropped', 0)} stray citations dropped · "
+                   f"{st.get('pseudo', 0)} stand-in citations relabelled · "
+                   f"{st.get('flagged', 0)} flagged · {st.get('unchecked', 0)} not checked"
+                   + (" · **too many failed to edit automatically — the statements below were "
+                      "left as written**" if cc.get("mode") == "flag-only" else "") + "\n")
+        lab = {"correct": "corrected", "remove": "removed", "decite": "citation dropped",
+               "flag": "flagged, left as written",
+               "requalify": "kept, wrong citation removed, marked as search results only",
+               "relabel": "stand-in citation relabelled"}
+        for ch in (cc.get("changes") or [])[:60]:
+            line = f"- **{lab.get(ch.get('action'), ch.get('action'))}** ({ch.get('verdict')}"
+            if ch.get("note"):
+                line += f": {ch['note']}"
+            line += f") — was: “{str(ch.get('before', ''))[:420]}”"
+            if (ch.get("action") in ("correct", "decite", "requalify", "relabel")
+                    or (ch.get("action") == "flag" and ch.get("after") != ch.get("before"))):
+                line += f" → now: “{str(ch.get('after', ''))[:420]}”"
+            if ch.get("dropped"):
+                line += " · dropped " + ", ".join(f"[{n}]" for n in ch["dropped"])
+            out.append(line)
+        out.append("")
 
     stage1 = next((it for it in h.items if it.via == "stage1"), None)
     if stage1 and stage1.text.strip():
@@ -904,15 +1121,23 @@ def _dr_wrap_report(query, h, synth_md, ody_md=""):
         lab = {"login_failed": "LOGIN FAILED", "unreachable": "COULD NOT SEARCH / NAVIGATE",
                "skipped": "SKIPPED"}
         alerts.sort(key=lambda a: (not a.get("credentialed"), a.get("domain", "")))
+        signed_now = set(getattr(h, "logged_in", None) or [])
+
+        def _tag(a):
+            # Say whether the run was signed in: "could not search" on a signed-in site is a
+            # search problem, not a login problem.
+            if a.get("signed_in") or a.get("domain") in signed_now:
+                return " (signed in)"
+            return " (login stored — NOT signed in)" if a.get("credentialed") else ""
         rows = "\n".join(
-            f"> - **{a.get('domain')}**{' (credentialed)' if a.get('credentialed') else ''} — "
+            f"> - **{a.get('domain')}**{_tag(a)} — "
             f"**{lab.get(a.get('kind'), str(a.get('kind')).upper())}**: {a.get('detail')}"
             for a in alerts)
         warn = (f"> ⚠ **Source problems this run** — {len({a.get('domain') for a in alerts})} "
                 "site(s) the research plan selected were not fully searched, so their material "
                 "may be missing from this report:\n" + rows +
-                "\n>\n> Use **Add/Fix Specific Sources** (below the report) to supply or correct "
-                "logins and re-scan just these sites.\n\n")
+                "\n>\n> Use **Add/Fix Specific Sources** (below the report) to re-scan just these "
+                "sites — and to add or correct a login where a login is the problem.\n\n")
     elif getattr(h, "login_warnings", None):
         lines = "; ".join(f"**{w.get('domain')}** ({w.get('detail')})" for w in h.login_warnings)
         warn = ("> ⚠ **Stored-login warning:** the tool could not complete the saved login for "
@@ -988,16 +1213,153 @@ def _analyze_docs(client, query, doc_parts, log=lambda m: None, unverified=False
     return "\n\n".join(briefs)
 
 
+# ── recent jobs (history) ─────────────────────────────────────────────────────────────
+# One small JSON file of finished research jobs, newest first: what was asked, when it
+# finished, and where the report was saved. Feeds the "Recent research" panel under the
+# form. Local run-time state (config\drt_history.json) — not part of the source.
+_HISTORY_PATH = os.path.join(_ROOT, "config", "drt_history.json")
+_HISTORY_MAX = 200
+_HISTORY_LOCK = threading.Lock()
+
+
+def _history_load():
+    try:
+        with open(_HISTORY_PATH, encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _history_save(items):
+    os.makedirs(os.path.dirname(_HISTORY_PATH), exist_ok=True)
+    tmp = _HISTORY_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(items[:_HISTORY_MAX], fh, indent=1, ensure_ascii=False)
+    os.replace(tmp, _HISTORY_PATH)
+
+
+def _history_add(rec):
+    """Record one finished job (newest first). Never raises."""
+    try:
+        with _HISTORY_LOCK:
+            if not os.path.exists(_HISTORY_PATH):
+                _history_backfill()
+            items = [i for i in _history_load() if i.get("id") != rec.get("id")]
+            items.insert(0, rec)
+            _history_save(items)
+    except Exception:
+        pass
+
+
+def _docx_question(path):
+    """The research question recorded inside a saved report ('Question: …' in its audit
+    section) — used to back-fill the prompt for reports saved before history existed."""
+    try:
+        from docx import Document
+        for p in Document(path).paragraphs:
+            t = (p.text or "").strip()
+            if t.lower().startswith("question:"):
+                return t.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _history_backfill(limit=10):
+    """First use: seed the history from the newest reports already in the reports folder.
+    Caller holds _HISTORY_LOCK."""
+    items = []
+    try:
+        files = [os.path.join(_REPORTS_DIR, f) for f in os.listdir(_REPORTS_DIR)
+                 if f.lower().endswith(".docx") and not f.startswith("~$")]
+        files.sort(key=os.path.getmtime, reverse=True)
+        for p in files[:limit]:
+            name = os.path.basename(p)[:-5]
+            title = name.split(" — ")[0].strip() or name
+            items.append({"id": "file-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:12],
+                          "title": title, "query": _docx_question(p), "clarifications": "",
+                          "depth": "", "focus": False, "focus_domains": [],
+                          "completed": time.strftime("%Y-%m-%d %H:%M",
+                                                     time.localtime(os.path.getmtime(p))),
+                          "saved_path": p, "sources": None, "usd": None, "backfilled": True})
+    except Exception:
+        pass
+    try:
+        _history_save(items)
+    except Exception:
+        pass
+
+
+def _history_find(job_id):
+    with _HISTORY_LOCK:
+        return next((r for r in _history_load() if r.get("id") == job_id), None)
+
+
+@app.route("/api/deep_research/history", methods=["GET"])
+def deep_research_history():
+    """The last 10 finished research jobs for the Recent research panel."""
+    with _HISTORY_LOCK:
+        if not os.path.exists(_HISTORY_PATH):
+            _history_backfill()
+        items = _history_load()[:10]
+    jobs = []
+    for r in items:
+        p = r.get("saved_path") or ""
+        jobs.append({"id": r.get("id"), "title": r.get("title") or "(untitled)",
+                     "query": r.get("query") or "", "clarifications": r.get("clarifications") or "",
+                     "depth": r.get("depth") or "", "focus": bool(r.get("focus")),
+                     "failed": bool(r.get("failed")),
+                     "focus_domains": r.get("focus_domains") or [],
+                     "completed": r.get("completed") or "", "sources": r.get("sources"),
+                     "usd": r.get("usd"), "file": os.path.basename(p),
+                     "has_doc": bool(p and os.path.isfile(p))})
+    return jsonify({"jobs": jobs, "can_open": (not _is_hosted_instance()) and hasattr(os, "startfile")})
+
+
+@app.route("/api/deep_research/history/open", methods=["POST", "OPTIONS"])
+def deep_research_history_open():
+    """Open a past job's saved report in Word (local app only)."""
+    if request.method == "OPTIONS":
+        return "", 204
+    rec = _history_find(request.args.get("id", ""))
+    p = (rec or {}).get("saved_path") or ""
+    if not (p.lower().endswith(".docx") and os.path.isfile(p)):
+        return jsonify({"error": "that report file is no longer where it was saved"}), 404
+    if _is_hosted_instance() or not hasattr(os, "startfile"):
+        return jsonify({"error": "opening files is only available on the local app"}), 403
+    try:
+        os.startfile(p)  # noqa: S606 — the .docx association (Word)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"could not open it: {e}"}), 500
+    return jsonify({"ok": True, "path": p})
+
+
+@app.route("/api/deep_research/history/doc", methods=["GET"])
+def deep_research_history_doc():
+    """Download a past job's saved report."""
+    rec = _history_find(request.args.get("id", ""))
+    p = (rec or {}).get("saved_path") or ""
+    if not (p.lower().endswith(".docx") and os.path.isfile(p)):
+        return jsonify({"error": "that report file is no longer where it was saved"}), 404
+    return send_from_directory(os.path.dirname(p), os.path.basename(p), as_attachment=True)
+
+
 # ── manual sign-in prompt (2FA / passkey / captcha sites) ─────────────────────────────
 _DR_MANUAL = {}     # job_id -> threading.Event (user pressed Continue / Skip)
-_MANUAL_LOGIN_WAIT_S = 600
+# OWNER RULE (2026-11-12): nothing in a run waits more than ONE MINUTE on a failure or on
+# the user. A sign-in prompt, a credentials prompt and a refusal prompt each used to hold
+# the run for ten minutes; the first real run of the new sign-in check sat on a GitHub 2FA
+# page for the full ten. After the minute the run carries on without that source and says so.
+_USER_WAIT_S = 60
+_MANUAL_LOGIN_WAIT_S = _USER_WAIT_S
 
 
 def _make_manual_login(job_id, stop_ev):
     """Build the blocking callback the engine calls when a plan-selected credentialed site
     needs the USER to sign in. It flags the job (the UI shows the sign-in panel and nags),
-    then waits until the session appears in the browser, the user answers, or 10 minutes
-    pass. Returns 'signed_in' | 'continue' | 'skip' | 'timeout'."""
+    then waits until the session appears in the browser, the user answers, or one minute
+    passes (_USER_WAIT_S). Returns 'signed_in' | 'continue' | 'skip' | 'timeout'."""
     import time as _t
 
     def _cb(domain, detail, check):
@@ -1067,7 +1429,7 @@ def _dr_fixable(h):
 
 
 def _dr_finalize(job_id, client, query, h, report_md_synth, synth_error, ody_report,
-                 log_fn, prog, focus=False):
+                 log_fn, prog, focus=False, meta=None):
     """Shared tail of a run: synthesis-failure note → 'how to go deeper' → usage →
     audit wrap → docx → title → auto-save. Returns the result dict for the UI."""
     if synth_error is not None:
@@ -1106,15 +1468,28 @@ def _dr_finalize(job_id, client, query, h, report_md_synth, synth_error, ody_rep
     except Exception:
         h.usage = None
     report_md, docx_md = _dr_wrap_report(query, h, report_md_synth, ody_md=ody_report)
+    # The prompt that produced this report, boxed and bold at the top of both the on-screen
+    # report and the saved document, so the question is kept with the answer.
+    import html as _html
+    _doms = list((meta or {}).get("focus_domains") or [])
+    prompt_meta = " · ".join(x for x in (
+        time.strftime("%Y-%m-%d %H:%M"),
+        (f"{getattr(h, 'depth', '')} tier" if getattr(h, "depth", "") else ""),
+        (("sources pass: " + ", ".join(_doms)) if (focus and _doms) else "")) if x)
+    report_md = ('<div class="dr-prompt-box"><div class="dr-prompt-label">Research prompt</div>'
+                 '<div class="dr-prompt-text">' + _html.escape(query).replace("\n", "<br>") + '</div>'
+                 '<div class="dr-prompt-meta">' + _html.escape(prompt_meta) + '</div></div>\n\n'
+                 + report_md)
     try:
-        docx_b64 = base64.b64encode(_memo_to_docx_bytes(docx_md, "Deep Research")).decode()
+        docx_b64 = base64.b64encode(_memo_to_docx_bytes(
+            docx_md, "Deep Research", prompt=query, prompt_meta=prompt_meta)).decode()
     except Exception:
         docx_b64 = ""
     title = _report_title(query, report_md_synth, client) if client else _report_title(query)
     log_fn(f"[synth] title: {title}")
     sources = [{"title": it.title, "url": it.url, "type": it.source_type,
                 "chars": len(it.text)} for it in h.items if it.via != "stage1"]
-    return {"query": query, "title": title, "report_md": report_md, "sources": sources,
+    result = {"query": query, "title": title, "report_md": report_md, "sources": sources,
             "source_count": len(sources), "docx_b64": docx_b64,
             "saved_path": _autosave_report(docx_b64, query, "Deep Research", title=title),
             "go_deeper_md": go_deeper,
@@ -1129,6 +1504,17 @@ def _dr_finalize(job_id, client, query, h, report_md_synth, synth_error, ody_rep
             "stats": {"searches": h.searches_used, "pages": h.pages_used,
                       "category": getattr(h, "category", "") or "general",
                       "stopped": h.stopped_reason}}
+    meta = meta or {}
+    usage = getattr(h, "usage", None)
+    _history_add({"id": job_id, "title": title, "query": query,
+                  "clarifications": str(meta.get("clarifications") or "")[:2000],
+                  "depth": getattr(h, "depth", "") or "", "focus": bool(focus),
+                  "failed": synth_error is not None,     # e.g. the API account ran out of credits
+                  "focus_domains": list(meta.get("focus_domains") or []),
+                  "completed": time.strftime("%Y-%m-%d %H:%M"),
+                  "saved_path": result.get("saved_path") or "", "sources": len(sources),
+                  "usd": (round(usage.get("total_usd", 0), 2) if isinstance(usage, dict) else None)})
+    return result
 
 
 DR_FOCUS_STAGES = ["stage3", "synthesize", "report"]
@@ -1217,7 +1603,11 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
                     synth = synthesize(h, gov, client, progress=prog, nugget_cache=cache,
                                        category=category, user_docs=doc_context, log=log_fn,
                                        context=clar, prior_research=ody_report)
-                    report_md_synth = synth.get("report_md", "") or prev_synth
+                    from engines.research.synthesize import check_citations
+                    prog("synthesize", None, "Checking every citation against its source…")
+                    chk = check_citations(client, query, synth, log=log_fn)
+                    h.citation_check = chk
+                    report_md_synth = chk.get("report_md") or synth.get("report_md", "") or prev_synth
                 else:
                     synth = synthesize(
                         h, gov, client, progress=prog, nugget_cache=cache, category="general",
@@ -1227,7 +1617,10 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
                                  "document. Write ONLY an addendum headed '## Addendum — newly "
                                  "added sources': what the numbered sources below ADD to, CORRECT "
                                  "or CONTRADICT in that report. Do not restate the report."))
-                    add_md = (synth.get("report_md", "") or "").strip()
+                    from engines.research.synthesize import check_citations
+                    chk = check_citations(client, query, synth, log=log_fn)
+                    h.citation_check = chk
+                    add_md = (chk.get("report_md") or synth.get("report_md", "") or "").strip()
                     report_md_synth = ((prior_report or "").strip() + "\n\n---\n\n" + add_md).strip()
             except Exception as e:  # noqa: BLE001
                 synth_error = e
@@ -1238,7 +1631,8 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
                                + ", ".join(domains) + "): no new readable material was found._")
 
         result = _dr_finalize(job_id, client, query, h, report_md_synth, synth_error,
-                              ody_report, log_fn, prog, focus=True)
+                              ody_report, log_fn, prog, focus=True,
+                              meta={"clarifications": clar, "focus_domains": domains})
         result["focus_added"] = added
         result["focus_domains"] = list(domains)
         _dr_keep(job_id, {"h": h, "cache": cache, "gov": gov, "category": category,
@@ -1277,7 +1671,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             job["awaiting_credentials"] = candidates
             job["submitted_credentials"] = None
             job["message"] = f"Waiting for credentials for {len(candidates)} gated source(s)…"
-        ok = ev.wait(timeout=600)
+        ok = ev.wait(timeout=_USER_WAIT_S)
         with _JOBS_LOCK:
             submitted = job.get("submitted_credentials") or {}
             job["awaiting_credentials"] = None
@@ -1296,7 +1690,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         from engines.research.agent import RUN_CLOCK as _rc
         _rc.reset()          # a fresh, un-paused research clock for this run
         # Refusal hook: if Claude declines (safety refusal), pause the pipeline right
-        # there, flag the UI, and wait (up to 10 min) for the user's choice. "local"
+        # there, flag the UI, and wait (up to one minute) for the user's choice. "local"
         # → the wrapper swaps to LM Studio and RESUMES from the refused call; "abort"
         # → stop gathering and assemble what we have. Reuses the local-model wiring.
         refusal_ev = _DR_REFUSAL[job_id]
@@ -1310,7 +1704,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                 job["refusal_decision"] = None
             log_fn(f"[refusal] Claude declined ({details.get('category')}) — "
                    f"awaiting your choice (switch to local model / stop)")
-            ok = refusal_ev.wait(timeout=600)
+            ok = refusal_ev.wait(timeout=_USER_WAIT_S)
             with _JOBS_LOCK:
                 dec = (job.get("refusal_decision") or "abort") if ok else "abort"
                 job["awaiting_refusal_choice"] = None
@@ -1440,11 +1834,25 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                         if _rc.now() > run_deadline - 75:
                             log_fn("[synth] time window spent — skipping further deepening")
                             break
-                        stop, reason = stop_judge(client, query, report_md_synth, log=log_fn)
-                        if stop:
-                            h.stopped_reason = reason or "report judged comprehensive"
-                            break
-                        gaps = gap_queries(client, query, report_md_synth, log=log_fn)
+                        _topics = (getattr(h, "plan", None) or {}).get("topics") or []
+                        # The report's own coverage table decides whether there is more to
+                        # do: a topic it rates Partly / Not covered IS a gap, whatever a
+                        # judge thinks of the report as a whole. (In the second real run the
+                        # judge said "thoroughly addresses every named topic" and stopped.)
+                        from engines.research.synthesize import weak_topics
+                        _weak = weak_topics(report_md_synth)
+                        if _weak:
+                            log_fn("[synth] coverage table: " + str(len(_weak)) + " topic(s) rated thin — "
+                                   + "; ".join(f"{w['topic']} ({w['coverage']})" for w in _weak[:6])
+                                   + " — deepening on those")
+                        else:
+                            stop, reason = stop_judge(client, query, report_md_synth, log=log_fn,
+                                                      topics=_topics)
+                            if stop:
+                                h.stopped_reason = reason or "report judged comprehensive"
+                                break
+                        gaps = gap_queries(client, query, report_md_synth, log=log_fn,
+                                           topics=_topics, weak=_weak)
                         if not gaps:
                             break
                         prog("synthesize", None, f"Deepening (round {rnd}): {gaps[0][:60]}")
@@ -1457,6 +1865,14 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                                            category=category, user_docs=doc_context, log=log_fn,
                                            context=clarifications, prior_research=ody_report)
                         report_md_synth = synth.get("report_md", "")
+                    # Citation check on the FINAL report: every cited sentence against the
+                    # findings of the sources it cites; misses corrected, removed or de-cited.
+                    _rc.wait_if_paused(stop_ev, log_fn, "before the citation check")
+                    prog("synthesize", None, "Checking every citation against its source…")
+                    from engines.research.synthesize import check_citations
+                    chk = check_citations(client, query, synth, log=log_fn)
+                    report_md_synth = chk.get("report_md") or report_md_synth
+                    h.citation_check = chk
                 except Exception as e:  # noqa: BLE001 — preserve the harvest
                     synth_error = e
                     prog("synthesize", None, "Synthesis interrupted — assembling harvested findings…")
@@ -1467,7 +1883,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
                 pass
 
         result = _dr_finalize(job_id, client, query, h, report_md_synth, synth_error,
-                              ody_report, log_fn, prog)
+                              ody_report, log_fn, prog, meta={"clarifications": clarifications})
         # Keep this run's harvest so "Add/Fix Specific Sources" can extend it later.
         _dr_keep(job_id, {"h": h, "cache": cache if "cache" in dir() else {}, "gov": gov,
                           "category": getattr(h, "category", ""), "doc_context": doc_context,
@@ -1583,15 +1999,40 @@ def deep_research_status():
             "awaiting_manual_login": job.get("awaiting_manual_login"),
         }
         payload["aborted"] = bool(job.get("aborted"))
-        if job["done"] and not job["error"]:
+        # `lite=1` = a watcher that wants progress only: never sent the (large) result.
+        if job["done"] and not job["error"] and not request.args.get("lite"):
             payload["result"] = job["result"]
+        # POLLS ARE FREE AND REPEATABLE. A finished job used to be handed to the first
+        # poll and forgotten in the same breath, so a second reader — a reloaded page, a
+        # watcher — got "unknown job" and the first could lose the result to the second.
+        # Finished jobs now stay readable and age out _DR_JOB_KEEP_S after they finish.
+        now = time.time()
         if job["done"]:
-            _JOBS.pop(job_id, None)
-            _DR_EVENTS.pop(job_id, None)
-            _DR_SKIP.pop(job_id, None)
-            _DR_STOP.pop(job_id, None)
-            _DR_REFUSAL.pop(job_id, None)
+            job.setdefault("done_at", now)
+        for jid in [j for j, v in _JOBS.items()
+                    if v.get("done_at") and now - v["done_at"] > _DR_JOB_KEEP_S]:
+            _JOBS.pop(jid, None)
+            _DR_EVENTS.pop(jid, None)
+            _DR_SKIP.pop(jid, None)
+            _DR_STOP.pop(jid, None)
+            _DR_REFUSAL.pop(jid, None)
     return jsonify(payload)
+
+
+_DR_JOB_KEEP_S = 45 * 60      # how long a finished job's status + result stay readable
+
+
+@app.route("/api/deep_research/active", methods=["GET"])
+def deep_research_active():
+    """Is anything running? [{job_id, stage, message, done, started}] for jobs still in
+    memory. Read-only and cheap — the safe check before restarting the server (the
+    research browser is NOT a reliable sign: the pre-research pass runs without it)."""
+    with _JOBS_LOCK:
+        rows = [{"job_id": jid, "stage": j.get("stage"), "message": str(j.get("message") or "")[:160],
+                 "done": bool(j.get("done")), "error": bool(j.get("error")),
+                 "awaiting_manual_login": j.get("awaiting_manual_login")}
+                for jid, j in _JOBS.items() if isinstance(j, dict) and "done" in j]
+    return jsonify({"jobs": rows, "running": sum(1 for r in rows if not r["done"])})
 
 
 @app.route("/api/deep_research/skip_stage", methods=["POST", "OPTIONS"])
@@ -2009,22 +2450,46 @@ def deep_research_vault():
     POST {domain, delete: true} -> remove."""
     if request.method == "OPTIONS":
         return "", 204
+    if _is_hosted_instance():
+        # The hosted site never stores logins. The page hides the Login column there; this is
+        # the server refusing, so a direct request cannot store or list one either.
+        if request.method == "GET":
+            return jsonify({"domains": [], "logins": {}})
+        return jsonify({"error": "The hosted site never stores logins. Store a login in the "
+                                 "local app; here a login is asked for once per search."}), 403
     from engines.research.login import CredentialVault, normalize_domain
     v = CredentialVault()
+
+    def _public():
+        """What the page may know about the vault: which sites have a login, the account
+        name and login page stored for each, and whether a password is stored. NEVER the
+        password itself."""
+        sites = v.load()
+        return {"domains": sorted(sites.keys()),
+                "logins": {d: {"username": (c.get("username") or ""),
+                               "login_url": (c.get("login_url") or ""),
+                               "has_password": bool(c.get("password"))}
+                           for d, c in sites.items()}}
+
     if request.method == "GET":
-        return jsonify({"domains": v.domains()})
+        return jsonify(_public())
     data = request.get_json(silent=True) or {}
     domain = normalize_domain(data.get("domain") or "")
     if not domain:
         return jsonify({"error": "domain required"}), 400
     if data.get("delete"):
         sites = v.load(); sites.pop(domain, None); v.save(sites)
-        return jsonify({"ok": True, "deleted": domain, "domains": v.domains()})
+        return jsonify({"ok": True, "deleted": domain, **_public()})
     if not (data.get("username") or "").strip():
         return jsonify({"error": "username required"}), 400
-    v.set(domain, data.get("username", ""), data.get("password", ""),
-          login_url=data.get("login_url", ""))
-    return jsonify({"ok": True, "domains": v.domains()})
+    # Editing an existing login: a password left blank means KEEP the stored one, and any
+    # per-site form selectors stored with the login are kept too.
+    old = v.load().get(domain) or {}
+    v.set(domain, data.get("username", ""), data.get("password") or old.get("password", ""),
+          login_url=data.get("login_url", ""),
+          username_sel=old.get("username_sel", ""), password_sel=old.get("password_sel", ""),
+          submit_sel=old.get("submit_sel", ""))
+    return jsonify({"ok": True, **_public()})
 
 
 @app.route("/api/deep_research/sources", methods=["GET", "POST", "OPTIONS"])
@@ -2269,7 +2734,7 @@ def deep_research_prompt():
 # ══════════════════════════════════════════════════════════════
 #  ODYSSEUS RESEARCH (sub-tool of Deep Research) — vendored comparison engine
 #  Alibaba IterResearch-style loop, headless (DuckDuckGo + curl page-fetch) on
-#  the same Anthropic key. Here to A/B the methodology vs the visible-Chrome DRT.
+#  the same Anthropic key. Here to A/B the methodology vs the visible-browser DRT.
 # ══════════════════════════════════════════════════════════════
 
 def _ody_msg(ev: dict) -> str:

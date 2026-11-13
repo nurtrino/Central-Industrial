@@ -1,7 +1,7 @@
 """
 DRT login layer — vault → pause.
 
-When the visible Chrome hits a login / paywall / "are you human" wall on a site
+When the visible Brave hits a login / paywall / "are you human" wall on a site
 the dedicated profile isn't logged into yet, we:
   1. try a stored credential (local ENCRYPTED vault), auto-filling the form; else
   2. PAUSE — surface the tab and let the user log in by hand (handles 2FA/captcha),

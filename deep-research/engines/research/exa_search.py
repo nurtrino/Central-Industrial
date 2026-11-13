@@ -5,11 +5,11 @@ Exa is an embeddings/neural search engine. Its edge over keyword engines is
 (a) semantic discovery of niche/long-tail pages a keyword query would miss, and
 (b) find_similar — given one good page, return conceptually similar ones (source
 expansion). Both are surfaced to the Stage-2 browser agent as tools; the URLs Exa
-returns still flow through the normal open_page → Chrome → goal-extraction path,
-so real Chrome does the actual reading (we keep dodging bot-protection on content).
+returns still flow through the normal open_page → browser → goal-extraction path,
+so the real browser does the actual reading (we keep dodging bot-protection on content).
 
 Exa also retrieves cleaned page text; we use that ONLY as a resilience fallback
-when Chrome's open() fails (403 / login wall with no creds) so the text isn't lost.
+when the browser's open() fails (403 / login wall with no creds) so the text isn't lost.
 
 This module is the ONLY place exa_py is imported. Like Stage 1 (api_search.py) it
 degrades gracefully: no key / DRT_EXA off / any API error → empty result, never
@@ -101,7 +101,7 @@ def exa_find_similar(url: str, num: int = 10, log=None) -> list[dict]:
 
 
 def exa_contents(url: str, log=None) -> str:
-    """Resilience fallback: fetch Exa's cleaned text for a URL Chrome couldn't open.
+    """Resilience fallback: fetch Exa's cleaned text for a URL the browser couldn't open.
     Returns '' on any failure."""
     log = log or (lambda m: None)
     exa = _client()

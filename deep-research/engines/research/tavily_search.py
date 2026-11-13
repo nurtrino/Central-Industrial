@@ -4,7 +4,7 @@ Tavily seam — the standard search API behind most open-source deep-research ag
 Two uses in this tool:
   * `tavily_search`  — an agent tool (web_search engine="tavily") and a baseline-sweep
         source, and the automatic fallback when a browser engine returns nothing.
-  * `tavily_extract` — page-text fallback when Chrome (and Bright Data) cannot read a URL.
+  * `tavily_extract` — page-text fallback when the browser cannot read a URL.
 
 Enabled by default whenever TAVILY_API_KEY is set; DRT_TAVILY=0 turns it off.
 Never raises: [] / "" on any failure.

@@ -5,8 +5,8 @@ The order of operations is fixed in Python (not left to the model) so the search
 always proceeds cheap→expensive, open→gated:
 
   Stage 1  Broad baseline sweep — wide, shallow engine searches in the SAME visible
-           Chrome (no page opens), semantically reranked → a terse baseline brief.
-  Stage 2  Browser search engines (DuckDuckGo/Brave/Google) in visible Chrome —
+           the research browser (no page opens), semantically reranked → a terse baseline brief.
+  Stage 2  Browser search engines (DuckDuckGo/Brave/Google) in the visible research browser —
            targets the gaps Stage 1 left, deep-reads, mines the open forums.
   Stage 3  Already-credentialed gated sources (vault has creds) — searched directly.
   Stage 4  New login-required sources worth chasing — collected during 2–3, then the
@@ -14,8 +14,8 @@ always proceeds cheap→expensive, open→gated:
            Anything needing more than user/pass (2FA/captcha) is skipped + noted.
 
 Within each browser stage a single Claude tool-use loop drives the browser.
-ALL web searching happens through the real Chrome instance — no server-side /
-sandboxed search agents (those respect robots.txt and get blocked; Chrome does
+ALL web searching happens through the real browser (Brave) — no server-side /
+sandboxed search agents (those respect robots.txt and get blocked; a real browser does
 not). SIGNAL-OR-NOTHING throughout: a near-empty harvest is a valid result.
 This module is ONLY search/gather — storage, evaluation, synthesis come later.
 """
@@ -34,8 +34,6 @@ from .browser import DRTBrowser, _JUNK_HOST
 from .exa_search import exa_search, exa_find_similar, exa_contents, is_enabled as exa_enabled
 from .tavily_search import tavily_search, tavily_extract, is_enabled as tavily_enabled
 from .brave_search import brave_search as brave_api_search, is_enabled as brave_api_enabled
-from .brightdata import (serp_search as bd_serp_search, serp_enabled as bd_serp_enabled,
-                         unlock_fetch as bd_unlock_fetch, unlock_enabled as bd_unlock_enabled)
 from .login import normalize_domain, host_of
 from .models import get_model
 
@@ -66,7 +64,7 @@ def normalize_depth(depth: str) -> str:
 # ── pausable run clock (2026-11) ──────────────────────────────────────────────
 # Every deadline in this module is measured on RUN_CLOCK, not the wall clock, so a
 # PAUSE freezes the research window instead of eating it. One run at a time by design
-# (a headed run already holds the single Chrome profile). wait_if_paused() is called
+# (a headed run already holds the single browser profile). wait_if_paused() is called
 # at every step boundary — turn starts and each tool call — so a pause takes effect as
 # soon as the in-flight model call or page load returns; nothing gathered is lost.
 class _RunClock:
@@ -247,10 +245,11 @@ class HarvestResult:
     discovered_forums: list = field(default_factory=list)  # [{domain, reason}] — forums the agent found, not in the curated list
     lanes: list = field(default_factory=list)          # [{name, mission}] parallel Stage-2 lanes this run
     lane_reports: list = field(default_factory=list)   # [{lane, reason}] each lane's / digger's finish reason
-    fallback_fetches: list = field(default_factory=list)  # [{url, via, reason}] pages Chrome couldn't read, fetched via Bright Data/Tavily/Exa
+    fallback_fetches: list = field(default_factory=list)  # [{url, via, reason}] pages the browser couldn't read, fetched via Tavily/Exa
     planned_sites: list = field(default_factory=list)     # [{domain, login_required, credentialed}] sites the plan selected for THIS query
     source_alerts: list = field(default_factory=list)     # [{domain, kind, detail, credentialed, at}] — see _alert()
     native_stats: dict = field(default_factory=dict)      # domain -> {"ok": n, "empty": n} for the site's own search
+    site_sweeps: list = field(default_factory=list)       # [{domain, signed_in, searches, results, pages, note}] the dedicated per-site sweeps
     duplicate_pages: list = field(default_factory=list)   # [{url, same_as}] pages whose text duplicated an already-harvested page
     exa_searches: int = 0     # neural Exa queries run this run
     exa_similar: int = 0      # Exa find_similar calls run this run
@@ -318,10 +317,12 @@ def _tool_defs(include_web_search: bool = True, include_site_search: bool = True
     if include_site_search:
         tools.append({
             "name": "site_search",
-            "description": ("Search WITHIN a specific domain (forum/Substack/site) via the site: "
-                            "operator. Compact keyword queries here too — 2-5 terms, no question "
-                            "phrasing. Use for the listed sources and any relevant site you discover. "
-                            "Prefer forum_search when the site may hold unindexed or gated material."),
+            "description": ("Search WITHIN a specific domain (forum/Substack/site). For the sources "
+                            "listed in scope, and any site this browser is signed in to, this runs "
+                            "the SITE'S OWN search (same as forum_search); for any other domain it "
+                            "is a search-engine site: query. Site searches match ALL the words — "
+                            "keep queries to 2-3 distinctive keywords, no question phrasing. A "
+                            "query that matches nothing is retried shortened automatically."),
             "input_schema": {"type": "object", "properties": {
                 "domain": {"type": "string", "description": "e.g. reddit.com"},
                 "query": {"type": "string"}}, "required": ["domain", "query"]},
@@ -392,7 +393,7 @@ def _stage_system(stage: str, governance: str, listing: str, cap: dict, context_
     leave the order and mix to the model — no scripted choreography."""
     role = {
         "engines": ("You are STAGE 2 of the Deep Research Tool — the open-web hunt in a real, "
-                    "visible Chrome. Build on the Stage-1 brief: go after the GAPS, and after "
+                    "visible browser. Build on the Stage-1 brief: go after the GAPS, and after "
                     "the candid forum/discussion/primary material a quick engine pass never "
                     "surfaces."),
         "credentialed": ("You are STAGE 3 of the Deep Research Tool — the credentialed sweep. "
@@ -451,7 +452,7 @@ where you're heading next) before your next tool call. These lines are the highl
 the live feed; silent tool-chaining leaves the user blind.
 
 {register_note}
-You operate a real, visible Chrome browser; opened pages are read as text automatically.
+You operate a real, visible web browser; opened pages are read as text automatically.
 Apply the governing principles below. SIGNAL OVER NOISE — open deliberately.
 
 ================ GOVERNING PRINCIPLES ================
@@ -503,55 +504,174 @@ def _alert(result, log, domain, kind, detail, only_planned=True):
     with _SHARED_LOCK:
         if any(a["domain"] == dom and a["kind"] == kind for a in result.source_alerts):
             return
+        # Say whether the run is SIGNED IN to the site: "could not search" on a site the
+        # run is signed into is a search problem, not a login problem, and the reader
+        # should be able to tell the two apart at a glance.
+        signed = dom in (getattr(result, "logged_in", None) or [])
         result.source_alerts.append({"domain": dom, "kind": kind, "detail": detail,
-                                     "credentialed": cred, "at": time.strftime("%H:%M:%S")})
+                                     "credentialed": cred, "signed_in": signed,
+                                     "at": time.strftime("%H:%M:%S")})
+    tag = " (signed in)" if signed else (" (credentialed)" if cred else "")
     (log or (lambda m: None))(
-        f"[alert] {dom}{' (credentialed)' if cred else ''} — "
-        f"{_ALERT_LABEL.get(kind, kind.upper())}: {detail}")
+        f"[alert] {dom}{tag} — {_ALERT_LABEL.get(kind, kind.upper())}: {detail}")
+
+
+def _clear_alert(result, log, domain, kind, why=""):
+    """Withdraw an alert that turned out not to hold — e.g. a site's own search missed
+    once and then worked. The server lifts the "[alert-clear]" line into the live banner
+    (the alert disappears) and the report no longer lists it."""
+    dom = (_planned(result, domain) or {}).get("domain") or normalize_domain(domain or "")
+    with _SHARED_LOCK:
+        hit = [a for a in result.source_alerts if a["domain"] == dom and a["kind"] == kind]
+        if not hit:
+            return False
+        result.source_alerts = [a for a in result.source_alerts if a not in hit]
+    (log or (lambda m: None))(
+        f"[alert-clear] {dom} — {_ALERT_LABEL.get(kind, kind.upper())} withdrawn"
+        + (f": {why}" if why else ""))
+    return True
+
+
+_Q_STOP = {"the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "with", "how",
+           "what", "is", "are", "vs", "best", "using", "use", "from", "by", "at"}
+
+
+def _relaxed_queries(q):
+    """Shorter versions of a site-search query, most specific first. A forum's own search
+    matches ALL the words, so a five-word query that an engine would handle returns
+    nothing there; the first three, then two, distinctive words usually do."""
+    words = [w for w in re.split(r"\s+", (q or "").strip().strip('"')) if w]
+    core = [w for w in words if w.lower().strip('"') not in _Q_STOP] or words
+    out = []
+    for n in (3, 2):
+        if len(core) >= n:
+            cand = " ".join(core[:n])
+            if cand and cand != (q or "").strip() and cand not in out:
+                out.append(cand)
+    return out
+
+
+class _AnyEvent:
+    """is_set() is true when ANY of the wrapped events is set (None entries ignored)."""
+
+    def __init__(self, *events):
+        self._events = [e for e in events if e is not None]
+
+    def is_set(self):
+        return any(e.is_set() for e in self._events)
+
+
+def _same_site(a, b):
+    a, b = normalize_domain(a or ""), normalize_domain(b or "")
+    return bool(a and b and (a == b or a.endswith("." + b) or b.endswith("." + a)))
+
+
+def _split_selected_sites(selected_sites, has_creds):
+    """Sort the plan's selected sites into the four lists the run works from.
+
+      public_selected — dot is not 🔴: may be searched logged out by the Stage 2 lanes
+      login_selected  — dot is 🔴: only worth searching signed in
+      have_login      — a login is stored in the vault, WHATEVER the dot says. These are
+                        the credentialed sources: signed into before Stage 2, the user is
+                        asked to sign in by hand if that fails, and Stage 3 sweeps them.
+      need_prompt     — 🔴 with no stored login: session check, then the one-time prompt
+
+    2026-11-12: a 🟢 site with a stored login used to be signed into but got no sign-in
+    prompt on failure and no dedicated sweep — a stored login now always counts."""
+    public_selected = [s for s in selected_sites if s.get("login_required") is not True]
+    login_selected = [s for s in selected_sites if s.get("login_required") is True]
+    have_login = [s for s in selected_sites if has_creds(s["domain"])]
+    need_prompt = [s for s in login_selected if not has_creds(s["domain"])]
+    return public_selected, login_selected, have_login, need_prompt
+
+
+def _manual_login_gate_multi(br, log, items, manual_login):
+    """Plan-selected sites the run could not sign into by itself (2FA, passkey, captcha, no
+    stored login). Do NOT move on quietly — but do not sit there either: open EVERY such
+    site's sign-in page at once in the visible research browser and hold the run, research
+    clock stopped, for ONE shared wait (the job layer caps it at a minute — owner rule
+    2026-11-12; it used to be ten minutes PER SITE). The wait ends when all of them are
+    signed in (detected by session cookie), the user confirms or skips, or the minute is up.
+
+    A site still not signed in when the minute is up keeps its sign-in tab OPEN: the user
+    can finish there and the rest of the run uses the session (see the re-check at the end
+    of run_search). `items` = [(domain, why, creds)]. `manual_login(label, why, check)` is
+    supplied by the job layer and blocks; it returns 'signed_in'|'continue'|'skip'|'timeout'.
+    Returns {domain: (ok, detail)}."""
+    items = [(d, w, (c or {})) for d, w, c in items if d]
+    if not items:
+        return {}
+    t0 = time.monotonic()
+    doms = [d for d, _w, _c in items]
+    pages = {}
+    for d, _w, c in items:
+        try:
+            pages[d] = br.open_login_tab(d, c.get("login_url", ""))
+        except Exception:  # noqa: BLE001
+            pages[d] = None
+    label = ", ".join(doms)
+    why_all = items[0][1] if len(items) == 1 else "; ".join(f"{d}: {w}" for d, w, _c in items)
+    log(f"[login] SIGN-IN NEEDED — {label}: {why_all}. "
+        + ("A sign-in tab is open" if len(items) == 1 else f"{len(items)} sign-in tabs are open")
+        + " in the research browser; the run is waiting for you (research clock stopped).")
+
+    def _signed(d):
+        try:
+            return bool(br.is_signed_in(d))
+        except Exception:  # noqa: BLE001
+            return False
+
+    decision = "skip"
+    try:
+        decision = manual_login(label, why_all, lambda: all(_signed(d) for d in doms))
+    except Exception as e:  # noqa: BLE001
+        log(f"[login] sign-in prompt failed ({type(e).__name__})")
+    out = {}
+    try:
+        for d, why, _c in items:
+            signed = _signed(d)
+            # "I've signed in — continue" is taken on trust ONLY where the tool cannot check
+            # for itself. On a site whose session cookie it knows (GitHub, Reddit, X,
+            # Discourse, XenForo…) no cookie means no session, whatever was clicked — say so
+            # plainly rather than report a sign-in that did not happen.
+            try:
+                verifiable = bool(br.can_verify_sign_in(d))
+            except Exception:  # noqa: BLE001
+                verifiable = False
+            ok = signed or (decision == "signed_in" and len(items) == 1) \
+                or (decision == "continue" and not verifiable)
+            keep_open = (not ok) and decision not in ("skip", "continue")
+            if pages.get(d) is not None and not keep_open:
+                try:
+                    br.close_tab(pages[d])
+                except Exception:  # noqa: BLE001
+                    pass
+            if ok:
+                try:
+                    br.mark_auth_handled(d)
+                except Exception:  # noqa: BLE001
+                    pass
+                out[d] = (True, "signed in by hand in the research browser (session kept for future runs)"
+                          if signed else
+                          "you confirmed the sign-in (this site has no session cookie the tool can verify)")
+            elif decision == "continue":
+                out[d] = (False, f"{why}; you chose to continue, but {d} still shows no signed-in "
+                                 f"session in the research browser — it is being searched logged out")
+            elif decision == "skip":
+                out[d] = (False, f"{why}; the manual sign-in was skipped")
+            else:
+                out[d] = (False, f"{why}; the manual sign-in was not completed within the waiting "
+                                 f"time (one minute). The sign-in tab is still open — finish there "
+                                 f"and the rest of this run, and every later run, uses the session")
+    finally:
+        RUN_CLOCK.credit(time.monotonic() - t0)
+    return out
 
 
 def _manual_login_gate(br, log, domain, why, manual_login, creds=None):
-    """A plan-selected credentialed site could not be signed into automatically (2FA,
-    passkey, captcha, no stored login). Do NOT move on quietly: open the site's sign-in
-    page in the visible research browser and hold the run — research clock stopped —
-    until the user has signed in (detected by the session cookie), confirms, or
-    explicitly skips. `manual_login(domain, why, check)` is supplied by the job layer and
-    blocks; it returns 'signed_in' | 'continue' | 'skip' | 'timeout'.
-    Returns (ok, detail)."""
-    t0 = time.monotonic()
-    page = None
-    try:
-        page = br.open_login_tab(domain, (creds or {}).get("login_url", ""))
-    except Exception:  # noqa: BLE001
-        page = None
-    log(f"[login] SIGN-IN NEEDED — {domain}: {why}. A sign-in tab is open in the research "
-        f"browser; the run is waiting for you (research clock stopped).")
-    decision, signed = "skip", False
-    try:
-        decision = manual_login(domain, why, lambda: bool(br.is_signed_in(domain)))
-    except Exception as e:  # noqa: BLE001
-        log(f"[login] sign-in prompt failed ({type(e).__name__})")
-    finally:
-        try:
-            signed = bool(br.is_signed_in(domain))
-        except Exception:  # noqa: BLE001
-            signed = False
-        if page is not None:
-            try:
-                br.close_tab(page)
-            except Exception:  # noqa: BLE001
-                pass
-        RUN_CLOCK.credit(time.monotonic() - t0)
-    if signed or decision in ("signed_in", "continue"):
-        try:
-            br.mark_auth_handled(domain)
-        except Exception:  # noqa: BLE001
-            pass
-        return True, ("signed in by hand in the research browser (session kept for future runs)"
-                      if signed else
-                      "you confirmed the sign-in (this site has no session cookie the tool can verify)")
-    return False, (f"{why}; the manual sign-in was "
-                   + ("skipped" if decision == "skip" else "not completed within the waiting time"))
+    """One site's sign-in prompt — see _manual_login_gate_multi. Returns (ok, detail)."""
+    return _manual_login_gate_multi(br, log, [(domain, why, creds)], manual_login).get(
+        domain, (False, f"{why}; the manual sign-in was skipped"))
 
 
 # ── URL identity ──────────────────────────────────────────────
@@ -710,6 +830,9 @@ def _lane_log(log, tag):
     def _l(m):
         m = str(m or "")
         mm = re.match(r"\s*(\[[a-z_\-]+\])\s*(.*)", m, re.S | re.I)
+        if mm and mm.group(1).lower() in ("[alert]", "[alert-clear]"):
+            log(m)        # alerts are about a SITE, not a lane: the banner shows them verbatim
+            return
         log(f"{mm.group(1)} {tag} · {mm.group(2)}" if mm else f"[log] {tag} · {m}")
     return _l
 
@@ -729,8 +852,8 @@ def _sr(rows, engine):
 def _engine_search(br, engine, query, limit=10, log=None):
     """One engine query with the provider fallback chain. Returns (results, via_label).
 
-    Browser engines first (real Chrome). An EMPTY browser result falls through to
-    Bright Data SERP → Tavily → Exa, so a blocked / captcha'd / selector-drifted engine
+    Browser engines first (the real browser, Brave). An EMPTY browser result falls through to
+    Tavily → Exa, so a blocked / captcha'd / selector-drifted engine
     never reads as "nothing on the web" (both the 2026-09-03 Rivian trace and the
     agentic-tools report show two of three browser engines returning nothing).
     engine='tavily' / 'exa' go straight to that API."""
@@ -755,11 +878,6 @@ def _engine_search(br, engine, query, limit=10, log=None):
             res = []
     if res:
         return res, engine
-    if bd_serp_enabled():
-        rows = bd_serp_search(query, engine=("bing" if engine == "brave" else engine),
-                              num=limit, log=log)
-        if rows:
-            return _sr(rows, "brightdata"), f"{engine}→brightdata-serp"
     if tavily_enabled():
         rows = tavily_search(query, num=limit, log=log)
         if rows:
@@ -772,13 +890,9 @@ def _engine_search(br, engine, query, limit=10, log=None):
 
 
 def _fetch_fallback(url, log):
-    """Page text when Chrome cannot read a URL (bot challenge, 403, timeout):
-    Bright Data Web Unlocker → Tavily extract → Exa contents.
+    """Page text when the browser cannot read a URL (bot challenge, 403, timeout):
+    Tavily extract → Exa contents.
     Returns (page dict {url,title,text,links} | None, provider label)."""
-    if bd_unlock_enabled():
-        p = bd_unlock_fetch(url, log=log)
-        if p:
-            return p, "brightdata"
     if tavily_enabled():
         t = tavily_extract(url, log=log)
         if t:
@@ -845,8 +959,15 @@ def _compact_messages(messages, log) -> int:
 def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, task,
                        tools, cap, progress, log, notes, skip_event=None, question="",
                        sources=None, pool=None, deadline=None, hard_deadline=None,
-                       stop_event=None, lane=None, clear_skip=True, model=None):
+                       stop_event=None, lane=None, clear_skip=True, model=None,
+                       site_only=None, site_stat=None):
     model = model or _MODEL          # navigators = the "search" role; the digger passes "dig"
+    # `site_only` = this loop is the DEDICATED SWEEP of one site: searches on any other
+    # domain are refused, and finish() is refused until the site has actually been
+    # canvassed (see the finish handler). `site_stat` collects what the sweep did.
+    if site_only and site_stat is None:
+        site_stat = {"domain": site_only, "searches": 0, "results": 0, "pages": 0, "note": ""}
+    floor_refusals = [0]
     # Soft stage allocation (grows via request_extension) vs. the hard global pool.
     # No pool passed → private pool equal to the allocation (fixed-cap behavior).
     # `deadline` = this stage's soft time share; `hard_deadline` = the run's gathering
@@ -905,6 +1026,8 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
     def _harvest(item):
         with _SHARED_LOCK:
             result.items.append(item)
+            if site_stat is not None:
+                site_stat["pages"] += 1
             return len(result.items)
 
     def _dup_of(text, url):
@@ -928,6 +1051,38 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
     def dispatch(name, inp):
         if name == "finish":
             reason = inp.get("reason", "")
+            if site_only:
+                # COVERAGE FLOOR: a site the plan selected is not "done" until its own
+                # search has been tried with at least two different queries and, where
+                # those returned anything, at least one result has been read. Refused at
+                # most twice, and never once the clock is nearly out.
+                left = _left()
+                if floor_refusals[0] < 3 and (left is None or left > 25):
+                    need = ""
+                    if site_stat["searches"] < 2:
+                        need = (f"you have run {site_stat['searches']} search(es) on {site_only}. "
+                                f"Run at least two DIFFERENT short queries (2–3 distinctive "
+                                f"keywords each) with site_search before finishing")
+                    elif site_stat["results"] > 0 and site_stat["pages"] == 0:
+                        need = (f"your searches returned {site_stat['results']} result(s) on "
+                                f"{site_only} and you have read none. Open the strongest one(s)")
+                    elif (left is not None and left > 60 and site_stat["pages"] < 6
+                          and site_stat["results"] >= 3 * max(1, site_stat["pages"]) + 6):
+                        # 2026-11-12, second real run: the site agents ran 31 searches,
+                        # were shown 264 results and read 15 pages; one finished with 3:50
+                        # still on the clock. The clock decides when a sweep stops.
+                        need = (f"you have {left // 60}:{left % 60:02d} left and have read "
+                                f"{site_stat['pages']} of the {site_stat['results']} results "
+                                f"{site_only} gave you. Open the next strongest 3-5 now, several "
+                                f"in one turn — unless what is left is genuinely off-topic, in "
+                                f"which case say so in your finish reason")
+                    if need:
+                        floor_refusals[0] += 1
+                        return (f"Not yet — this sweep exists so that {site_only} is properly "
+                                f"canvassed, and {need}. If the site truly has nothing on the "
+                                f"question after that, finish and say so. {_budget()}", False)
+                site_stat["note"] = (reason or "").strip()[:400]
+                return "Stage complete.", True
             with _SHARED_LOCK:
                 if lane:
                     result.lane_reports.append({"lane": lane, "reason": reason})
@@ -966,6 +1121,13 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
             return (f"Registered {dom} — you can forum_search/site_search it now; it will "
                     f"be surfaced to the user to add permanently.", False)
         if name in ("web_search", "site_search", "forum_search"):
+            if name != "web_search":
+                if site_only and not (inp.get("domain") or "").strip():
+                    inp = dict(inp, domain=site_only)
+                if site_only and not _same_site(inp.get("domain", ""), site_only):
+                    return (f"This sweep covers ONLY {site_only} — another agent has "
+                            f"{inp.get('domain')}. Search {site_only}. (Opening a link that "
+                            f"leads off-site is fine.)", False)
             denied = _consume("searches")
             if denied:
                 return denied, False
@@ -977,35 +1139,64 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                 else:
                     dom = normalize_domain(inp.get("domain", "")) or \
                           (inp.get("domain") or "").strip().lower()
-                    if name == "forum_search":
-                        # The site's OWN search — platform adapter (Discourse/XenForo/Reddit/…)
-                        # or a registered {q} template, run in the logged-in browser so it
-                        # reaches unindexed/gated threads. Falls back to the site: engine when
-                        # native search yields nothing (JS-blocked, rate-limited, exotic CMS),
-                        # then to Tavily domain-scoped search.
+                    ps = _planned(result, dom)
+                    # 2026-11-12: a site the plan selected, or one the run is signed into, is
+                    # ALWAYS searched through its own search — whichever tool the agent
+                    # picked. The credentialed sweep used to call site_search (a public
+                    # search-engine site: query) on GitHub and Reddit while signed in to
+                    # both, so the sessions were never used for searching at all.
+                    use_native = (name == "forum_search" or ps is not None
+                                  or any(_same_site(dom, d) for d in (result.logged_in or [])))
+                    if use_native:
+                        # The site's OWN search — platform adapter (Discourse/XenForo/Reddit/
+                        # GitHub/X/HN…) or a registered {q} template, run in the logged-in
+                        # browser so it reaches unindexed/gated threads. A miss is retried
+                        # with shorter versions of the query (site searches match ALL the
+                        # words), then falls back to the site: engine, then to Tavily.
                         surl = next((str(s.get("search_url") or "").strip() for s in srcs
                                      if normalize_domain(s.get("domain", "")) == dom), "")
-                        res = br.native_search(dom, inp["query"], search_url=surl, limit=10)
+                        q0 = inp["query"]
                         with _SHARED_LOCK:
                             st = result.native_stats.setdefault(dom, {"ok": 0, "empty": 0})
+                            ok_before, empty_before = st["ok"], st["empty"]
+                        # Two full misses and never a hit: this site's own search does not
+                        # work here — stop paying a page load for it on every query.
+                        dead = ok_before == 0 and empty_before >= 2
+                        res, used_q = [], q0
+                        if not dead:
+                            res = br.native_search(dom, q0, search_url=surl, limit=10)
+                            if not res and (ok_before > 0 or empty_before == 0):
+                                for q2 in _relaxed_queries(q0):
+                                    res = br.native_search(dom, q2, search_url=surl, limit=10)
+                                    if res:
+                                        used_q = q2
+                                        break
+                        with _SHARED_LOCK:
                             st["ok" if res else "empty"] += 1
                             n_ok, n_empty = st["ok"], st["empty"]
                         if res:
-                            via = f"native:{dom} {inp['query']}"
+                            via = f"native:{dom} {used_q}" + (
+                                "" if used_q == q0 else
+                                f" (the full query {q0!r} matched nothing on this site — "
+                                f"shortened; keep site queries to 2–3 words)")
+                            _clear_alert(result, log, dom, "unreachable",
+                                         "the site's own search is working")
                         else:
-                            res = br.site_search(inp["query"], dom, limit=10)
-                            via = f"site:{dom} {inp['query']} (native empty — engine fallback)"
-                            # The site's own search is the whole point of forum_search. A
-                            # credentialed site is flagged on the first miss; a public one
-                            # once it has missed twice without ever working.
-                            ps = _planned(result, dom)
+                            res = br.site_search(q0, dom, limit=10)
+                            via = f"site:{dom} {q0} (the site's own search found nothing — engine fallback)"
+                            # The site's own search is the whole point here. A credentialed
+                            # site is flagged on the first miss (after the shortened retries);
+                            # a public one once it has missed twice without ever working.
                             if n_ok == 0 and ps and (ps.get("credentialed") or n_empty >= 2):
                                 _alert(result, log, dom, "unreachable",
                                        f"the site's own search returned nothing ({n_empty}× so far, "
-                                       f"last query: {inp['query'][:60]!r}) — falling back to a "
-                                       f"search-engine site: query, which only sees public, "
-                                       f"engine-indexed pages"
+                                       f"shortened queries included; last query: {q0[:60]!r}) — "
+                                       f"falling back to a search-engine site: query, which only "
+                                       f"sees public, engine-indexed pages"
                                        + ("" if res else "; that returned nothing either"))
+                        if site_stat is not None and _same_site(dom, site_only):
+                            site_stat["searches"] += 1
+                            site_stat["results"] += len(res)
                     else:
                         res = br.site_search(inp["query"], dom, limit=10)
                         via = f"site:{dom} {inp['query']}"
@@ -1019,7 +1210,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                             result.curated_searched.append(dom)
             except Exception as e:  # noqa: BLE001
                 return f"Search error: {type(e).__name__}: {e}", False
-            if name == "forum_search":
+            if name != "web_search":
                 log(f"[forum] {via} -> {len(res)} results")
             progress(stage_name, None, f"searched — {via}")
             with _SHARED_LOCK:
@@ -1126,9 +1317,9 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                        "pages are behind an anti-bot wall that did not clear in the browser"
                        " — reading through an unblocking provider where possible")
             if pc.error:
-                # Resilience: Chrome couldn't read it (bot challenge / 403 / timeout).
+                # Resilience: the browser couldn't read it (bot challenge / 403 / timeout).
                 # Fetch it through the unblocking providers so the page isn't lost —
-                # Bright Data Web Unlocker → Tavily extract → Exa contents.
+                # Tavily extract → Exa contents.
                 fb, prov = _thin_fb if _thin_fb else _fetch_fallback(url, log)
                 if fb:
                     dup = _dup_of(fb["text"], url)
@@ -1143,7 +1334,7 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                                                         "reason": pc.error[:80]})
                     with _SHARED_LOCK:
                         links_sec = _page_links_section(fb.get("links"), url, seen_urls)
-                    return (f"Opened via {prov} (Chrome could not read it: {pc.error}):\n"
+                    return (f"Opened via {prov} (the browser could not read it: {pc.error}):\n"
                             f"URL: {url}\n\n{_window(fb['text'])}{links_sec}\n\n"
                             f"[harvested {n} total] {_budget()}", False)
                 return f"Could not open ({pc.error}) and no unblocking provider could fetch it.", False
@@ -1351,7 +1542,54 @@ def _normalize_plan(plan: dict, cats: list) -> dict:
     # never participates in the 3-way weight normalization above.
     ns = plan.get("neural_search") if isinstance(plan.get("neural_search"), dict) else {}
     out["neural_search"] = {"use": bool(ns.get("use", True))}
+    # The topics the user explicitly named — carried through to lane planning, the
+    # deepening loop and the report's coverage table (see synthesize._topics_note).
+    tp = plan.get("topics") if isinstance(plan.get("topics"), list) else []
+    seen_t, topics = set(), []
+    for t in tp:
+        s = re.sub(r"\s+", " ", str(t or "")).strip(" .;:-")[:120]
+        if s and s.lower() not in seen_t:
+            seen_t.add(s.lower())
+            topics.append(s)
+    out["topics"] = topics[:10]
     return out
+
+
+_TOPIC_LEAD = re.compile(
+    r"\b(?:key|main|core|specific|important|priority|primary)\s+(?:topics|areas|questions|aspects|themes|points)\b"
+    r"|\btopics?\s*(?:to cover|of interest|include|are|:)"
+    r"|\b(?:areas|questions|aspects|themes)\s*(?:to cover|of interest|include|:)", re.I)
+_TOPIC_NOISE = {"etc", "e.g", "i.e", "and so on", "and more", "more", "others", "so on",
+                "…", "...", "the like", "similar"}
+
+
+def _explicit_topics(query: str) -> list:
+    """The list the user wrote out after a phrase like "Key topics" — taken literally.
+
+    "…Key topics, mic quality, wake words, model comprehension, device control, self
+    teaching/learning platform, custom voice models, etc." → those six, in that order.
+    In the second real run the planner was left to work the list out and returned ten
+    "topics" — the devices in scope and the scoping answers mixed in, and two of the six
+    the user wrote ("device control", "self teaching/learning platform") missing. A list
+    the user wrote out is not something to interpret. Returns [] when there is no such list."""
+    q = re.sub(r"\s+", " ", str(query or "")).strip()
+    m = _TOPIC_LEAD.search(q)
+    if not m:
+        return []
+    rest = q[m.end():].lstrip(" ,:;-—–")
+    rest = re.sub(r"\b(etc|e\.g|i\.e)\.", r"\1", rest)                      # "etc." is not a sentence end
+    rest = re.split(r"(?<=[a-z0-9\)])[.!?](?:\s|$)", rest, maxsplit=1)[0]   # this sentence only
+    out, seen = [], set()
+    for part in re.split(r"\s*[,;]\s*|\s+and\s+(?=[^,;]*$)", rest):
+        t = re.sub(r"^(?:and|or)\s+", "", part.strip(" .:-—–"), flags=re.I).strip()
+        if not t or t.lower() in _TOPIC_NOISE:
+            continue
+        if len(t.split()) > 9 or len(t) > 90:
+            return []                      # not a list of short items — do not guess
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:12] if len(out) >= 3 else []
 
 
 def plan_research(client, query, clarifications, depth, sources, log) -> dict:
@@ -1382,25 +1620,42 @@ def plan_research(client, query, clarifications, depth, sources, log) -> dict:
         "questions; go site-heavy for niche-community topics. For site_queries.emphasis, list the "
         "source TYPES most worth leaning on (any of: forum, blog, substack), or [].\n"
         f"Also classify the question into exactly ONE report category from: {', '.join(cats)}.\n"
+        "Finally list 'topics': the distinct topics or sub-questions the user EXPLICITLY asked "
+        "to have covered, as short noun phrases in the user's own words and order, at most 10. "
+        "Strict rules: (1) a list the user wrote out (after 'key topics', 'including', "
+        "'such as'…) IS the topic list — copy every item, add none. (2) Only the QUESTION "
+        "defines topics; the CONTEXT (scoping answers) narrows how to research them and adds "
+        "none. (3) The devices, products, people or sources that are the SCOPE of the question "
+        "are not topics. (4) Qualities the user wants ('low latency', 'recent') are not topics. "
+        "(5) Do not invent topics; a single-point question has [].\n"
         "Respond with ONLY JSON: {\"category\":\"..\",\"rationale\":\"one sentence why\","
         "\"api_search\":{\"use\":true,\"weight\":0.3},"
         "\"web_engines\":{\"use\":true,\"weight\":0.3},"
-        "\"site_queries\":{\"use\":true,\"weight\":0.4,\"emphasis\":[\"forum\"]}}")
+        "\"site_queries\":{\"use\":true,\"weight\":0.4,\"emphasis\":[\"forum\"]},"
+        "\"topics\":[\"..\",\"..\"]}")
     msg = f"QUESTION:\n{query}"
     if clarifications:
         msg += f"\n\nCONTEXT:\n{clarifications[:800]}"
     try:
-        r = client.messages.create(model=get_model("plan"), max_tokens=400, system=sys_p,
+        r = client.messages.create(model=get_model("plan"), max_tokens=800, system=sys_p,
                                    messages=[{"role": "user", "content": msg}])
         txt = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
         m = re.search(r"\{.*\}", txt, re.S)
         if not m:
-            return _default_plan("planner returned no JSON")
+            dp = _default_plan("planner returned no JSON")
+            dp["topics"] = _explicit_topics(query)
+            return dp
         plan = _normalize_plan(json.loads(m.group(0)), cats)
         plan["_planned"] = True
         log(f"[plan] category={plan['category']} · "
             f"api={plan['api_search']} web={plan['web_engines']} site={plan['site_queries']} "
             f"— {plan.get('rationale', '')[:90]}")
+        listed = _explicit_topics(query)
+        if listed:
+            plan["topics"] = listed          # the user's own list wins over the planner's reading
+        if plan.get("topics"):
+            log(f"[plan] topics you {'listed' if listed else 'named'} ({len(plan['topics'])}): "
+                + " · ".join(plan["topics"]))
         return plan
     except Exception as e:  # noqa: BLE001
         log(f"[plan] planner failed ({type(e).__name__}); using balanced default")
@@ -1569,9 +1824,11 @@ def _max_lanes(depth: str) -> int:
     return max(1, min(8, n or _LANES_BY_DEPTH.get(depth, 3)))
 
 
-def plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log) -> list[dict]:
+def plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log,
+               topics=None) -> list[dict]:
     """Decompose the question into 1..max_lanes independent research lanes.
-    Returns [{name, mission, queries:[...]}] — [] on failure or when one lane suffices."""
+    Returns [{name, mission, queries:[...]}] — [] on failure or when one lane suffices.
+    `topics` = the topics the user explicitly named: every one must be owned by a lane."""
     log = log or (lambda m: None)
     if max_lanes <= 1:
         return []
@@ -1592,10 +1849,17 @@ def plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log) -> l
     msg = f"QUESTION:\n{query}"
     if clarifications:
         msg += f"\n\nCONTEXT:\n{clarifications[:1500]}"
+    topics = [str(t).strip() for t in (topics or []) if str(t).strip()][:10]
+    if topics:
+        # The first real run named six topics; two had no lane and came back near-empty.
+        msg += ("\n\nTOPICS THE USER NAMED — every one must be OWNED by a lane (a lane may own "
+                "several related ones). Say in each lane's mission which of these it owns, and "
+                "give at least one query aimed at each owned topic:\n"
+                + "\n".join(f"  {i}. {t}" for i, t in enumerate(topics, 1)))
     if stage1_brief:
         msg += f"\n\nBASELINE BRIEF (what a quick sweep already established):\n{stage1_brief[:3000]}"
     try:
-        r = client.messages.create(model=get_model("plan"), max_tokens=1500, system=sys_p,
+        r = client.messages.create(model=get_model("plan"), max_tokens=1800, system=sys_p,
                                    messages=[{"role": "user", "content": msg}])
         txt = "".join(getattr(b, "text", "") for b in r.content if getattr(b, "type", "") == "text")
         m = re.search(r"\{.*\}", txt, re.S)
@@ -1610,7 +1874,7 @@ def plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log) -> l
         name = str(ln.get("name") or "").strip()[:80]
         mission = str(ln.get("mission") or "").strip()[:600]
         qs = [str(q).replace("?", "").strip()[:120] for q in (ln.get("queries") or [])
-              if str(q).strip()][:3]
+              if str(q).strip()][:(5 if topics else 3)]
         if name and mission:
             lanes.append({"name": name, "mission": mission, "queries": qs})
         if len(lanes) >= max_lanes:
@@ -1671,7 +1935,8 @@ def _run_stage2_lanes(client, br, result, seen_urls, *, query, task, clarificati
     """Stage 2 orchestration: lane planning → parallel lanes → lead review → hot-trail dig.
     Falls back to the classic single loop when one lane suffices (or planning fails)."""
     max_lanes = _max_lanes(depth)
-    lanes = plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log)
+    lanes = plan_lanes(client, query, clarifications, stage1_brief, max_lanes, log,
+                       topics=(getattr(result, "plan", None) or {}).get("topics"))
     if len(lanes) <= 1:
         task2 = task
         if lanes:
@@ -1769,11 +2034,176 @@ def _run_stage2_lanes(client, br, result, seen_urls, *, query, task, clarificati
         stop_event=stop_event, lane="dig", model=get_model("dig"))
 
 
+# ── dedicated per-site sweeps (2026-11-12) ────────────────────
+# Stage 3 used to be ONE agent handed every credentialed site at once, in whatever time
+# Stage 2 left. In the first real run it signed in to four sites, then re-read GitHub
+# pages it already had, searched GitHub and Reddit through a public search engine, ran
+# one query on the Home Assistant forum, never opened X at all, and finished in 5 turns.
+# Now every site the plan selected gets its OWN agent, in parallel, with one job: search
+# that site through its own search and read the best of it. A site can no longer be
+# skipped because another site used the time.
+_SITE_TIPS = {
+    "x": ("Results are single POSTS ('@handle: text'). The useful ones come from builders "
+          "and maintainers and carry specifics, numbers or links. Open a post to read its "
+          "thread and replies; open the repo / blog / video a post links to (off-site links "
+          "are allowed) — that is usually where the substance is. Search by product or "
+          "project name plus one topic word; hashtags and from:handle also work."),
+    "github": ("site_search returns repositories and issues / pull requests. Open READMEs "
+               "for what a project does and its issues for what actually goes wrong. "
+               "<repo>/issues, <repo>/discussions and <repo>/releases are worth opening "
+               "directly for any project that matters to the question."),
+    "hn": ("Results are stories, each linked to its Hacker News DISCUSSION page — the "
+           "comments are the value. Open the discussion and read it through."),
+    "reddit": ("Results are threads. Open them — the comment tree is read in full. Search "
+               "phrasing as people would title a post; add a subreddit name as a keyword "
+               "to narrow."),
+    "discourse": ("Results are forum topics, with the matching post's excerpt. Long topics "
+                  "paginate — follow NEXT PAGE and use open_page offset to read on."),
+    "xenforo": ("Results are forum threads. Long threads paginate — follow NEXT PAGE and "
+                "use open_page offset to read on."),
+}
+
+
+def _site_tool_defs():
+    """Tools for a single-site sweep: the site's own search, page reading, extension, finish."""
+    out = []
+    for t in _tool_defs(include_web_search=False):
+        if t["name"] == "site_search":
+            t = dict(t, description=(
+                "Search THIS sweep's site through its OWN search, in the signed-in browser. "
+                "Site searches match ALL the words: use 2-3 distinctive keywords per query "
+                "and run several different queries rather than one long one. `domain` may be "
+                "omitted — it is always this sweep's site."),
+                input_schema={"type": "object", "properties": {
+                    "domain": {"type": "string"}, "query": {"type": "string"}},
+                    "required": ["query"]})
+            out.append(t)
+        elif t["name"] in ("open_page", "request_extension", "finish"):
+            out.append(t)
+    return out
+
+
+def _site_sweep_system(dom, signed_in, platform, governance, cap, context_brief,
+                       already, pool=None):
+    tip = _SITE_TIPS.get(platform or "", "")
+    have = ("\nALREADY READ FROM THIS SITE THIS RUN (do not re-open; build on them):\n"
+            + "\n".join(f"  - {u}" for u in already[:25]) + "\n") if already else ""
+    ctx = (f"\nWHAT THE RUN HAS ESTABLISHED SO FAR (target what is missing):\n"
+           f"{context_brief}\n" if context_brief else "")
+    pool_line = (f" from a shared global pool (currently {pool['searches']} searches / "
+                 f"{pool['pages']} opens)" if pool else "")
+    return f"""You are the DEDICATED SWEEP of ONE source for the Deep Research Tool: {dom}.
+{"This browser is SIGNED IN to it, so you see what members see." if signed_in else "This browser is NOT signed in to it — you see the public view."}
+
+The research plan selected {dom} for this question. Other agents are covering the open web
+and every other site right now; NOBODY ELSE will search {dom}. If you do not find what it
+holds on the question, the report goes out without it.
+
+HOW TO WORK
+  - site_search runs {dom}'s OWN search. It matches ALL the words, so keep each query to
+    2-3 distinctive keywords (a product / project / model name plus one topic word). Cover
+    the question's main angles with SEVERAL different queries — never one long one.
+  - Issue your first 3-4 queries together in ONE turn, then open the strongest results,
+    4-5 per turn. Judge by title, excerpt and date; prefer firsthand detail and recency.
+  - READING is the job; searching only finds what to read. Aim to read 6-10 of the
+    strongest threads on this site. After a batch of reads, run the new queries the
+    reading suggests (a project name, a model number, a term people actually use here).
+  - USE THE WHOLE WINDOW. The clock (⏱) decides when you stop, not the allocation: with
+    more than a minute left and strong results still unread, keep reading.
+  - Read through: NEXT PAGE links, open_page offset for long pages, in-site links to
+    related threads. Links that lead off-site may be opened when they carry the substance.
+  - Stay on {dom} for searching.{(chr(10) + "  - " + tip) if tip else ""}
+  - If several distinct queries show the site has nothing on the question, finish and say
+    so plainly — that is a valid, useful result. Do not open weak pages to fill a quota.
+
+NARRATE AS YOU GO: one short sentence before each pivot and whenever a page yields a real
+finding — the user watches this feed live.
+
+================ GOVERNING PRINCIPLES ================
+{governance}
+=====================================================
+{ctx}{have}
+BUDGET: TIME-BOXED — the clock is on every tool result (⏱). Soft allocation
+{cap['searches']} searches / {cap['pages']} page opens, drawn{pool_line}.
+request_extension buys more when the trail is hot; when the window closes, finish at once
+with what you have. Do NOT attempt to log in to anything."""
+
+
+def _run_site_sweeps(client, br, result, seen_urls, sites, *, task, governance,
+                     context_brief, pool, deadline, hard_deadline, progress, log, notes,
+                     skip_event, stop_event, sources, question, stage_prefix="stage3"):
+    """One dedicated agent per site, in parallel (see the block comment above). `sites` is
+    a list of plan entries ({"domain": ...}). Appends one row per site to
+    result.site_sweeps and returns the rows."""
+    sites = [s for s in sites if s.get("domain")]
+    if not sites:
+        return []
+    n = len(sites)
+    cap = {"searches": 12, "pages": 18, "max_turns": 40}
+    tools = _site_tool_defs()
+    log(f"[lane] dedicated sweep of {n} site(s) in parallel: "
+        f"{', '.join(s['domain'] for s in sites)} · window {max(0, int(deadline - _now()))}s")
+    progress(stage_prefix, None, "Sweeping " + ", ".join(s["domain"] for s in sites)[:140])
+    rows = [None] * n
+    site_notes = [[] for _ in sites]
+
+    def _one(i, s):
+        dom = s["domain"]
+        signed = any(_same_site(dom, d) for d in (result.logged_in or []))
+        stat = {"domain": dom, "signed_in": signed, "searches": 0, "results": 0,
+                "pages": 0, "note": ""}
+        rows[i] = stat
+        slog = _lane_log(log, dom)
+        try:
+            plat = br._platform_of(dom) if hasattr(br, "_platform_of") else ""
+        except Exception:  # noqa: BLE001
+            plat = ""
+        with _SHARED_LOCK:
+            already = [it.url for it in result.items
+                       if it.via != "stage1" and _same_site(host_of(it.url), dom)]
+        task_i = (f"{task}\n\nYOUR SITE: {dom}. Search it now — start with 3-4 short "
+                  f"queries in one turn.")
+        try:
+            _run_browser_stage(
+                client, br, result, seen_urls, stage_name=f"{stage_prefix}/{dom}",
+                system=_site_sweep_system(dom, signed, plat, governance, cap, context_brief,
+                                          already, pool=pool),
+                task=task_i, tools=tools, cap=cap, progress=progress, log=slog,
+                notes=site_notes[i], skip_event=skip_event, question=question,
+                sources=sources, pool=pool, deadline=deadline, hard_deadline=hard_deadline,
+                stop_event=stop_event, clear_skip=False, site_only=dom, site_stat=stat)
+        except Exception as e:  # noqa: BLE001
+            stat["note"] = f"sweep aborted: {type(e).__name__}: {e}"[:300]
+            slog(f"[{stage_prefix}] {stat['note']} — the other sites continue")
+        slog(f"[lane] sweep done — {stat['searches']} searches · {stat['results']} results · "
+             f"{stat['pages']} pages read")
+
+    with _cf.ThreadPoolExecutor(max_workers=min(n, 6), thread_name_prefix="drt-site") as ex:
+        list(ex.map(lambda p: _one(*p), enumerate(sites)))
+    if skip_event is not None and skip_event.is_set():
+        skip_event.clear()
+    for i, s in enumerate(sites):
+        if site_notes[i]:
+            notes.append(f"[{stage_prefix}/{s['domain']}]\n" + "\n\n".join(site_notes[i]))
+    done = [r for r in rows if r]
+    with _SHARED_LOCK:
+        for r in done:          # a second pass adds to the site's existing row
+            prev = next((x for x in result.site_sweeps if x.get("domain") == r["domain"]), None)
+            if prev is None:
+                result.site_sweeps.append(r)
+            else:
+                for k in ("searches", "results", "pages"):
+                    prev[k] = prev.get(k, 0) + r.get(k, 0)
+                prev["signed_in"] = prev.get("signed_in") or r.get("signed_in")
+                prev["note"] = r.get("note") or prev.get("note", "")
+    return done
+
+
 # ── orchestrator ──────────────────────────────────────────────
 def run_local_baseline(browser, client, query, clarifications="", depth="standard",
                        log=None, stop_event=None) -> dict:
     """Stage 1 for ALL providers: the broad baseline browser sweep. The model generates
-    a few BROAD queries, runs them through the browser search engines (real Chrome —
+    a few BROAD queries, runs them through the browser search engines (the real browser, Brave —
     never a sandboxed/server-side search agent), collects the surfaced URLs, and writes
     a terse baseline brief. Returns {findings_md, sources:[{title,url}], used}.
     Shallow-and-broad (no page opens); Stage 2 still does the deep reading."""
@@ -1840,7 +2270,7 @@ def run_local_baseline(browser, client, query, clarifications="", depth="standar
             break
         engine = "brave" if (i % 2) else "duckduckgo"
         # Browser engine first; an empty result falls through the provider chain
-        # (Bright Data SERP → Tavily → Exa) inside _engine_search.
+        # (Tavily → Exa) inside _engine_search.
         results, via = _engine_search(browser, engine, q, limit=8, log=log)
         _absorb(results, f"{via}: {q!r}")
     # API discovery widens the net with a DIFFERENT index each: Tavily (search API) and
@@ -1989,9 +2419,11 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
             notes.append(msg)
             log(msg + " — continuing to next stage")
 
+    sweep_fut = None                    # the background site sweeps (see `finally`)
+    sweep_halt = threading.Event()
     try:
         # ── STAGE 1 — broad baseline browser sweep (ALL providers) ──
-        # Runs in the same visible Chrome as every other stage. The old Anthropic
+        # Runs in the same visible research browser as every other stage. The old Anthropic
         # server-side web_search (sandboxed, robots.txt-bound, blockable) is gone:
         # wide engine sweeps + semantic rerank → terse brief, no page opens.
         api_ch = plan.get("api_search", {})
@@ -2010,7 +2442,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         result.stage1_sources = s1.get("sources", [])
         stage1_brief = s1.get("findings_md", "")
 
-        # ── STAGE 2 — parallel research lanes in Chrome + API discovery (plan-biased) ──
+        # ── STAGE 2 — parallel research lanes in the browser + API discovery (plan-biased) ──
         site_ch = plan.get("site_queries", {})
         web_ch = plan.get("web_engines", {})
         use_sites = site_ch.get("use", True)        # hard on/off (planner skip OR user toggle)
@@ -2029,50 +2461,82 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
         selected_sites = _select_relevant_seed_sources(
             client, query, clarifications, sources, log,
             emphasis=site_ch.get("emphasis")) if use_sites else []
-        public_selected = [s for s in selected_sites if s.get("login_required") is not True]
-        login_selected = [s for s in selected_sites if s.get("login_required") is True]
-        if selected_sites:
-            log(f"[plan] selected {len(selected_sites)} relevant site(s): "
-                f"{len(public_selected)} public 🟢, {len(login_selected)} login-required 🔴")
 
         def _has_creds(dom):
             c = vault.get(dom) if vault else None
             return bool(c and (c.get("username") or "").strip())
+
+        public_selected, login_selected, have_login, need_prompt = _split_selected_sites(
+            selected_sites, _has_creds)
+        if selected_sites:
+            log(f"[plan] selected {len(selected_sites)} relevant site(s): "
+                f"{len(public_selected)} public 🟢, {len(login_selected)} login-required 🔴, "
+                f"{sum(1 for s in selected_sites if _has_creds(s['domain']))} with a stored login")
 
         # What the plan committed to for THIS query — the yardstick for source alerts.
         result.planned_sites = [
             {"domain": s["domain"], "login_required": s.get("login_required"),
              "credentialed": bool(s.get("login_required") is True or _has_creds(s["domain"]))}
             for s in selected_sites]
-        have_login = [s for s in login_selected if _has_creds(s["domain"])]
-        need_prompt = [s for s in login_selected if not _has_creds(s["domain"])]
         # SIGN IN FIRST (2026-11): logins used to happen at Stage 3, minutes into the run,
         # so a dead login was discovered late and the parallel lanes searched those sites
         # logged out. Now every selected site with a stored login is signed into before
         # Stage 2, and a failure raises an alert immediately.
         signed_in = []
         # Manual sign-in is possible only with a visible local browser (not headless/hosted).
-        _can_nag = (manual_login is not None and getattr(br, "headed", False)
-                    and not getattr(br, "remote_browser", False))
+        _can_nag = manual_login is not None and getattr(br, "headed", False)
 
         def _halted():
             return stop_event is not None and stop_event.is_set()
 
-        for s in have_login + [x for x in public_selected if _has_creds(x["domain"])]:
+        # Pass 1 — try every site by itself, no prompts. Pass 2 — ONE prompt for all the
+        # sites that still need the user, sharing one wait (owner rule: a minute at most).
+        pending = []          # (site, kind, creds, why)   kind: "stored" | "nologin"
+        outcome = {}          # domain -> (ok, detail)
+        for s in list(have_login):
             if _halted():
                 break
             dom = s["domain"]
             creds = (vault.get(dom) if vault else None) or {}
             progress("stage2", None, f"Signing in to {dom}…")
+            _t_si = time.monotonic()
             try:
                 ok, detail = br.ensure_logged_in(dom, creds)
             except Exception as e:  # noqa: BLE001
                 ok, detail = False, f"login error: {type(e).__name__}"
-            if not ok and _can_nag and s in have_login and not _halted():
-                # 2FA / passkey / captcha: the stored login cannot finish the job — the
-                # user can. Hold the run and ask, instead of searching the site logged out.
-                progress("stage2", None, f"Waiting for you to sign in to {dom}…")
-                ok, detail = _manual_login_gate(br, log, dom, detail, manual_login, creds)
+            # Signing in is overhead, not research: it does not come out of the window.
+            RUN_CLOCK.credit(time.monotonic() - _t_si)
+            outcome[dom] = (ok, detail)
+            if not ok:
+                pending.append((s, "stored", creds, detail))
+        for s in list(need_prompt):
+            if _halted():
+                break
+            dom = s["domain"]
+            # No stored login — but the profile may already hold a session from an earlier
+            # manual sign-in (the normal state for 2FA sites such as GitHub).
+            _t_si = time.monotonic()
+            try:
+                ok, detail = br.ensure_logged_in(dom, {})
+            except Exception as e:  # noqa: BLE001
+                ok, detail = False, f"login error: {type(e).__name__}"
+            RUN_CLOCK.credit(time.monotonic() - _t_si)
+            outcome[dom] = (ok, detail)
+            if not ok:
+                pending.append((s, "nologin", {}, "no login is stored for this site and the "
+                                "research browser holds no session for it"))
+        if pending and _can_nag and not _halted():
+            # 2FA / passkey / captcha: the stored login cannot finish the job — the user
+            # can. Ask once, for all of them, instead of searching those sites logged out.
+            progress("stage2", None, "Waiting for you to sign in to "
+                     + ", ".join(p[0]["domain"] for p in pending) + "…")
+            outcome.update(_manual_login_gate_multi(
+                br, log, [(p[0]["domain"], p[3], p[2]) for p in pending], manual_login))
+        for s in list(have_login):
+            dom = s["domain"]
+            if dom not in outcome:
+                continue
+            ok, detail = outcome[dom]
             if ok:
                 signed_in.append(s)
                 if dom not in result.logged_in:
@@ -2083,17 +2547,7 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 log(f"[login] could NOT sign in to {dom} — {detail}")
         for s in list(need_prompt):
             dom = s["domain"]
-            # No stored login — but the profile may already hold a session from an earlier
-            # manual sign-in (the normal state for 2FA sites such as GitHub).
-            try:
-                ok, detail = br.ensure_logged_in(dom, {})
-            except Exception as e:  # noqa: BLE001
-                ok, detail = False, f"login error: {type(e).__name__}"
-            if not ok and _can_nag and not _halted():
-                progress("stage2", None, f"Waiting for you to sign in to {dom}…")
-                ok, detail = _manual_login_gate(
-                    br, log, dom, "no login is stored for this site and the research browser "
-                    "holds no session for it", manual_login)
+            ok, detail = outcome.get(dom, (False, "not attempted (the run was stopped)"))
             if ok:
                 need_prompt.remove(s)
                 have_login.append(s)
@@ -2108,11 +2562,40 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                    "login-required and not signed in (" + detail + ") — it is NOT being searched "
                    "logged-in this run. Supply a login when prompted at the end of gathering, "
                    "or afterwards with 'Add/Fix Specific Sources'")
+
+        # ── DEDICATED SITE SWEEPS — one agent per plan-selected site, started NOW so they
+        # run alongside the Stage 2 lanes for the whole window (model latency, not the
+        # browser, is what limits a run: the first real run read one page every 13 s).
+        # Signed-in / stored-login sites first, then the public ones. 🔴 sites that are
+        # still not signed in are not swept here — they go to the Stage 4 prompt.
+        sweep_sites = (list(have_login) + [s for s in public_selected if s not in have_login]
+                       ) if use_sites else []
+        sweep_exec = None
+        sweep_stop = _AnyEvent(stop_event, sweep_halt)
+
+        def _sweep(sites, deadline, prog, prefix="stage3", skip=None):
+            return _run_site_sweeps(
+                client, br, result, seen_urls, sites, task=task, governance=governance,
+                context_brief=stage1_brief, pool=pool, deadline=deadline,
+                hard_deadline=deadline + 20, progress=prog, log=log, notes=notes,
+                skip_event=skip, stop_event=sweep_stop, sources=sources, question=query,
+                stage_prefix=prefix)
+
+        if sweep_sites and not _halted():
+            br.login_handler = _curated_login_handler(vault, result, log, "stage2")
+            # Never less than a floor, even when Stage 1 ate most of a short window.
+            _sw_deadline = max(gather_deadline, _now() + min(150, 45 + 20 * len(sweep_sites)))
+            sweep_exec = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="drt-sweeps")
+            # Reported under Stage 2 while the lanes are running, so the stage indicator
+            # does not flicker between the two.
+            sweep_fut = sweep_exec.submit(
+                _sweep, sweep_sites, _sw_deadline,
+                lambda st, pct, msg: progress("stage2", pct, msg))
         if use_engines or use_sites or use_neural:
             if use_neural:
                 log("[plan] API discovery on for Stage 2: "
                     + " + ".join(p for p, on in (("Exa", exa_enabled()), ("Tavily", tavily_enabled())) if on))
-            progress("stage2", None, f"{plan_msg} — searching the web in Chrome…")
+            progress("stage2", None, f"{plan_msg} — searching the web in the research browser…")
             # Curated sites with stored logins get used in all cases; uncredentialed walls defer to Stage 4.
             br.login_handler = _curated_login_handler(vault, result, log, "stage2")
             # The plan decides whether to lean on the curated list; the relevance filter still
@@ -2126,6 +2609,13 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 seed_for_browser = []
                 log("[plan] curated-site queries off for this run")
             focus = _stage2_focus(plan, use_sites, use_engines)
+            if sweep_fut is not None:
+                focus += (" DEDICATED SITE AGENTS are sweeping these sites through their own "
+                          "search, in parallel with you, right now: "
+                          + ", ".join(s["domain"] for s in sweep_sites)
+                          + ". Do NOT spend your searches inside those sites — follow a link "
+                          "into one when a trail leads there, but put your effort into the "
+                          "open web, primary sources, and communities NOT on that list.")
             if use_neural:
                 extras = []
                 if tavily_enabled():
@@ -2141,12 +2631,11 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                                 include_site_search=use_sites,
                                 include_neural=(use_neural and exa_enabled()),
                                 include_register_forum=True)
-            # Stage 2's soft time share: ~60% of whatever gathering window remains.
-            # When credentialed sites are in play, Stage 2 may NOT extend into the last
-            # quarter of the window: request_extension used to let the lanes run to the
-            # hard deadline and starve the credentialed sweep of any time at all.
+            # Stage 2's soft time share: ~60% of whatever gathering window remains. (The
+            # last quarter used to be held back for the credentialed sweep; the per-site
+            # sweeps now run alongside the lanes, so nothing needs reserving.)
             _win = max(0, gather_deadline - _now())
-            stage2_hard = gather_deadline - (max(60, 0.25 * _win) if (use_sites and have_login) else 0)
+            stage2_hard = gather_deadline
             stage2_end = min(stage2_hard, _now() + 0.6 * _win)
             if stop_event is None or not stop_event.is_set():
                 try:
@@ -2166,38 +2655,78 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
             log("[plan] Stage 2 skipped — open engines, curated sites, and API discovery all off")
 
 
-        # ── STAGE 3 — login-required (🔴) sites the plan selected ──
-        # These come straight from the unified selection above (already relevance-filtered).
-        # Split them: sites with a stored vault login are logged into + searched here; sites
-        # with NO stored login are deferred to Stage 4's one-time (ephemeral) prompt.
-        credentialed = login_selected if use_sites else []
+        # ── STAGE 3 — the dedicated site sweeps: wait for them, then a second pass for
+        # any site that still has not been searched ──
         if not use_sites:
-            log("[plan] Stage 3 (login-required sites) skipped — curated sites off")
-        if credentialed:
-            if need_prompt:
-                log(f"[stage3] login-required, no stored login → one-time prompt (Stage 4): "
-                    f"{[s['domain'] for s in need_prompt]}")
-            if have_login and not (stop_event is not None and stop_event.is_set()):
-                doms = [s["domain"] for s in have_login]
-                if _now() > gather_deadline - 20:
-                    for dom in doms:
-                        _alert(result, log, dom, "skipped",
-                               "the research window was spent before the dedicated "
-                               "credentialed sweep could start")
-                else:
-                    progress("stage3", None, f"Searching: {', '.join(doms)}")
-                    br.login_handler = _vault_handler(vault, result, log, "stage3",
-                                                      ephemeral=ephemeral_creds)
-                    _guarded_stage(
-                        "stage3",
-                        system=_stage_system("credentialed", governance, _listing(have_login),
-                                             cap3, stage1_brief, pool=pool),
-                        task=task, tools=_tool_defs(include_web_search=False), cap=cap3,
-                        progress=progress, log=log, notes=notes, skip_event=skip_event,
-                        question=query, sources=sources, pool=pool,
-                        deadline=gather_deadline, hard_deadline=gather_deadline)
-        else:
-            log("[stage3] no login-required sites relevant to this query; skipping")
+            log("[plan] Stage 3 (site sweeps) skipped — curated sites off")
+        elif not sweep_sites and not need_prompt:
+            log("[stage3] the plan selected no curated sites for this query; skipping")
+        if need_prompt:
+            log(f"[stage3] login-required, not signed in → one-time prompt (Stage 4): "
+                f"{[s['domain'] for s in need_prompt]}")
+        if sweep_fut is not None:
+            if not sweep_fut.done():
+                progress("stage3", None, "Finishing the dedicated site sweeps…")
+            while True:
+                try:
+                    sweep_fut.result(timeout=1.0)
+                    break
+                except _cf.TimeoutError:
+                    # "Skip stage" while only the sweeps are left ends them; STOP is
+                    # already covered (sweep_stop watches stop_event).
+                    if skip_event is not None and skip_event.is_set():
+                        skip_event.clear()
+                        sweep_halt.set()
+                        log("[stage3] site sweeps ended early by user")
+                except Exception as e:  # noqa: BLE001
+                    msg = f"[stage3] site sweeps aborted: {type(e).__name__}: {e}"
+                    notes.append(msg)
+                    log(msg + " — continuing")
+                    break
+            sweep_exec.shutdown(wait=False)
+            # SECOND PASS: a site whose agent never managed a single search (API error,
+            # crash, queue) gets another go with guaranteed time, past the window if need
+            # be. This is what makes "selected but never searched" a last resort.
+            def _searched(dom):
+                return any(r.get("domain") == dom and r.get("searches", 0) > 0
+                           for r in result.site_sweeps)
+            missed = [s for s in sweep_sites if not _searched(s["domain"])]
+            if missed and not _halted() and not sweep_halt.is_set():
+                d3 = max(gather_deadline, _now() + min(150, 45 + 20 * len(missed)))
+                log(f"[stage3] {len(missed)} site(s) not searched in the parallel sweep — "
+                    f"second pass, {int(d3 - _now())}s guaranteed: "
+                    f"{', '.join(s['domain'] for s in missed)}")
+                br.login_handler = _vault_handler(vault, result, log, "stage3",
+                                                  ephemeral=ephemeral_creds)
+                try:
+                    _sweep(missed, d3, progress, skip=skip_event)
+                except Exception as e:  # noqa: BLE001
+                    msg = f"[stage3] second pass aborted: {type(e).__name__}: {e}"
+                    notes.append(msg)
+                    log(msg + " — continuing")
+            for r in result.site_sweeps:
+                log(f"[stage3] {r['domain']}{' (signed in)' if r.get('signed_in') else ''}: "
+                    f"{r.get('searches', 0)} searches on its own search · "
+                    f"{r.get('results', 0)} results · {r.get('pages', 0)} pages read")
+        # A sign-in finished DURING the run (the tab was left open after the one-minute
+        # wait) counts: withdraw that site's "login failed" and record the session.
+        for w in list(result.login_warnings):
+            dom = w.get("domain")
+            try:
+                now_in = bool(dom) and bool(br.is_signed_in(dom))
+            except Exception:  # noqa: BLE001
+                now_in = False
+            if now_in:
+                result.login_warnings.remove(w)
+                if dom not in result.logged_in:
+                    result.logged_in.append(dom)
+                for r in result.site_sweeps:
+                    if r.get("domain") == dom:
+                        r["signed_in"] = True
+                        r["note"] = ("signed in part-way through the run. " + str(r.get("note") or ""))[:400]
+                _clear_alert(result, log, dom, "login_failed",
+                             "you signed in during the run; later searches of it used the session")
+                log(f"[login] signed in during the run: {dom}")
 
         # ── STAGE 4 — new gated sources (batched in-app login) ──
         if use_sites and result.gated_candidates and request_credentials:
@@ -2240,6 +2769,14 @@ def run_search(query: str, depth: str = "standard", clarifications: str = "",
                 _alert(result, log, dom, "skipped",
                        "needs a login and there was no way to ask for one in this run")
     finally:
+        # Never leave the site sweeps running against a browser that is about to be
+        # closed or handed back (an exception above can skip the normal wait).
+        if sweep_fut is not None and not sweep_fut.done():
+            sweep_halt.set()
+            try:
+                sweep_fut.result(timeout=90)
+            except Exception:  # noqa: BLE001
+                pass
         if own_browser:
             br.close()
 
@@ -2357,8 +2894,7 @@ def run_focus_sources(client, browser, harvest, domains, vault=None, ephemeral=N
     deadline = _now() + budget_s
     log(f"[plan] focused source pass: {', '.join(doms)} · {budget_s}s window")
 
-    _can_nag = (manual_login is not None and getattr(browser, "headed", False)
-                and not getattr(browser, "remote_browser", False))
+    _can_nag = manual_login is not None and getattr(browser, "headed", False)
     for dom in doms:
         if stop_event is not None and stop_event.is_set():
             break

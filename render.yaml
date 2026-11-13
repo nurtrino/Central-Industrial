@@ -90,14 +90,6 @@ services:
         sync: false
       - key: BRAVE_API_KEY         # Brave Search API (official; scrape is the fallback)
         sync: false
-      - key: BRIGHTDATA_API_KEY    # Bright Data: one account token…
-        sync: false
-      - key: BRIGHTDATA_UNLOCKER_ZONE   # …+ Web Unlocker zone NAME (blocked-page fetch)
-        sync: false
-      - key: BRIGHTDATA_SERP_ZONE       # SERP API zone NAME (engine fallback)
-        sync: false
-      - key: BRIGHTDATA_BROWSER_WSS     # Scraping Browser wss:// URL (replaces headless Chromium)
-        sync: false
       - key: DRT_LANES             # parallel Stage-2 lanes (blank = per tier 3/4/5)
         sync: false
 

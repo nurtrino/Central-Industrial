@@ -2,7 +2,7 @@
 DRT Stage 1 — Claude's own web search.  ⚠ RETIRED 2026-08-11.
 
 run_api_search is NO LONGER CALLED by the pipeline: per user directive, ALL web
-search runs through the visible Chrome instance (server-side/sandboxed search
+search runs through the visible Brave instance (server-side/sandboxed search
 agents respect robots.txt and get blocked). Stage 1 is now agent.run_local_baseline
 for every provider. This module is kept only for _load_blocklist (used by the
 baseline sweep) and as a reference/rollback of the old server-side path.

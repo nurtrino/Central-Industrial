@@ -7,6 +7,8 @@ __pycache__/
 config/.drt_vault_key
 config/drt_credentials.enc
 .drt_chrome_profile/
+.drt_brave_profile/
+.drt_chromium_profile/
 reports/
 *.log
 _srv.log

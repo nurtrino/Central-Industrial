@@ -1,9 +1,10 @@
 """
-DRT browser harness — the visible, persistent Chrome the Deep Research tool drives.
+DRT browser harness — the visible, persistent Brave the Deep Research tool drives.
 
 First principles (locked with the user):
-  * ONE dedicated, persistent Chrome profile (logins survive run-to-run).
-  * Real Chrome (channel="chrome"), HEADED — the user watches every move.
+  * ONE dedicated, persistent Brave profile (logins survive run-to-run).
+  * The real, installed Brave (by its executable), HEADED — the user watches every move;
+    DRT_HEADED=0 runs the same Brave headless. Never Google Chrome (owner rule).
   * Multi-tab: open as many pages as the agent wants, in one context.
   * Perception = clean extracted text per page; screenshot is a fallback only.
   * Engines: DuckDuckGo + Brave + Google (Google handled gently).
@@ -19,6 +20,8 @@ import concurrent.futures as _cf
 import functools
 import os
 import re
+import shutil
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -27,16 +30,19 @@ from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 from .login import detect_login_wall, host_of
-from . import brightdata as _bd
+from . import bmcp as _bmcp
 
-# Persistent profile lives beside the backend, gitignored. Logins persist here.
+# The OLD research profile (Google Chrome). Kept on disk, used only if DRT_BROWSER=chrome
+# is set explicitly; the live profile is .drt_brave_profile (see browser_choice).
 _PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), ".drt_chrome_profile")
 
 # ── Environment-driven browser config ────────────────────────────────────────
-# Local desktop default: HEADED real Chrome (the user watches it work).
-# Hosted/headless (Render): set DRT_HEADED=0 and DRT_BROWSER_CHANNEL="" so it
-# uses Playwright's bundled, containerized Chromium with sandbox disabled.
+# Local desktop default: a HEADED Brave (the user watches it work).
+# Headless: DRT_HEADED=0 — same Brave, no window (owner rule 2026-11-12: every app that
+# needs a browser must be able to run Brave headless).
+# Hosted (Render, Linux container, no Brave installed): DRT_HEADED=0; the choice below
+# then falls to Playwright's bundled, containerized Chromium with sandbox disabled.
 def _env_flag(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     if v is None:
@@ -44,12 +50,81 @@ def _env_flag(name: str, default: bool) -> bool:
     return v.strip().lower() not in ("0", "false", "no", "off", "")
 
 _HEADED_DEFAULT = _env_flag("DRT_HEADED", True)
-# "chrome" = the locally installed Google Chrome; "" = Playwright's bundled Chromium.
-_BROWSER_CHANNEL = os.environ.get("DRT_BROWSER_CHANNEL", "chrome").strip()
+# Legacy setting, kept only so an old .env does not break: it is consulted ONLY when
+# DRT_BROWSER=chrome is set explicitly (see browser_choice).
+_BROWSER_CHANNEL = os.environ.get("DRT_BROWSER_CHANNEL", "").strip()
+
+# ── which browser the research tool drives: BRAVE ────────────────────────────
+# OWNER RULE (standing order 2026-09-26, restated 2026-11-12): every browser session on
+# HYPERBOREA is Brave, never Google Chrome. See _KNOWLEDGE\BROWSER_STANDARD.md.
+#   nothing set / DRT_BROWSER=brave → the installed Brave, found in its usual places.
+#                                     Not installed (the hosted Linux container) →
+#                                     Playwright's bundled Chromium. NEVER Google Chrome.
+#   DRT_BROWSER_PATH=<exe>          → any Chromium-based browser, by its executable
+#   DRT_BROWSER=chromium            → Playwright's bundled Chromium
+#   DRT_BROWSER=chrome              → Google Chrome. Against the house rule; exists only so
+#                                     a problem can be compared across browsers on request.
+# Each browser keeps its OWN research profile folder beside the backend
+# (.drt_brave_profile; the old .drt_chrome_profile is kept on disk and no longer used): a
+# profile written by one browser is not opened with another. Read at start(), not at
+# import, so the .env is already loaded.
+_BRAVE_PATHS = (
+    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+    r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Browser",
+                 "Application", "brave.exe"),
+    "/usr/bin/brave-browser",
+    "/usr/bin/brave",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+)
+
+
+def hosted_instance() -> bool:
+    """True on the hosted deployment (its access gate sets AUTH_SECRET); never on the house PC."""
+    return bool(os.environ.get("AUTH_SECRET", "").strip())
+
+
+def find_brave() -> str:
+    """Path of the installed Brave ('' when it is not installed). BRAVE_PATH overrides."""
+    env = os.environ.get("BRAVE_PATH", "").strip().strip('"')
+    if env and os.path.isfile(env):
+        return env
+    return next((c for c in _BRAVE_PATHS if c and os.path.isfile(c)), "")
+
+
+def browser_choice() -> dict:
+    """{name, label, executable_path, channel, profile_dir, note} for this run."""
+    base = os.path.dirname(_PROFILE_DIR)
+    want = os.environ.get("DRT_BROWSER", "").strip().lower() or "brave"
+    path = os.environ.get("DRT_BROWSER_PATH", "").strip().strip('"')
+    note = ""
+    if path and not os.path.isfile(path):
+        note = f"DRT_BROWSER_PATH does not exist ({path}) — using Brave"
+        path, want = "", "brave"
+    if not path and want not in ("chrome", "chromium", "bundled"):
+        path = find_brave()
+        if not path:
+            note = ((note + "; ") if note else "") + (
+                "Brave is not installed here — using Playwright's bundled Chromium "
+                "(never Google Chrome)")
+            want = "chromium"
+    if path:
+        name = "brave" if "brave" in path.lower() else (
+            os.path.splitext(os.path.basename(path))[0].lower())
+        name = re.sub(r"[^a-z0-9]+", "", name) or "browser"
+        return {"name": name, "label": name.capitalize(), "executable_path": path, "channel": "",
+                "profile_dir": os.path.join(base, f".drt_{name}_profile"), "note": note}
+    if want == "chrome":
+        chan = os.environ.get("DRT_BROWSER_CHANNEL", _BROWSER_CHANNEL).strip() or "chrome"
+        return {"name": "chrome", "label": "Chrome", "executable_path": "", "channel": chan,
+                "profile_dir": _PROFILE_DIR,
+                "note": "DRT_BROWSER=chrome — Google Chrome by explicit request (house rule is Brave)"}
+    return {"name": "chromium", "label": "Chromium", "executable_path": "", "channel": "",
+            "profile_dir": os.path.join(base, ".drt_chromium_profile"), "note": note}
 
 # Per-engine search URLs + the CSS that locates organic result anchors.
 # We prefer server-rendered endpoints where possible so extraction is reliable
-# even though the window is a full, visible Chrome.
+# even though the window is a full, visible Brave.
 _ENGINES = {
     "duckduckgo": {
         "url": "https://html.duckduckgo.com/html/?q={q}",
@@ -156,7 +231,7 @@ class SearchResult:
 
 # ── PDFs ─────────────────────────────────────────────────────────────────────
 # Primary documents (manuals, filings, court records, papers) are usually PDFs, and
-# Chrome's viewer exposes no DOM text — they used to come back as an empty "thin →
+# The browser's PDF viewer exposes no DOM text — they used to come back as an empty "thin →
 # screenshot" page that nothing ever read. They are now downloaded through the
 # browser session's own request client (same cookies) and parsed locally.
 _PDF_MAX_PAGES = 80
@@ -219,9 +294,9 @@ class PageContent:
 # These render as a SHORT page whose text is the challenge copy. The login-wall
 # detector never matched this wording, so the agent used to receive the
 # interstitial AS the page and burn opens on it. We now recognise it, wait for the
-# challenge to clear (headed Chrome usually passes a managed challenge on its own
+# challenge to clear (a headed browser usually passes a managed challenge on its own
 # in a few seconds), and if it doesn't, flag the page as blocked so the caller's
-# fallback chain (Bright Data → Tavily → Exa) takes over.
+# fallback chain (Tavily → Exa) takes over.
 _CHALLENGE_TITLES = ("just a moment", "attention required", "access denied",
                      "please wait", "checking your browser", "security verification")
 _CHALLENGE_TEXT = ("performing security verification", "verify you are human",
@@ -247,14 +322,32 @@ def _is_challenge(title: str, text: str) -> bool:
 # them was the source of the false "already authenticated" verdict.
 _AUTH_COOKIE_NAMES = {
     "xf_user",                    # XenForo (avforums, rivian, wilders, wiim)
-    "user_session", "logged_in", "dotcom_user",  # GitHub
-    "reddit_session", "token_v2",  # Reddit
-    "auth_token", "twid",          # X / Twitter
+    "user_session", "dotcom_user",  # GitHub
+    "reddit_session",              # Reddit
+    "auth_token",                  # X / Twitter
+    "_t",                          # Discourse (the auth token; guests have only _forum_session)
     "flarum_remember",             # Flarum
     "sapu",                        # Seeking Alpha
     "li_at",                       # LinkedIn
     "bb_userid", "vbulletin_user",  # vBulletin
 }
+# Sites whose sign-in is known exactly: ONLY these cookies prove a session there — the
+# generic patterns below are not consulted. Found 2026-11-12 by asking each site directly:
+# GitHub sets `logged_in=no` for every visitor and Reddit sets `token_v2` for every
+# visitor, and both were being read as "signed in" — so the run reported a GitHub and a
+# Reddit session it did not have, never tried the stored login, and never asked the user.
+_STRICT_AUTH_COOKIES = {
+    "github.com": {"user_session", "dotcom_user"},
+    "reddit.com": {"reddit_session"},
+    "x.com": {"auth_token"},
+    "twitter.com": {"auth_token"},
+}
+# A cookie that only SAYS whether you are logged in must say yes.
+_FALSY_COOKIE_VALUES = {"", "no", "0", "false", "null", "none", "deleted", "guest"}
+# After a login form is submitted, landing on one of these means a second step is still
+# owed (2FA / device check) — the session does not exist yet.
+_MFA_URL_HINTS = ("two-factor", "two_factor", "2fa", "mfa", "otp", "verify", "verification",
+                  "challenge", "checkpoint", "device", "confirm")
 # Substrings that reliably indicate an authenticated cookie across stacks. Kept narrow
 # on purpose — no bare "session"/"sessionid" (guests have those). Under-reporting a
 # login is safe (falls back to public search); over-reporting is the bug we're fixing.
@@ -273,8 +366,13 @@ _PLATFORM_HINTS = {
     "audiosciencereview.com": "xenforo",
     "forum.openwrt.org": "discourse",
     "forum.bambulab.com": "discourse",
+    "community.home-assistant.io": "discourse",
+    "forums.tomshardware.com": "xenforo",
     "reddit.com": "reddit",
     "github.com": "github",
+    "x.com": "x",
+    "twitter.com": "x",
+    "news.ycombinator.com": "hn",
 }
 
 # ── browser-owner thread ─────────────────────────────────────────────────────
@@ -292,17 +390,24 @@ def _on_browser_thread(fn):
 
 
 class DRTBrowser:
-    """Owns one persistent, visible Chrome context and the tabs inside it.
+    """Owns one persistent, visible Brave context and the tabs inside it.
 
     Anti-bot stance (2026-09-03): no UA spoofing / fingerprint shims. The local headed
-    Chrome is a real browser with the user's real profile; anything it still cannot read
-    (Cloudflare challenges, 403s) is fetched through Bright Data's Web Unlocker by the
-    caller, and the headless/hosted mode connects to Bright Data's Scraping Browser
-    (BRIGHTDATA_BROWSER_WSS) instead of the bundled Chromium when configured."""
+    Brave is a real browser with its own dedicated research profile; anything it still cannot read
+    (Cloudflare challenges, 403s) is fetched by the caller through the page readers
+    (Tavily extract, then Exa contents)."""
 
-    def __init__(self, profile_dir: str = _PROFILE_DIR, headed: Optional[bool] = None,
+    def __init__(self, profile_dir: Optional[str] = None, headed: Optional[bool] = None,
                  slow_mo_ms: Optional[int] = None, log=None, login_handler=None):
-        self.profile_dir = profile_dir
+        self.choice = browser_choice()          # which browser, and its own profile folder
+        # HOSTED SITE: a throwaway profile for every run. There a login is typed for one search
+        # and must not stay signed in for the next person who uses the site - a profile kept on
+        # the server would keep the session cookies. (DRT_GUEST_PROFILE=1 forces it anywhere.)
+        self._throwaway_profile = False
+        if not profile_dir and (hosted_instance() or _env_flag("DRT_GUEST_PROFILE", False)):
+            profile_dir = tempfile.mkdtemp(prefix="drt_guest_")
+            self._throwaway_profile = True
+        self.profile_dir = profile_dir or self.choice["profile_dir"]
         self.headed = _HEADED_DEFAULT if headed is None else headed
         # Pacing is env-tunable (DRT_SLOWMO, ms). Default 80 — deep runs open 100-250
         # pages and must stay watchable without taking half a day.
@@ -318,10 +423,15 @@ class DRTBrowser:
         self.login_handler = login_handler
         self._auth_handled: set[str] = set()   # domains already attempted this run
         self._platform_cache: dict[str, str] = {}   # domain -> detected forum platform
+        # Browser MCP bridge (trial): the owner's everyday Brave, for the sites in
+        # DRT_BMCP_DOMAINS. Started on first use; see bmcp.py and the methods below.
+        self._bmcp = None
+        self._bmcp_lock = threading.Lock()
+        self._bmcp_down_until = 0.0
+        self._bmcp_said: set[str] = set()
+        self.bmcp_used: dict[str, dict] = {}     # domain -> {searches, pages}
         self._pw = None
         self._ctx = None
-        self._remote = None          # Bright Data Scraping Browser (CDP) when in use
-        self.remote_browser = False
         self._exec = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="drt-browser")
         self._thread: Optional[threading.Thread] = None
 
@@ -339,29 +449,6 @@ class DRTBrowser:
         self._thread = threading.current_thread()
         os.makedirs(self.profile_dir, exist_ok=True)
         self._pw = sync_playwright().start()
-        # Headless + Bright Data Scraping Browser configured → connect to the remote,
-        # unblocking Chrome over CDP instead of launching the bundled Chromium. (Headed
-        # local runs keep the persistent profile — that is where the logins live.)
-        if not self.headed and _bd.browser_enabled():
-            try:
-                # Validate the credentials with one probe session, then release it:
-                # Bright Data sessions are one-domain and time out after 5 idle minutes,
-                # so nothing long-lived is kept — new_tab() opens a session per tab.
-                probe = self._pw.chromium.connect_over_cdp(_bd.browser_wss(), timeout=60000)
-                try:
-                    probe.close()
-                except Exception:
-                    pass
-                self._ctx = None
-                self._remote = None
-                self.remote_browser = True
-                self._log("[browser] Bright Data Scraping Browser connected (CDP, headless; "
-                          "one session per tab)")
-                return self
-            except Exception as e:  # noqa: BLE001
-                self._log(f"[browser] Bright Data Scraping Browser connect failed "
-                          f"({type(e).__name__}: {e}) — launching local Chromium instead")
-                self._remote = None
         # Container/headless hosts (Render) need --no-sandbox and a non-/dev/shm
         # temp dir; --start-maximized only matters when headed.
         args = [
@@ -377,21 +464,39 @@ class DRTBrowser:
             viewport={"width": 1380, "height": 900},
             args=args,
         )
-        # Use the locally installed Chrome only when a channel is configured;
-        # on Render DRT_BROWSER_CHANNEL="" → Playwright's bundled Chromium.
-        if _BROWSER_CHANNEL:
-            launch_kwargs["channel"] = _BROWSER_CHANNEL
+        # The installed Brave by its executable; on the hosted container (no Brave) the
+        # choice is Playwright's bundled Chromium. Google Chrome only on explicit request.
+        if self.choice.get("note"):
+            self._log(f"[browser] {self.choice['note']}")
+        if self.choice["executable_path"]:
+            launch_kwargs["executable_path"] = self.choice["executable_path"]
+        elif self.choice["channel"]:
+            launch_kwargs["channel"] = self.choice["channel"]
         self._ctx = self._pw.chromium.launch_persistent_context(
             self.profile_dir, **launch_kwargs)
         # Tabs the agent opens are pages on this context.
         if not self._ctx.pages:
             self._ctx.new_page()
         mode = "headed" if self.headed else "headless"
-        chan = _BROWSER_CHANNEL or "chromium"
+        chan = self.choice["label"]
         self._log(f"[browser] {chan} up ({mode}) · profile={self.profile_dir}")
+        if self._throwaway_profile:
+            self._log("[browser] throwaway profile: nothing signed into during this run is kept "
+                      "after it")
+        if not self.headed:
+            # Owner, 2026-11-12: some websites do not respond to a headless browser (on this
+            # PC DuckDuckGo's search returned nothing headless and five results visible).
+            # The visible window is the default and the right mode for research.
+            self._log("[browser] running HEADLESS (DRT_HEADED=0): some sites and search engines "
+                      "do not answer a headless browser — use the visible window for research")
         return self
 
     def close(self):
+        try:
+            if self._bmcp is not None:
+                self._bmcp.close()
+        except Exception:
+            pass
         try:
             self._call(self._close_impl)
         finally:
@@ -404,15 +509,13 @@ class DRTBrowser:
         try:
             if self._ctx:
                 self._ctx.close()
-            if self._remote:
-                try:
-                    self._remote.close()
-                except Exception:
-                    pass
         finally:
             if self._pw:
                 self._pw.stop()
-        self._ctx = self._pw = self._remote = None
+        self._ctx = self._pw = None
+        if getattr(self, "_throwaway_profile", False):
+            # the hosted site's per-run profile: cookies and sessions go with it
+            shutil.rmtree(self.profile_dir, ignore_errors=True)
 
     def __enter__(self):
         return self.start()
@@ -422,27 +525,6 @@ class DRTBrowser:
 
     # ── tabs ──────────────────────────────────────────────────
     def new_tab(self):
-        # Bright Data Browser API sessions are scoped: one session may navigate only a
-        # handful of domains (`navigate_domains_limit`) before it refuses. Our harness
-        # visits engines + dozens of sites per run, so in remote mode EVERY tab is its
-        # own session: connect → use → the page's close() also closes the session.
-        if self.remote_browser:
-            b = self._pw.chromium.connect_over_cdp(_bd.browser_wss(), timeout=60000)
-            ctx = b.contexts[0] if b.contexts else b.new_context(
-                viewport={"width": 1380, "height": 900})
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            _orig_close = page.close
-
-            def _close(*a, **kw):
-                try:
-                    _orig_close(*a, **kw)
-                finally:
-                    try:
-                        b.close()
-                    except Exception:
-                        pass
-            page.close = _close
-            return page
         return self._ctx.new_page()
 
     @property
@@ -539,10 +621,7 @@ class DRTBrowser:
             url = search_url.replace("{q}", quote_plus(query))
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             self._human_pause()
-            try:
-                page.wait_for_load_state("networkidle", timeout=6000)
-            except PWTimeout:
-                pass
+            self._settle(page, max_ms=4000, min_chars=300, quiet_ms=600)
             # JS-aware: many forums/SPAs render results AFTER load — wait for result rows
             # to appear (or the anchor set to settle) before reading the LIVE DOM.
             self._wait_for_results(page)
@@ -590,6 +669,42 @@ class DRTBrowser:
                 pass
         return out
 
+    def _settle(self, page, max_ms: int = 6000, min_chars: int = 600, quiet_ms: int = 900):
+        """Wait until the page's text has stopped growing, then return — instead of waiting
+        for the NETWORK to go quiet.
+
+        Every page read used to end with `wait_for_load_state("networkidle", 6000)`. Forum
+        and news pages keep ads, analytics and live-update sockets talking forever, so that
+        wait almost always ran its full six seconds — on every one of a run's page reads,
+        with the single browser thread held the whole time. In the second real run that
+        was most of the gathering window (43 reads), and it is why nine agents working in
+        parallel read no more pages than four had.
+
+        Now: poll the rendered text length; return once it is at least `min_chars` and has
+        not changed for `quiet_ms`. A page that stays thin (still rendering, or genuinely
+        empty) gets the full `max_ms`, exactly as before. Set DRT_SLOW_SETTLE=1 to go back
+        to the old network-idle wait."""
+        if os.environ.get("DRT_SLOW_SETTLE", "").strip() or not getattr(self, "fast_settle", True):
+            try:
+                page.wait_for_load_state("networkidle", timeout=max_ms)
+            except Exception:
+                pass
+            return
+        t_end = time.time() + max_ms / 1000.0
+        prev, same_since = -1, None
+        while time.time() < t_end:
+            try:
+                n = int(page.evaluate(
+                    "() => document.body ? (document.body.innerText || '').length : 0") or 0)
+            except Exception:
+                n = 0
+            now = time.time()
+            if n != prev:
+                prev, same_since = n, now
+            elif n >= min_chars and now - same_since >= quiet_ms / 1000.0:
+                return
+            time.sleep(0.2)
+
     def _wait_for_results(self, page, budget_ms: int = 8000):
         """Wait for a JS-rendered results list to appear, OR for the link set to settle.
         Cheap poll — returns as soon as known result rows show up or the DOM stops growing."""
@@ -621,9 +736,19 @@ class DRTBrowser:
             _t.sleep(0.6)
 
     # ── smart native search (platform adapters) ───────────────
-    @_on_browser_thread
     def native_search(self, domain: str, query: str, search_url: str = "",
                        limit: int = 10) -> list[SearchResult]:
+        """The site's own search. A site routed through Browser MCP is searched in the
+        owner's everyday Brave when that browser is signed in to it; everything else,
+        and any failure, goes to the research browser as before."""
+        rows = self._bmcp_search(domain, query, limit)
+        if rows:
+            return rows
+        return self._native_search_pw(domain, query, search_url=search_url, limit=limit)
+
+    @_on_browser_thread
+    def _native_search_pw(self, domain: str, query: str, search_url: str = "",
+                          limit: int = 10) -> list[SearchResult]:
         """Search a site's OWN search, choosing the most reliable method for its platform:
         Discourse → JSON API; Reddit → server-rendered old.reddit; XenForo → drive the
         search box; else an explicit {q} template (JS-aware) or the search box. Returns []
@@ -647,6 +772,11 @@ class DRTBrowser:
                 r = self._github_search(dom, query, limit)
                 if r:
                     return r
+            elif plat == "x":
+                # X has no usable logged-out or engine view: its own search is the only route.
+                return self._x_search(dom, query, limit)
+            elif plat == "hn":
+                return self._hn_search(dom, query, limit)
             # Explicit template (JS-aware) next, then the universal search-box driver.
             if search_url and "{q}" in search_url:
                 r = self.site_native_search(search_url, query, limit)
@@ -739,6 +869,13 @@ class DRTBrowser:
                                date=dt or str(t.get("created_at") or "")[:10]))
                 self._log(f"[search] discourse(json) {domain} q={query!r} -> {len(out)} results")
                 return out
+            if isinstance(data, dict) and "grouped_search_result" in data \
+                    and not data.get("failed") and not data.get("errors"):
+                # A well-formed answer with nothing in it: the forum has no match for these
+                # words. That is final — do not spend ten more seconds on the HTML search
+                # page to learn the same thing (the caller retries with a shorter query).
+                self._log(f"[search] discourse(json) {domain} q={query!r} -> 0 results (no match)")
+                return out
             # …else the HTML search page (Ember renders result rows we then read).
             page.goto(f"https://{domain}/search?q={quote_plus(query)}",
                       wait_until="domcontentloaded", timeout=30000)
@@ -776,20 +913,21 @@ class DRTBrowser:
         return out
 
     def _github_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
-        """GitHub public repo search via the REST API — anonymous (no login needed for
-        public search), returns real repos as clean JSON. The web /search page is a React
-        SPA whose HTML scrape yields nav tabs/footer junk, so we avoid it entirely. On a
-        non-200 (anon search is ~10 req/min) we return [] so the caller falls back to site:."""
+        """GitHub search via the REST API — anonymous (no login needed for public search),
+        clean JSON. The web /search page is a React SPA whose HTML scrape yields nav
+        tabs/footer junk, so we avoid it entirely. Returns REPOSITORIES (by stars) and
+        ISSUES / PULL REQUESTS / DISCUSSIONS-as-issues (best match): the repos say what
+        exists, the issues are where the candid problem reports live. On a non-200 (anon
+        search is ~10 req/min) that half is simply empty; both empty → caller falls back."""
         import requests
         from urllib.parse import quote_plus
-        out: list[SearchResult] = []
+        hdr = {"Accept": "application/vnd.github+json", "User-Agent": "deep-research-tool"}
+        repos: list[SearchResult] = []
+        issues: list[SearchResult] = []
         try:
             r = requests.get(
                 f"https://api.github.com/search/repositories?q={quote_plus(query)}"
-                f"&sort=stars&per_page={max(limit, 5)}",
-                headers={"Accept": "application/vnd.github+json",
-                         "User-Agent": "deep-research-tool"},
-                timeout=12)
+                f"&sort=stars&per_page={max(limit, 5)}", headers=hdr, timeout=12)
             if r.status_code == 200:
                 for it in (r.json().get("items") or [])[:limit]:
                     name = it.get("full_name") or ""
@@ -798,13 +936,131 @@ class DRTBrowser:
                     label = name + (f" — {desc}" if desc else "")
                     if isinstance(stars, int):
                         label += f"  (★{stars:,})"
-                    out.append(SearchResult(title=label[:180],
-                                            url=it.get("html_url") or "", engine="github"))
+                    repos.append(SearchResult(title=label[:180], url=it.get("html_url") or "",
+                                              engine="github", snippet=desc[:220],
+                                              date=str(it.get("pushed_at") or "")[:10]))
             else:
-                self._log(f"[search] github api HTTP {r.status_code} (rate-limited?) -> site: fallback")
+                self._log(f"[search] github repo api HTTP {r.status_code} (rate-limited?)")
         except Exception as e:  # noqa: BLE001
-            self._log(f"[search] github api ERROR ({type(e).__name__})")
-        self._log(f"[search] github q={query!r} -> {len(out)} results")
+            self._log(f"[search] github repo api ERROR ({type(e).__name__})")
+        try:
+            r = requests.get(
+                f"https://api.github.com/search/issues?q={quote_plus(query)}&per_page={max(limit, 5)}",
+                headers=hdr, timeout=12)
+            if r.status_code == 200:
+                for it in (r.json().get("items") or [])[:limit]:
+                    url = it.get("html_url") or ""
+                    m = re.search(r"github\.com/([^/]+/[^/]+)/", url)
+                    kind = "PR" if it.get("pull_request") else "issue"
+                    label = (f"[{kind} · {m.group(1) if m else ''} · {it.get('state', '')} · "
+                             f"{it.get('comments', 0)} comments] {(it.get('title') or '').strip()}")
+                    body = re.sub(r"\s+", " ", (it.get("body") or ""))[:220]
+                    issues.append(SearchResult(title=label[:180], url=url, engine="github",
+                                               snippet=body,
+                                               date=str(it.get("updated_at") or "")[:10]))
+            else:
+                self._log(f"[search] github issue api HTTP {r.status_code} (rate-limited?)")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] github issue api ERROR ({type(e).__name__})")
+        # Interleave so a result page shows both kinds: repos first, then issues.
+        n_repo = min(len(repos), max(limit - min(len(issues), limit // 2), limit // 2))
+        out = repos[:n_repo] + issues[:max(0, limit - n_repo)]
+        self._log(f"[search] github q={query!r} -> {len(repos[:n_repo])} repos + "
+                  f"{len(out) - len(repos[:n_repo])} issues")
+        return out
+
+    def _hn_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """Hacker News via its Algolia search API (public JSON, no login): stories ranked
+        by relevance, each linked to its HN DISCUSSION page — the comments are the value,
+        not the linked article. Stories with no comments are dropped."""
+        import requests
+        from urllib.parse import quote_plus
+        out: list[SearchResult] = []
+        try:
+            r = requests.get(
+                f"https://hn.algolia.com/api/v1/search?query={quote_plus(query)}"
+                f"&tags=story&hitsPerPage={max(limit * 2, 10)}",
+                headers={"User-Agent": "deep-research-tool"}, timeout=12)
+            if r.status_code == 200:
+                for h in (r.json().get("hits") or []):
+                    oid = h.get("objectID")
+                    n_c = h.get("num_comments") or 0
+                    if not oid or not n_c:
+                        continue
+                    title = (h.get("title") or "").strip()
+                    link = (h.get("url") or "").strip()
+                    out.append(SearchResult(
+                        title=f"{title}  ({h.get('points') or 0} points · {n_c} comments)"[:180],
+                        url=f"https://news.ycombinator.com/item?id={oid}",
+                        snippet=(f"links to {link}" if link else
+                                 re.sub(r"<[^>]+>", " ", h.get("story_text") or ""))[:220],
+                        engine="hn", date=str(h.get("created_at") or "")[:10]))
+                    if len(out) >= limit:
+                        break
+            else:
+                self._log(f"[search] hn api HTTP {r.status_code}")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] hn api ERROR ({type(e).__name__})")
+        self._log(f"[search] hn q={query!r} -> {len(out)} results")
+        return out
+
+    def _x_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """X (Twitter) search, in the signed-in browser. X shows nothing to a logged-out
+        visitor and search engines index almost none of it, so this is the only route:
+        the Top tab of x.com/search, read from the rendered post cards. Each result is
+        one POST — '@handle: text' with its permalink and date. Returns [] when the
+        profile holds no X session (the page bounces to the sign-in flow)."""
+        from urllib.parse import quote_plus
+        page = self.new_tab()
+        out: list[SearchResult] = []
+        try:
+            page.goto(f"https://x.com/search?q={quote_plus(query)}&src=typed_query&f=top",
+                      wait_until="domcontentloaded", timeout=30000)
+            self._human_pause()
+            if "/i/flow/login" in (page.url or "") or "/login" in (page.url or ""):
+                self._log(f"[search] x q={query!r} -> not signed in (bounced to the sign-in page)")
+                return []
+            try:
+                page.wait_for_selector('article[data-testid="tweet"]', timeout=12000)
+            except PWTimeout:
+                pass
+            grab = """() => Array.from(document.querySelectorAll('article[data-testid="tweet"]')).map(a => {
+                        const t = a.querySelector('[data-testid="tweetText"]');
+                        const tm = a.querySelector('time');
+                        const link = tm ? tm.closest('a') : a.querySelector('a[href*="/status/"]');
+                        return {text: t ? (t.innerText || '') : '',
+                                url: link ? link.href : '',
+                                date: tm ? (tm.getAttribute('datetime') || '') : ''};
+                    })"""
+            rows = page.evaluate(grab) or []
+            if len(rows) < limit:
+                try:                       # one scroll loads the next batch of cards
+                    page.mouse.wheel(0, 3000)
+                    page.wait_for_timeout(1500)
+                    rows += page.evaluate(grab) or []
+                except Exception:
+                    pass
+            seen = set()
+            for r in rows:
+                href = (r.get("url") or "").split("?")[0]
+                text = re.sub(r"\s+", " ", (r.get("text") or "")).strip()
+                m = re.search(r"(?:x|twitter)\.com/([^/]+)/status/\d+", href)
+                if not m or href in seen or len(text) < 15:
+                    continue
+                seen.add(href)
+                out.append(SearchResult(title=f"@{m.group(1)}: {text[:130]}", url=href,
+                                        snippet=text[:300], engine="x",
+                                        date=str(r.get("date") or "")[:10]))
+                if len(out) >= limit:
+                    break
+            self._log(f"[search] x q={query!r} -> {len(out)} posts")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] x ERROR ({type(e).__name__})")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
         return out
 
     def _reddit_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
@@ -1027,8 +1283,6 @@ class DRTBrowser:
 
     # ── login-state detection ─────────────────────────────────
     def _domain_cookies(self, domain: str) -> list:
-        if self.remote_browser:
-            return []     # remote sessions are ephemeral — nothing persists, never "logged in"
         try:
             cks = self._ctx.cookies()
         except Exception:
@@ -1048,10 +1302,18 @@ class DRTBrowser:
         Biased to UNDER-report: a missed login just falls back to public search + reactive
         login, whereas a false 'logged in' silently harvests public content while claiming
         success."""
+        d = (domain or "").lstrip(".").lower()
+        strict = next((v for k, v in _STRICT_AUTH_COOKIES.items()
+                       if d == k or d.endswith("." + k)), None)
         for c in self._domain_cookies(domain):
             name = (c.get("name") or "")
             low = name.lower()
-            if not (c.get("value") or "").strip():
+            val = (c.get("value") or "").strip()
+            if val.lower() in _FALSY_COOKIE_VALUES:
+                continue                    # empty, or a flag that says "no"
+            if strict is not None:
+                if name in strict:
+                    return True
                 continue
             if name in _AUTH_COOKIE_NAMES or any(p in low for p in _AUTH_COOKIE_PATTERNS):
                 return True
@@ -1069,7 +1331,7 @@ class DRTBrowser:
     def open_login_tab(self, domain: str, login_url: str = ""):
         """Open (and front) a tab on the site's sign-in page for the user. Returns the
         page handle, or None when there is no visible local browser to sign in with."""
-        if self.remote_browser or not self.headed or self._ctx is None:
+        if not self.headed or self._ctx is None:
             return None
         page = self._ctx.new_page()
         d = domain.lstrip(".").lower()
@@ -1089,9 +1351,24 @@ class DRTBrowser:
             pass
         return page
 
-    @_on_browser_thread
     def is_signed_in(self, domain: str) -> bool:
+        b = self._bmcp_for(domain)
+        if b is not None and b.signed_in(domain) is True:
+            return True
+        return self._is_signed_in_pw(domain)
+
+    @_on_browser_thread
+    def _is_signed_in_pw(self, domain: str) -> bool:
         return self._has_auth_cookie(domain)
+
+    def can_verify_sign_in(self, domain: str) -> bool:
+        """True where the tool knows this site's session cookie by name, so 'no cookie'
+        reliably means 'not signed in' (GitHub, Reddit, X, and Discourse / XenForo forums)."""
+        d = (domain or "").lstrip(".").lower()
+        if any(d == k or d.endswith("." + k) for k in _STRICT_AUTH_COOKIES):
+            return True
+        plat = self._platform_cache.get(d) or _PLATFORM_HINTS.get(d) or ""
+        return plat in ("discourse", "xenforo")
 
     @_on_browser_thread
     def close_tab(self, page):
@@ -1103,9 +1380,110 @@ class DRTBrowser:
     def mark_auth_handled(self, domain: str):
         self._auth_handled.add(domain)
 
+
+    # ── Browser MCP bridge (trial, 2026-11-12) ────────────────
+    # The research browser is its own Brave profile and has to be signed in site by site
+    # (GitHub's 2FA, Reddit). The owner's everyday Brave already is. For the sites in
+    # DRT_BMCP_DOMAINS, searching and reading go through that browser — in background
+    # tabs, read-only — when DRT_BMCP=1, the Browser MCP extension is connected and
+    # allowed, and that browser is signed in to the site. Any miss falls back to the
+    # research browser, so turning this on can never make a site less reachable.
+    def _bmcp_for(self, domain: str):
+        """The bridge, if this domain is routed through it and it is usable now; else None."""
+        if not _bmcp.enabled() or not _bmcp.routes(domain):
+            return None
+        with self._bmcp_lock:
+            if time.time() < self._bmcp_down_until:
+                return None
+            try:
+                if self._bmcp is None:
+                    self._bmcp = _bmcp.BrowserMCP(log=self._log).start()
+                ok, detail = self._bmcp.status()
+            except _bmcp.BMCPError as e:
+                ok, detail = False, str(e)
+            if not ok:
+                self._bmcp_down_until = time.time() + 90      # do not ask again on every call
+                if detail not in self._bmcp_said:
+                    self._bmcp_said.add(detail)
+                    self._log(f"[login] Browser MCP is not available ({detail[:200]}) — "
+                              f"using the research browser for {domain}")
+                return None
+            return self._bmcp
+
+    @staticmethod
+    def _bmcp_site(domain: str) -> str:
+        d = (domain or "").lstrip(".").lower()
+        for r in _bmcp.routed_domains():
+            if d == r or d.endswith("." + r):
+                return r
+        return d
+
+    def _bmcp_note(self, domain: str, key: str):
+        d = self.bmcp_used.setdefault(self._bmcp_site(domain), {"searches": 0, "pages": 0})
+        d[key] += 1
+
+    def _bmcp_search(self, domain: str, query: str, limit: int) -> list:
+        dom = (domain or "").lstrip(".").lower()
+        b = self._bmcp_for(dom)
+        if b is None or b.signed_in(dom) is not True:
+            return []
+        try:
+            rows = b.search(dom, query, limit)
+        except _bmcp.BMCPError as e:
+            self._log(f"[search] Browser MCP search of {dom} failed ({str(e)[:160]}) — "
+                      f"research browser instead")
+            return []
+        out = [SearchResult(title=r["title"][:180], url=r["url"], snippet=r.get("snippet", ""),
+                            engine="everyday-brave", date=r.get("date", "")) for r in rows]
+        if dom.endswith("github.com"):
+            # Issues and discussions came from the signed-in search page; add repositories
+            # from the search API so one result list shows both.
+            seen = {r.url for r in out}
+            keep = out[:max(3, limit // 2 + 1)]
+            for r in self._github_search(dom, query, limit):
+                if r.url not in seen and len(keep) < limit:
+                    seen.add(r.url)
+                    keep.append(r)
+            out = keep
+        if out:
+            self._bmcp_note(dom, "searches")
+        self._log(f"[search] {dom} via your everyday Brave q={query!r} -> {len(out)} results")
+        return out
+
+    def _bmcp_open(self, url: str, min_chars: int):
+        if _looks_like_pdf(url):
+            return None
+        dom = host_of(url)
+        b = self._bmcp_for(dom)
+        if b is None or b.signed_in(dom) is not True:
+            return None
+        try:
+            r = b.read_page(url)
+        except _bmcp.BMCPError as e:
+            self._log(f"[open] Browser MCP could not read {url[:90]} ({str(e)[:140]}) — "
+                      f"research browser instead")
+            return None
+        text = (r.get("text") or "").strip()
+        if len(text) < min_chars:
+            return None
+        self._bmcp_note(dom, "pages")
+        self._log(f"[open] {url} -> text {len(text)}c (in your everyday Brave)")
+        return PageContent(url=r.get("url") or url, title=(r.get("title") or "").strip(), text=text,
+                           links=[x for x in (r.get("links") or []) if isinstance(x, dict)])
+
     # ── proactive login ───────────────────────────────────────
-    @_on_browser_thread
     def ensure_logged_in(self, domain: str, creds: dict) -> tuple[bool, str]:
+        """Signed in? A site routed through Browser MCP counts as signed in when the
+        owner's everyday Brave is — no stored login is typed and no 2FA prompt is
+        raised. Otherwise the research browser's own session and stored login are used."""
+        b = self._bmcp_for(domain)
+        if b is not None and b.signed_in(domain) is True:
+            self._auth_handled.add(domain)
+            return True, "signed in in your everyday Brave (through Browser MCP) — no login needed"
+        return self._ensure_logged_in_pw(domain, creds)
+
+    @_on_browser_thread
+    def _ensure_logged_in_pw(self, domain: str, creds: dict) -> tuple[bool, str]:
         """Establish a logged-in session for `domain` before searching it. Returns
         (logged_in, detail). `logged_in` is True ONLY when an authenticated session is
         actually verified (a strong auth cookie, or an autofill that cleared the login
@@ -1124,21 +1502,49 @@ class DRTBrowser:
             return False, "not logged in — no stored credentials (public content only)"
         page = self.new_tab()
         try:
-            target = (creds.get("login_url") or "").strip() or f"https://{domain}/"
-            try:
-                page.goto(target, wait_until="domcontentloaded", timeout=30000)
-                self._human_pause()
-            except Exception as e:  # noqa: BLE001
-                return False, f"could not open login page ({type(e).__name__})"
-            try:
-                has_pw = page.locator("input[type=password]").count() > 0
-            except Exception:
-                has_pw = False
+            # FIND THE LOGIN FORM. Only 3 of the 12 stored logins carry a login URL; for
+            # the rest this used to open the site's home page, find no password field
+            # there, and give up without ever trying the stored login. Now: the stored
+            # URL, then the site's known sign-in page, then /login, then the home page —
+            # the first that shows a password field wins.
+            d = (domain or "").lstrip(".").lower()
+            targets = []
+            for t in ((creds.get("login_url") or "").strip(), self._LOGIN_PAGES.get(d),
+                      f"https://{d}/login", f"https://{d}/"):
+                if t and t not in targets:
+                    targets.append(t)
+            has_pw, opened_any, last_err = False, False, ""
+            for target in targets:
+                try:
+                    page.goto(target, wait_until="domcontentloaded", timeout=30000)
+                    self._human_pause()
+                    opened_any = True
+                except Exception as e:  # noqa: BLE001
+                    last_err = type(e).__name__
+                    continue
+                # The page load may itself reveal a live session (redirect past the form).
+                if self._has_auth_cookie(domain):
+                    self._auth_handled.add(domain)
+                    return True, "already logged in (session in profile)"
+                try:
+                    page.wait_for_selector("input[type=password]", timeout=4000)
+                    has_pw = True
+                except Exception:
+                    try:
+                        has_pw = page.locator("input[type=password]").count() > 0
+                    except Exception:
+                        has_pw = False
+                if has_pw:
+                    break
+            if not opened_any:
+                return False, f"could not open login page ({last_err or 'error'})"
             if not has_pw:
-                # No form here and no auth cookie → we are NOT authenticated. Don't pretend.
-                # (Usually means no login_url is configured, so the form was never reached.)
-                return False, "not logged in — no login form at login URL (public content only)"
-            try_autofill(page, creds, self._log)
+                # No form anywhere we looked and no auth cookie → NOT authenticated.
+                return False, ("not logged in — no login form found (tried "
+                               + ", ".join(t.split("//", 1)[-1] for t in targets)
+                               + "); add the site's login URL to its stored login")
+            # The form is already on screen: fill it here rather than navigating again.
+            try_autofill(page, {k: v for k, v in creds.items() if k != "login_url"}, self._log)
             try:
                 page.wait_for_load_state("networkidle", timeout=6000)
             except Exception:
@@ -1147,15 +1553,23 @@ class DRTBrowser:
             if self._has_auth_cookie(domain):
                 self._auth_handled.add(domain)
                 return True, "logged in via stored credentials"
-            # … or the login form is gone and we're off the login page (sites we lack a
-            #    known cookie name for).
+            url_now = (page.url or "").lower()
+            path_now = url_now.split("//", 1)[-1].partition("/")[2]     # path only, not the host
+            if any(h in path_now for h in _MFA_URL_HINTS):
+                return False, ("the stored login was accepted but the site wants a second "
+                               "step (2FA / device check) — it needs you to finish signing in")
+            # … or the login form is gone and we're off the login page — accepted ONLY for
+            #    sites whose session cookie we do not know by name. Where we do know it
+            #    (GitHub, Reddit, X, Discourse, XenForo…) the cookie is the only proof.
             still_pw = False
             try:
                 still_pw = page.locator("input[type=password]").count() > 0
             except Exception:
                 pass
-            if not still_pw and "login" not in (page.url or "").lower() \
-                    and "signin" not in (page.url or "").lower():
+            known = (any(d == k or d.endswith("." + k) for k in _STRICT_AUTH_COOKIES)
+                     or self._platform_cache.get(d) in ("discourse", "xenforo")
+                     or _PLATFORM_HINTS.get(d) in ("discourse", "xenforo"))
+            if not known and not still_pw and "login" not in url_now and "signin" not in url_now:
                 self._auth_handled.add(domain)
                 return True, "logged in via stored credentials (form cleared)"
             return False, "stored login did not establish a session (2FA, captcha, or selector mismatch)"
@@ -1166,8 +1580,17 @@ class DRTBrowser:
                 pass
 
     # ── open / read ───────────────────────────────────────────
-    @_on_browser_thread
     def open(self, url: str, min_chars: int = 200, timeout_ms: int = 30000) -> PageContent:
+        """Open a URL and return its readable text. A page on a site routed through
+        Browser MCP is read in the owner's everyday Brave when that browser is signed
+        in to the site; everything else, and any failure, uses the research browser."""
+        pc = self._bmcp_open(url, min_chars)
+        if pc is not None:
+            return pc
+        return self._open_pw(url, min_chars=min_chars, timeout_ms=timeout_ms)
+
+    @_on_browser_thread
+    def _open_pw(self, url: str, min_chars: int = 200, timeout_ms: int = 30000) -> PageContent:
         """Open a URL in a fresh tab and return cleaned readable text.
 
         A bot-challenge interstitial is waited out; if it never clears the page comes
@@ -1177,7 +1600,7 @@ class DRTBrowser:
         page = self.new_tab()
         pc = PageContent(url=url)
         try:
-            # PDFs: no DOM text in Chrome's viewer — download + parse instead.
+            # PDFs: no DOM text in the browser's PDF viewer — download + parse instead.
             if _looks_like_pdf(url):
                 txt = self._read_pdf(page, url)
                 if len(txt) >= min_chars:
@@ -1198,10 +1621,7 @@ class DRTBrowser:
                     self._log(f"[open] {url} -> PDF, {len(txt)}c")
                     return pc
             self._human_pause()
-            try:
-                page.wait_for_load_state("networkidle", timeout=6000)
-            except PWTimeout:
-                pass
+            self._settle(page)
             pc.title = (page.title() or "").strip()
             pc.text = self._extract_text(page)
             pc.links = self._extract_links(page)
@@ -1214,7 +1634,7 @@ class DRTBrowser:
                 pc.text = full
 
             # Bot challenge (Cloudflare "Just a moment…" & co.)? Give it time to clear,
-            # then re-read. Still walled → blocked (caller falls back to Bright Data).
+            # then re-read. Still walled → blocked (caller falls back to Tavily / Exa).
             if _is_challenge(pc.title, pc.text):
                 dom0 = host_of(url)
                 self._log(f"[open] bot challenge on {dom0} — waiting for it to clear…")
