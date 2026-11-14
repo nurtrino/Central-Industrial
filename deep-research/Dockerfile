@@ -15,8 +15,11 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # curl is used by the Odysseus sub-engine's page fetcher; ca-certificates for TLS.
+# libatomic1: Playwright's bundled Node driver (1.6x) links against libatomic.so.1, which the
+# slim image does not ship - without it `playwright install` exits 127 and the build fails
+# (Render, 2026-11-13 and 2026-11-14).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates \
+        curl ca-certificates libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
