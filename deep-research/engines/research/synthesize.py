@@ -803,8 +803,12 @@ def _check_batch(client, question, batch, by_n, log, brief=""):
             f"FINDINGS OF THE CITED SOURCES:\n{src}{notes}\n\nSTATEMENTS:\n{stm}")
     for _attempt in (1, 2):
         try:
-            r = client.messages.create(model=_ROUTE_MODEL, max_tokens=4096, system=_CHECK_SYSTEM,
+            # 8192, not 4096: the model's thinking spends from the same budget, and a batch cut
+            # off mid-answer is not valid JSON (run of 2026-11-13: 12 statements went unchecked).
+            r = client.messages.create(model=_ROUTE_MODEL, max_tokens=8192, system=_CHECK_SYSTEM,
                                        messages=[{"role": "user", "content": user}])
+            if getattr(r, "stop_reason", "") == "max_tokens":
+                log("[synth] citation check: an answer was cut off at the length limit")
             m = re.search(r"\{.*\}", _first_text(r), re.S)
             data = json.loads(m.group(0)) if m else {}
             out = {}

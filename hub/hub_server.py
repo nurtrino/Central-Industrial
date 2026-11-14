@@ -258,7 +258,7 @@ if os.name == "nt":
 
 def _job_object():
     """A Job Object with KILL_ON_JOB_CLOSE: every supervised child (and ITS children —
-    Deep Research's Chrome, the worker's python) is torn down when this hub exits."""
+    Deep Research's browser, the worker's python) is torn down when this hub exits."""
     global _JOB
     if _JOB is not None or os.name != "nt":
         return _JOB

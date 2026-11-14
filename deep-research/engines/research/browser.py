@@ -373,6 +373,7 @@ _PLATFORM_HINTS = {
     "x.com": "x",
     "twitter.com": "x",
     "news.ycombinator.com": "hn",
+    "huggingface.co": "hf",
 }
 
 # ── browser-owner thread ─────────────────────────────────────────────────────
@@ -422,6 +423,8 @@ class DRTBrowser:
         # (vault autofill then manual pause). Set by the agent/job layer.
         self.login_handler = login_handler
         self._auth_handled: set[str] = set()   # domains already attempted this run
+        # Why a site's own search last came back empty: no_search_box | blocked | error | empty.
+        self.search_fail: dict[str, str] = {}
         self._platform_cache: dict[str, str] = {}   # domain -> detected forum platform
         # Browser MCP bridge (trial): the owner's everyday Brave, for the sites in
         # DRT_BMCP_DOMAINS. Started on first use; see bmcp.py and the methods below.
@@ -754,7 +757,20 @@ class DRTBrowser:
         search box; else an explicit {q} template (JS-aware) or the search box. Returns []
         on failure; callers fall back to the engine site: operator."""
         dom = (domain or "").lstrip(".").lower()
+        self.search_fail.pop(dom, None)
         try:
+            r = self._native_search_pw_inner(dom, query, search_url, limit)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"[search] native_search {dom} ERROR ({type(e).__name__}: {e})")
+            self.search_fail[dom] = "error"
+            return []
+        if not r:
+            self.search_fail.setdefault(dom, "empty")
+        return r
+
+    def _native_search_pw_inner(self, dom: str, query: str, search_url: str,
+                                limit: int) -> list[SearchResult]:
+        if True:
             plat = self._platform_of(dom)
             if plat == "discourse":
                 r = self._discourse_search(dom, query, limit)
@@ -777,15 +793,14 @@ class DRTBrowser:
                 return self._x_search(dom, query, limit)
             elif plat == "hn":
                 return self._hn_search(dom, query, limit)
+            elif plat == "hf":
+                return self._hf_search(dom, query, limit)
             # Explicit template (JS-aware) next, then the universal search-box driver.
             if search_url and "{q}" in search_url:
                 r = self.site_native_search(search_url, query, limit)
                 if r:
                     return r
             return self._search_box(dom, query, limit)
-        except Exception as e:  # noqa: BLE001
-            self._log(f"[search] native_search {dom} ERROR ({type(e).__name__}: {e})")
-            return []
 
     def _platform_of(self, domain: str) -> str:
         """Best-effort forum-platform id from a small domain map plus generic hints."""
@@ -1003,6 +1018,59 @@ class DRTBrowser:
             self._log(f"[search] hn api ERROR ({type(e).__name__})")
         self._log(f"[search] hn q={query!r} -> {len(out)} results")
         return out
+
+    def _hf_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
+        """Hugging Face via its public hub API (JSON, no login). The home page's search box is
+        drawn by script after load, so the generic search-box driver found no box there and
+        every search came back empty (run of 2026-11-13: 0 of 8). The API matches on the
+        NAME of a model, space or dataset, so a long query is shortened until something
+        matches: the full query, then its first two words, then its first word."""
+        import requests
+        from urllib.parse import quote_plus
+        words = [w for w in re.split(r"\s+", (query or "").strip()) if w]
+        tries = []
+        for t in (" ".join(words), " ".join(words[:2]), " ".join(words[:1])):
+            if t and t not in tries:
+                tries.append(t)
+        kinds = (("models", "", max(3, (limit * 3) // 5)), ("spaces", "spaces/", max(2, limit // 5)),
+                 ("datasets", "datasets/", max(2, limit // 5)))
+        out: list[SearchResult] = []
+        used = ""
+        try:
+            for t in tries:
+                for kind, prefix, n in kinds:
+                    r = requests.get(
+                        f"https://huggingface.co/api/{kind}?search={quote_plus(t)}&limit={n}"
+                        + ("&sort=downloads&direction=-1" if kind != "spaces" else "&sort=likes&direction=-1"),
+                        headers={"User-Agent": "deep-research-tool"}, timeout=12)
+                    if r.status_code != 200:
+                        self._log(f"[search] hf api {kind} HTTP {r.status_code}")
+                        continue
+                    for h in (r.json() or []):
+                        hid = (h.get("id") or "").strip()
+                        if not hid or h.get("private"):
+                            continue
+                        bits = [kind[:-1]]
+                        if h.get("downloads") is not None:
+                            bits.append(f"{h.get('downloads'):,} downloads")
+                        bits.append(f"{h.get('likes') or 0} likes")
+                        if h.get("pipeline_tag"):
+                            bits.append(str(h.get("pipeline_tag")))
+                        tags = [x for x in (h.get("tags") or []) if isinstance(x, str)][:8]
+                        out.append(SearchResult(
+                            title=f"{hid}  ({' · '.join(bits)})"[:180],
+                            url=f"https://huggingface.co/{prefix}{hid}",
+                            snippet=", ".join(tags)[:220], engine="hf",
+                            date=str(h.get("lastModified") or h.get("createdAt") or "")[:10]))
+                if out:
+                    used = t
+                    break
+        except Exception as e:  # noqa: BLE001
+            self.search_fail[domain] = "error"
+            self._log(f"[search] hf api ERROR ({type(e).__name__})")
+        note = "" if used in ("", tries[0] if tries else "") else f" (shortened to {used!r})"
+        self._log(f"[search] hf q={query!r} -> {len(out)} results{note}")
+        return out[:limit]
 
     def _x_search(self, domain: str, query: str, limit: int) -> list[SearchResult]:
         """X (Twitter) search, in the signed-in browser. X shows nothing to a logged-out
@@ -1228,6 +1296,10 @@ class DRTBrowser:
         try:
             page.goto(f"https://{domain}/", wait_until="domcontentloaded", timeout=30000)
             self._human_pause()
+            if self._page_is_wall(page):
+                self.search_fail[domain] = "blocked"
+                self._log(f"[search] searchbox {domain}: the site showed an anti-bot wall")
+                return out
             box = None
             for sel in ("input[type='search']", "input[name='q']", "input[name='query']",
                         "input[name='keywords']", "input[aria-label*='earch' i]",
@@ -1240,6 +1312,8 @@ class DRTBrowser:
                 except Exception:
                     continue
             if box is None:
+                self.search_fail[domain] = "no_search_box"
+                self._log(f"[search] searchbox {domain}: no search box found on the page")
                 return out
             box.fill(query, timeout=4000)
             before = page.url
@@ -1271,8 +1345,11 @@ class DRTBrowser:
                 out.append(SearchResult(title=text, url=href, engine="searchbox"))
                 if len(out) >= limit:
                     break
+            if not out and self._page_is_wall(page):
+                self.search_fail[domain] = "blocked"
             self._log(f"[search] searchbox {domain} q={query!r} -> {len(out)} results")
         except Exception as e:  # noqa: BLE001
+            self.search_fail[domain] = "error"
             self._log(f"[search] searchbox {domain} ERROR ({type(e).__name__})")
         finally:
             try:
@@ -1280,6 +1357,15 @@ class DRTBrowser:
             except Exception:
                 pass
         return out
+
+    def _page_is_wall(self, page) -> bool:
+        """True when the page on screen is a bot challenge (Cloudflare and the like)."""
+        try:
+            title = page.title() or ""
+            text = page.evaluate("() => (document.body ? document.body.innerText : '').slice(0, 3000)") or ""
+            return _is_challenge(title, text)
+        except Exception:
+            return False
 
     # ── login-state detection ─────────────────────────────────
     def _domain_cookies(self, domain: str) -> list:

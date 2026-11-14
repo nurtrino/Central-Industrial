@@ -132,10 +132,10 @@ standalone home.
   synthesize (per-page extract + cited report + stop-judge deepening) → report (+ collapsed
   harvest audit). Depth quick/standard/deep. Models: plan+synthesize Opus 4.8, search+route
   Sonnet 4.6, extract Haiku 4.5 (override in `config/drt_models.json`). Opens a **visible
-  Chrome** (`channel="chrome"`) and uses **Anthropic API credits**.
+  Brave** (the installed browser, by its executable; never Google Chrome) and uses **Anthropic API credits**.
 - **Frontend libs vendored locally** (marked.js + Inter/JetBrains Mono fonts) → offline-capable.
 - **Secrets carried over** from the old work-PC copy: the `ANTHROPIC_API_KEY` (`.env`) and the
-  credential **vault** (`.drt_vault_key` + `drt_credentials.enc`, as a pair). Chrome profile
+  credential **vault** (`.drt_vault_key` + `drt_credentials.enc`, as a pair). Browser profile
   started fresh.
 - **Launch:** `Deep Research.vbs` → server-only `launch.py` (no browser open — the hub navigates
   to the tool).

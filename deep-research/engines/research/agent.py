@@ -42,13 +42,13 @@ from .models import get_model
 # `reserve` = time held back for extraction + synthesis + the go-deeper assessment;
 # the remainder is the gathering window. The search/page pools remain as generous
 # safety ceilings (runaway protection), but TIME is the governor.
-#   exhaustive (2026-09-03): the 1-HOUR free-roam tier — parallel lanes iterate until
+#   exhaustive ("Oh, Very Deep"): 30 MINUTES since 2026-11-13 (owner), was one hour. The free-roam tier — parallel lanes iterate until
 #   they exhaust themselves or the clock runs out; many deepening rounds; pools sized
 #   so that the clock, not the pool, is what ends it.
 DEPTH_BUDGETS = {
     "standard":   {"seconds": 300,  "reserve": 100, "searches": 120, "pages": 150, "max_turns": 120},
     "deep":       {"seconds": 600,  "reserve": 130, "searches": 240, "pages": 300, "max_turns": 240},
-    "exhaustive": {"seconds": 3600, "reserve": 300, "searches": 900, "pages": 900, "max_turns": 400},
+    "exhaustive": {"seconds": 1800, "reserve": 300, "searches": 900, "pages": 900, "max_turns": 400},
 }
 _LEGACY_DEPTHS = {"quick": "standard", "verydeep": "deep",
                   "odysseus": "deep",    # the old "Deep + Odysseus" chip — every tier chains Odysseus now
@@ -483,6 +483,45 @@ _ALERT_LABEL = {"login_failed": "LOGIN FAILED", "unreachable": "COULD NOT SEARCH
                 "skipped": "SKIPPED"}
 
 
+# WHY a source could not be used, in one plain phrase (owner, 2026-11-13: "report WHY it was not
+# able to access a specified resource - in succinct clear language - i.e. login failed, or couldn't
+# find search box, or website blocked agent"). Shown first in the feed, the banner and the report.
+_SEARCH_WHY = {
+    "no_search_box": "Could not find the site's search box",
+    "blocked": "The website blocked the agent",
+    "error": "The site's search page did not load",
+    "empty": "The site's own search returned no results",
+}
+
+
+def _plain_reason(kind, detail):
+    d = (detail or "").lower()
+    if "second step" in d or "2fa /" in d or "device check" in d:
+        return "Login needs a second step (a code or approval) that only you can do"
+    if "no login form" in d:
+        return "Login failed: could not find the sign-in form"
+    if "could not open login page" in d:
+        return "Login failed: the sign-in page did not load"
+    if "did not go through" in d or "did not establish a session" in d:
+        return "Login failed: the site did not accept the stored login"
+    if "no stored credentials" in d or "no login is stored" in d or "no login to use" in d:
+        return "Needs a login and none is stored"
+    if "no login was supplied" in d:
+        return "No login was given when asked"
+    if "no way to ask" in d:
+        return "Needs a login and the run could not ask for one"
+    if "anti-bot" in d or "bot challenge" in d or "captcha" in d:
+        return "The website blocked the agent"
+    if "stopped first" in d:
+        return "The run was stopped before reaching it"
+    if "spent the window" in d or "pass ended without" in d:
+        return "Ran out of time before reaching it"
+    if "search returned nothing" in d:
+        return _SEARCH_WHY["empty"]
+    return {"login_failed": "Login failed", "unreachable": "Could not search or open the site",
+            "skipped": "Not searched"}.get(kind, "Not searched")
+
+
 def _planned(result, domain):
     """The plan entry for `domain` (suffix-matched), or None if the plan didn't select it."""
     d = normalize_domain(domain or "")
@@ -493,7 +532,7 @@ def _planned(result, domain):
     return None
 
 
-def _alert(result, log, domain, kind, detail, only_planned=True):
+def _alert(result, log, domain, kind, detail, only_planned=True, why=""):
     """Raise one user-facing alert per (domain, kind). By default only for sites the plan
     selected; credentialed ones are flagged so the UI can rank them first."""
     ps = _planned(result, domain)
@@ -508,12 +547,14 @@ def _alert(result, log, domain, kind, detail, only_planned=True):
         # run is signed into is a search problem, not a login problem, and the reader
         # should be able to tell the two apart at a glance.
         signed = dom in (getattr(result, "logged_in", None) or [])
+        reason = why or _plain_reason(kind, detail)
         result.source_alerts.append({"domain": dom, "kind": kind, "detail": detail,
+                                     "reason": reason,
                                      "credentialed": cred, "signed_in": signed,
                                      "at": time.strftime("%H:%M:%S")})
     tag = " (signed in)" if signed else (" (credentialed)" if cred else "")
     (log or (lambda m: None))(
-        f"[alert] {dom}{tag} — {_ALERT_LABEL.get(kind, kind.upper())}: {detail}")
+        f"[alert] {dom}{tag} — {_ALERT_LABEL.get(kind, kind.upper())}: {reason} — {detail}")
 
 
 def _clear_alert(result, log, domain, kind, why=""):
@@ -1193,7 +1234,9 @@ def _run_browser_stage(client, br, result, seen_urls, *, stage_name, system, tas
                                        f"shortened queries included; last query: {q0[:60]!r}) — "
                                        f"falling back to a search-engine site: query, which only "
                                        f"sees public, engine-indexed pages"
-                                       + ("" if res else "; that returned nothing either"))
+                                       + ("" if res else "; that returned nothing either"),
+                                       why=_SEARCH_WHY.get(
+                                           (getattr(br, "search_fail", None) or {}).get(dom), ""))
                         if site_stat is not None and _same_site(dom, site_only):
                             site_stat["searches"] += 1
                             site_stat["results"] += len(res)

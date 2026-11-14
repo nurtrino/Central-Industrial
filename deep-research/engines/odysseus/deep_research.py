@@ -209,12 +209,16 @@ class DeepResearcher:
         progress_callback: Optional[Callable] = None,
         search_provider: Optional[str] = None,
         category: Optional[str] = None,
+        final_polish: bool = True,
     ):
         self.llm_endpoint = llm_endpoint
         self.llm_model = llm_model
         self.llm_headers = llm_headers
         self.search_provider_override = search_provider
         self.category = category
+        # False = return the evolving report as it stands, without the closing rewrite (used by
+        # the Deep Research pre-pass, where the report is a hand-off brief, not the deliverable).
+        self.final_polish = final_polish
         self.max_rounds = max_rounds
         self.max_time = max_time
         self.max_urls_per_round = max_urls_per_round
@@ -296,6 +300,10 @@ class DeepResearcher:
             if self._time_exceeded():
                 logger.info(f"Time limit reached after {round_num - 1} rounds")
                 break
+            if round_num > 1 and self._remaining() < 45:
+                # not enough time left for a round to search, read and write up
+                logger.info(f"Under 45s left - not starting round {round_num}")
+                break
 
             logger.info(f"=== Research Round {round_num} ===")
             self._emit(phase="searching", round=round_num, total_sources=len(self.urls_fetched))
@@ -343,7 +351,8 @@ class DeepResearcher:
                 report = await self._synthesize(question, findings, report)
 
             # DECIDE
-            if round_num >= self.min_rounds:
+            if (round_num >= self.min_rounds and round_num < self.max_rounds
+                    and not self._time_exceeded()):
                 should_stop = await self._should_stop(question, report, round_num)
                 if should_stop:
                     logger.info(f"LLM decided to stop after round {round_num}")
@@ -366,7 +375,7 @@ class DeepResearcher:
             return "No information could be gathered for this question."
 
         self.evolving_report = report  # preserve pre-synthesis report
-        final = await self._final_report(question, report)
+        final = (await self._final_report(question, report)) if self.final_polish else report
         elapsed = time.time() - self._start_time
         logger.info(
             f"Research complete: {self.round_count} rounds, "
@@ -545,8 +554,21 @@ class DeepResearcher:
             async with semaphore:
                 return await self._fetch_and_extract(result["url"], question, result.get("title", ""))
 
-        extract_tasks = [_bounded_extract(r) for r in urls_to_fetch]
-        results_gathered = await asyncio.gather(*extract_tasks, return_exceptions=True)
+        # Bounded by the time left: a page still being read when the limit arrives is dropped,
+        # the pages already read are kept.
+        extract_tasks = [asyncio.ensure_future(_bounded_extract(r)) for r in urls_to_fetch]
+        results_gathered = []
+        if extract_tasks:
+            done, pending = await asyncio.wait(extract_tasks, timeout=max(5.0, self._remaining()))
+            for t in pending:
+                t.cancel()
+            if pending:
+                logger.info(f"Time limit: {len(pending)} page read(s) dropped, {len(done)} kept")
+            for t in done:
+                try:
+                    results_gathered.append(t.result())
+                except Exception as e:  # noqa: BLE001
+                    results_gathered.append(e)
 
         for result in results_gathered:
             if isinstance(result, Exception):
@@ -792,6 +814,9 @@ class DeepResearcher:
                 self._progress(kwargs)
             except Exception:
                 pass
+
+    def _remaining(self) -> float:
+        return self.max_time - (time.time() - self._start_time)
 
     def _time_exceeded(self) -> bool:
         return (time.time() - self._start_time) > self.max_time

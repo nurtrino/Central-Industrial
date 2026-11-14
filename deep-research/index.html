@@ -952,7 +952,7 @@ function _actAfter(owner) {
     const depths = [
       { id:'standard',   label:'Standard',      sub:'Odysseus pre-research → 5 min browser run' },
       { id:'deep',       label:'Deep',          sub:'Odysseus pre-research → 10 min browser run' },
-      { id:'exhaustive', label:'Oh, Very Deep', sub:'Odysseus pre-research → lanes free-roam until exhausted or 60 min' },
+      { id:'exhaustive', label:'Oh, Very Deep', sub:'Odysseus pre-research → lanes free-roam until exhausted or 30 min' },
     ];
     const chips = depths.map(o => `
       <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
@@ -1287,7 +1287,7 @@ function _actAfter(owner) {
     const depths = [
       { id:'standard',   label:'Standard',      sub:'Odysseus pre-research → 5 min browser run' },
       { id:'deep',       label:'Deep',          sub:'Odysseus pre-research → 10 min browser run' },
-      { id:'exhaustive', label:'Oh, Very Deep', sub:'Odysseus pre-research → lanes free-roam until exhausted or 60 min' },
+      { id:'exhaustive', label:'Oh, Very Deep', sub:'Odysseus pre-research → lanes free-roam until exhausted or 30 min' },
     ];
     const chips = depths.map(o => `
       <button type="button" class="dr-chip ${_dr.depth === o.id ? 'active' : ''}"
@@ -2285,7 +2285,8 @@ function _actAfter(owner) {
     return `
       <div class="dr-alert-banner" role="alert">
         <div class="dr-alert-head">⚠ ${al.length} source problem${al.length > 1 ? 's' : ''} in this run</div>
-        <ul>${al.map(a => `<li>${_esc(a)}</li>`).join('')}</ul>
+        <ul>${al.map(a => { const m = String(a).match(/^(.*? — [A-Z /]+: )(.*?)( — [\s\S]*)?$/);
+          return m ? `<li>${_esc(m[1])}<strong>${_esc(m[2])}</strong>${_esc(m[3] || '')}</li>` : `<li>${_esc(a)}</li>`; }).join('')}</ul>
         <div class="dr-alert-foot">The run continues with the other sources. When it finishes, <strong>Add/Fix Specific Sources</strong>
           lets you supply or correct logins and re-scan just these sites.</div>
       </div>`;

@@ -69,6 +69,14 @@
     {
       "url": "community.home-assistant.io",
       "login_required": true
+    },
+    {
+      "url": "huggingface.co",
+      "login_required": true
+    },
+    {
+      "url": "crunchbase.com",
+      "login_required": true
     }
   ]
 }

@@ -27,7 +27,7 @@ import os
 # steps (plan / lane planning / lead review, the hot-trail digger) and the deliverable
 # (synthesis) on Opus 4.8.
 _DEFAULT_MODELS = {
-    "extract":    "claude-sonnet-5",
+    "extract":    "claude-haiku-5-5",   # 2026-11-13: page reading is the bulk of a run's cost
     "search":     "claude-sonnet-5",
     "route":      "claude-sonnet-5",
     "plan":       "claude-opus-4-8",

@@ -43,7 +43,7 @@ _Last updated: 2026-09-03 (one hub codebase + single local port — see the bloc
 > header to 127.0.0.1:5050 and use a fresh connection per host.
 > (2) **The hub owns the processes**: `tools.json` `local{cmd,cwd,env,log,autostart}` entries are
 > spawned hidden as children in a Windows Job Object (KILL_ON_JOB_CLOSE) — kill the hub and
-> every tool (and Deep Research's Chrome) dies; a down tool is auto-launched the moment its
+> every tool (and Deep Research's browser) dies; a down tool is auto-launched the moment its
 > hostname is hit (C64 LOADING page refreshes until it answers) or from the menu click. The
 > hosted-site GPU worker (`ReadMonkeyDoWorker.exe --no-browser`, :5007) is a `hidden`
 > supervised entry. Home Assistant stays `detached` (WSL2, launched via its .vbs).

@@ -179,7 +179,7 @@ def health():
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-13.hosted-guard",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-13.hf",
                     "sources_hash": _sources_hash(), "providers": providers,
                     "hosted": _is_hosted_instance()})
 
@@ -877,7 +877,11 @@ def _run_odysseus_prepass(job_id, job, query, clarifications, depth, stop_ev, sk
         researcher = DeepResearcher(
             llm_endpoint="https://api.anthropic.com/v1/messages",  # ignored by our adapter
             llm_model=_gm("route"),      # the pre-pass is extraction/query-gen work -> Sonnet
-            max_rounds=rounds, max_time=secs, progress_callback=_p)
+            max_rounds=rounds, max_time=secs, progress_callback=_p,
+            # 2026-11-13: the pre-pass used to run about 7 minutes against a 5-minute limit. Its
+            # page reading was held to 3 at a time (a setting meant for one local GPU), the limit
+            # was only checked between rounds, and a full report rewrite ran after it.
+            extraction_concurrency=8, final_polish=False)
         # Cooperative cancel: STOP or Skip-this-stage ends the pre-pass promptly.
         done = threading.Event()
 
@@ -1131,7 +1135,8 @@ def _dr_wrap_report(query, h, synth_md, ody_md=""):
             return " (login stored — NOT signed in)" if a.get("credentialed") else ""
         rows = "\n".join(
             f"> - **{a.get('domain')}**{_tag(a)} — "
-            f"**{lab.get(a.get('kind'), str(a.get('kind')).upper())}**: {a.get('detail')}"
+            + (f"**{a.get('reason')}.** {a.get('detail')}" if a.get("reason") else
+               f"**{lab.get(a.get('kind'), str(a.get('kind')).upper())}**: {a.get('detail')}")
             for a in alerts)
         warn = (f"> ⚠ **Source problems this run** — {len({a.get('domain') for a in alerts})} "
                 "site(s) the research plan selected were not fully searched, so their material "
@@ -1418,7 +1423,8 @@ def _dr_fixable(h):
     lab = {"login_failed": "login failed", "unreachable": "could not be searched",
            "skipped": "skipped"}
     for a in (getattr(h, "source_alerts", None) or []):
-        add(a.get("domain"), f"{lab.get(a.get('kind'), a.get('kind'))} — {a.get('detail', '')[:160]}")
+        add(a.get("domain"), (a.get("reason") or lab.get(a.get("kind"), a.get("kind")))
+            + f" — {a.get('detail', '')[:160]}")
     for w in (getattr(h, "login_warnings", None) or []):
         add(w.get("domain"), f"login failed — {w.get('detail', '')[:160]}")
     for d, r in (getattr(h, "gated_candidates", None) or {}).items():
