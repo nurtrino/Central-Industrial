@@ -31,6 +31,7 @@ from urllib.parse import urlencode
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
+from engines.research import eta as _eta   # noqa: E402  stage countdowns (stdlib only)
 _PROMPTS_DIR = os.path.join(_ROOT, "prompts")
 
 # PORT: Render injects $PORT at runtime; default 5006 for local runs.
@@ -179,7 +180,7 @@ def health():
                      "brave_api": _br.is_enabled()}
     except Exception:
         providers = {}
-    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-13.hf",
+    return jsonify({"ok": True, "tool": "deep-research", "build": "2026-11-16.countdown",
                     "sources_hash": _sources_hash(), "providers": providers,
                     "hosted": _is_hosted_instance()})
 
@@ -860,6 +861,9 @@ def _run_odysseus_prepass(job_id, job, query, clarifications, depth, stop_ev, sk
     cancels it and the run continues with whatever it had. Never raises."""
     rounds, secs = _ODY_BY_DEPTH.get(depth, _ODY_BY_DEPTH["standard"])
     prog("odysseus", None, f"Odysseus pre-research — {rounds} rounds, up to {secs // 60} min…")
+    with _JOBS_LOCK:
+        if isinstance(job.get("timing"), dict):
+            job["timing"]["ody_end"] = time.time() + secs      # the countdown is exact here
 
     def _p(ev):
         msg = "Odysseus — " + _ody_msg(ev)
@@ -937,10 +941,14 @@ def _truncate_words(text: str, max_words: int) -> str:
 
 def _dr_clarify(query, provider="claude"):
     """Quick scoping pass: up to 3 clarifying questions, or none."""
-    from engines.research.llm import make_client
+    from engines.research.llm import make_client, is_local, HEARTBEAT
     try:
+        # Local AI: this starts Flash-Next on Strata if it is down (1-3 min; the page says
+        # so while it waits), and keeps it up for the run that follows the questions.
         client = make_client(provider, os.environ.get("ANTHROPIC_API_KEY", "").strip())
-    except Exception:          # LM Studio down in local mode → just skip clarification
+        if is_local(provider):
+            HEARTBEAT.keep_for(900)
+    except Exception:          # Strata cannot be started in local mode → just skip clarification
         client = None
     if client is None:
         return {"needs_clarification": False, "questions": []}
@@ -984,11 +992,16 @@ def _dr_harvest_to_md(query, h):
             out.append("**Topics you named** (each owned by a lane, and rated in the report's "
                        "coverage table): " + " · ".join(str(t) for t in plan["topics"]) + "\n")
     try:
-        from engines.research.models import all_models
-        mm = all_models()
-        out.append(
-            f"**Models:** plan `{mm['plan']}` · lanes `{mm['search']}` · dig `{mm.get('dig', mm['plan'])}` · "
-            f"route `{mm['route']}` · extract `{mm['extract']}` · synthesize `{mm['synthesize']}`\n")
+        if getattr(h, "provider", "") == "local":
+            from engines.research.llm import STRATA_LABEL, STRATA_MODEL
+            out.append(f"**Models:** every step on the local model - {STRATA_LABEL}, "
+                       f"`{STRATA_MODEL}` (Local AI)\n")
+        else:
+            from engines.research.models import all_models
+            mm = all_models()
+            out.append(
+                f"**Models:** plan `{mm['plan']}` · lanes `{mm['search']}` · dig `{mm.get('dig', mm['plan'])}` · "
+                f"route `{mm['route']}` · extract `{mm['extract']}` · synthesize `{mm['synthesize']}`\n")
     except Exception:
         pass
     us = getattr(h, "usage", None)
@@ -997,7 +1010,10 @@ def _dr_harvest_to_md(query, h):
             f"`{m}` {u['calls']} calls, {u['input']/1000:.0f}K in + {u['cache_read']/1000:.0f}K cached"
             f" + {u['cache_write']/1000:.0f}K cache-write, {u['output']/1000:.0f}K out ≈ ${u['usd']:.2f}"
             for m, u in us["by_model"].items())
-        out.append(f"**API usage this run ≈ ${us.get('total_usd', 0):.2f}** — {rows}\n")
+        if us.get("local"):
+            out.append(f"**Local model usage this run (no API cost)** — {rows}\n")
+        else:
+            out.append(f"**API usage this run ≈ ${us.get('total_usd', 0):.2f}** — {rows}\n")
     lanes = getattr(h, "lanes", None) or []
     if lanes:
         reps = {r.get("lane"): r.get("reason", "") for r in (getattr(h, "lane_reports", None) or [])}
@@ -1519,7 +1535,9 @@ def _dr_finalize(job_id, client, query, h, report_md_synth, synth_error, ody_rep
                   "focus_domains": list(meta.get("focus_domains") or []),
                   "completed": time.strftime("%Y-%m-%d %H:%M"),
                   "saved_path": result.get("saved_path") or "", "sources": len(sources),
-                  "usd": (round(usage.get("total_usd", 0), 2) if isinstance(usage, dict) else None)})
+                  "usd": (round(usage.get("total_usd", 0), 2) if isinstance(usage, dict) else None),
+                  # how long each stage took: the next runs' countdowns learn from it
+                  "timing": _eta.summary((_JOBS.get(job_id) or {}).get("timing"))})
     return result
 
 
@@ -1539,6 +1557,7 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
             job["stage"] = stage
             job["pct"] = pct
             job["message"] = message
+            _eta.mark(job.get("timing"), stage, message)
         _push_event(job_id, "stage", message)
 
     log_fn = lambda m: _push_event(job_id, _event_kind(m), m)  # noqa: E731
@@ -1557,7 +1576,7 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
 
         if is_local(provider):
             try:
-                client = make_client("local")
+                client = make_client("local", log=log_fn, hold=True)   # Flash-Next on Strata
             except LocalLLMUnavailable as e:
                 with _JOBS_LOCK:
                     job["error"] = str(e); job["done"] = True
@@ -1632,6 +1651,8 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
                 synth_error = e
         else:
             log_fn("[synth] the focused pass added no new pages — the report is unchanged")
+        if is_local(provider):
+            h.provider = "local"
             report_md_synth = ((prev_synth or "").strip()
                                + "\n\n> _Add/Fix Specific Sources pass ("
                                + ", ".join(domains) + "): no new readable material was found._")
@@ -1653,6 +1674,8 @@ def _dr_focus_worker(job_id, query, domains, ephemeral, prior_job, prior_report,
         with _JOBS_LOCK:
             job["error"] = traceback.format_exc()
             job["done"] = True
+    finally:
+        _close_client(locals().get("client"))
 
 
 def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overrides=None,
@@ -1667,6 +1690,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             job["stage"] = stage
             job["pct"] = pct
             job["message"] = message
+            _eta.mark(job.get("timing"), stage, message)
         _push_event(job_id, "stage", message)
 
     log_fn = lambda m: _push_event(job_id, _event_kind(m), m)  # noqa: E731
@@ -1697,7 +1721,7 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         _rc.reset()          # a fresh, un-paused research clock for this run
         # Refusal hook: if Claude declines (safety refusal), pause the pipeline right
         # there, flag the UI, and wait (up to one minute) for the user's choice. "local"
-        # → the wrapper swaps to LM Studio and RESUMES from the refused call; "abort"
+        # → the wrapper swaps to Flash-Next on Strata and RESUMES from the refused call; "abort"
         # → stop gathering and assemble what we have. Reuses the local-model wiring.
         refusal_ev = _DR_REFUSAL[job_id]
 
@@ -1727,7 +1751,10 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
 
         if is_local(provider):
             try:
-                client = make_client("local")           # LMStudioClient (whatever model is loaded)
+                # Flash-Next on Strata: started if it is down (1-3 min, before the research
+                # clock runs) and held until the run ends, so its watchdog cannot close it.
+                prog("stage1", None, "Connecting to the local model (Flash-Next on Strata)…")
+                client = make_client("local", log=log_fn, hold=True)
             except LocalLLMUnavailable as e:
                 with _JOBS_LOCK:
                     job["error"] = str(e); job["done"] = True
@@ -1740,7 +1767,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         # pass runs first, sized to the tier, and its report is fed in EXACTLY like a
         # dropped file: the intake analyst distills it into grounding for the plan +
         # lanes, and its full text reaches synthesis as trusted user material. Local-model
-        # runs skip it (Odysseus is wired to the Anthropic key).
+        # runs skip it (Odysseus is wired to the Anthropic key; on Strata's single
+        # sequence it would also eat most of the window).
         from engines.research.agent import normalize_depth as _nd0
         depth = _nd0(depth)
         ody_report = ""
@@ -1805,6 +1833,12 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             depth = _nd(depth)
             _b = _DB[depth]
             run_deadline = _rc.now() + _b["seconds"]     # RUN_CLOCK: a pause freezes it
+            with _JOBS_LOCK:
+                _t = job.get("timing")
+                if isinstance(_t, dict):                 # exact countdowns for gathering
+                    _t["gather_end"] = run_deadline - _b["reserve"]
+                    _t["run_end"] = run_deadline
+                    _t["deepen"] = DEEPEN_ROUNDS.get(depth, 1) > 0
             h = run_search(query, depth=depth, clarifications=clar, browser=br,
                            progress=prog, log=log_fn,
                            request_credentials=request_credentials, skip_event=skip_ev,
@@ -1888,6 +1922,8 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
             except Exception:
                 pass
 
+        if is_local(provider):
+            h.provider = "local"
         result = _dr_finalize(job_id, client, query, h, report_md_synth, synth_error,
                               ody_report, log_fn, prog, meta={"clarifications": clarifications})
         # Keep this run's harvest so "Add/Fix Specific Sources" can extend it later.
@@ -1903,6 +1939,17 @@ def _dr_worker(job_id, query, depth, clarifications, doc_context, channel_overri
         with _JOBS_LOCK:
             job["error"] = traceback.format_exc()
             job["done"] = True
+    finally:
+        _close_client(locals().get("client"))
+
+
+def _close_client(client):
+    """End of a run: let go of the local model (Strata's watchdog may then close it)."""
+    try:
+        if client is not None and hasattr(client, "close"):
+            client.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.route("/api/deep_research", methods=["POST", "OPTIONS"])
@@ -1964,13 +2011,16 @@ def deep_research_start():
     # now opens with an Odysseus pre-pass inside _dr_worker; normalize_depth maps the
     # legacy "odysseus" value to the deep tier.)
     job_id = os.urandom(8).hex()
+    _timing = _eta.new(provider, depth, _history_load())
     with _JOBS_LOCK:
         _JOBS[job_id] = {
             "stage": "odysseus", "pct": None, "message": "Starting…",
             "done": False, "error": None, "result": None,
             "awaiting_credentials": None, "submitted_credentials": None,
             "events": [], "eseq": 0,
+            "stages": DR_STAGES, "timing": _timing,
         }
+        _eta.mark(_timing, "odysseus", "Starting…")
     _DR_EVENTS[job_id] = threading.Event()
     _DR_SKIP[job_id] = threading.Event()
     _DR_STOP[job_id] = threading.Event()
@@ -2005,6 +2055,14 @@ def deep_research_status():
             "awaiting_manual_login": job.get("awaiting_manual_login"),
         }
         payload["aborted"] = bool(job.get("aborted"))
+        # Stage countdowns (estimates; exact for the time-boxed stages). Never breaks a poll.
+        if not job["done"] and isinstance(job.get("timing"), dict):
+            try:
+                from engines.research.agent import RUN_CLOCK as _rck
+                payload["eta"] = _eta.view(job["timing"], job.get("stages") or DR_STAGES,
+                                           _rck.now(), bool(job.get("paused")))
+            except Exception:  # noqa: BLE001
+                pass
         # `lite=1` = a watcher that wants progress only: never sent the (large) result.
         if job["done"] and not job["error"] and not request.args.get("lite"):
             payload["result"] = job["result"]
@@ -2190,13 +2248,17 @@ def deep_research_focus_sources():
             except Exception:
                 pass
     job_id = os.urandom(8).hex()
+    _timing = _eta.new((data.get("provider") or "claude").strip().lower(), "standard",
+                       _history_load())
     with _JOBS_LOCK:
         _JOBS[job_id] = {
             "stage": "stage3", "pct": None, "message": "Starting the focused source pass…",
             "done": False, "error": None, "result": None,
             "awaiting_credentials": None, "submitted_credentials": None,
             "events": [], "eseq": 0,
+            "stages": DR_FOCUS_STAGES, "timing": _timing,
         }
+        _eta.mark(_timing, "stage3", "Starting the focused source pass…")
     _DR_EVENTS[job_id] = threading.Event()
     _DR_SKIP[job_id] = threading.Event()
     _DR_STOP[job_id] = threading.Event()
@@ -2212,8 +2274,8 @@ def deep_research_focus_sources():
 @app.route("/api/deep_research/refusal_choice", methods=["POST", "OPTIONS"])
 def deep_research_refusal_choice():
     """Answer a Claude-refusal prompt. Body/query `mode`:
-      • 'local' — switch to the local model and RESUME from the refused call (the UI
-        confirms a local model is loaded, via /local_model, before sending this).
+      • 'local' — switch to the local model (Flash-Next on Strata, started if it is down)
+        and RESUME from the refused call (the UI checks /local_model before sending this).
       • 'abort' — stop and assemble a report from what was already gathered.
     Unblocks the paused worker thread."""
     if request.method == "OPTIONS":
@@ -2441,12 +2503,13 @@ def deep_research_clarify():
 
 @app.route("/api/deep_research/local_model", methods=["GET"])
 def deep_research_local_model():
-    """Report the model currently loaded in LM Studio (for the Claude/Local-AI switch)."""
-    from engines.research.llm import detect_local_model, LMSTUDIO_URL
+    """The local model for the Claude / Local AI switch: Flash-Next on Strata. `ok` = a local
+    run can use it (running, or startable on this PC); `running` = it is serving now."""
+    from engines.research.llm import strata_status
     try:
-        return jsonify({"ok": True, "model": detect_local_model(), "url": LMSTUDIO_URL})
+        return jsonify(strata_status())
     except Exception as e:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(e), "url": LMSTUDIO_URL})
+        return jsonify({"ok": False, "running": False, "error": str(e)})
 
 
 @app.route("/api/deep_research/vault", methods=["GET", "POST", "OPTIONS"])

@@ -1,3 +1,8 @@
+> **2026-11-14 - THE HOSTED SITE IS CURRENT.** `research.centralindustrial.ai` runs build `2026-11-13.hf` (GitHub
+> `nurtrino/Central-Industrial` `74bfc52`). Wherever this older record says the hosted copy lacks the 2026-11-12
+> changes or still has Bright Data, that is no longer true. How to publish, and why the first push failed to build:
+> `..\STATE.md` and `..\DEEP_RESEARCH_REVIEW_2026-11-12.md` section 23.
+
 > **2026-11-12 - BRIGHT DATA IS REMOVED.** The owner had it ripped out (build `2026-11-12.no-brightdata`): the
 > module `engines\research\brightdata.py`, the Web Unlocker / SERP / Scraping Browser paths, the `BRIGHTDATA_*`
 > settings and the `DRT_BRIGHTDATA` switch no longer exist. A page the browser cannot read goes to Tavily extract,

@@ -382,6 +382,12 @@
       color: var(--text-muted); margin-bottom: 6px; }
     .dr-prompt-text { font-weight: 700; font-size: 15px; line-height: 1.5; color: var(--text-primary); }
     .dr-prompt-meta { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
+    /* the prompt shown at the top while a run is in progress */
+    .dr-prompt-running { max-height: 11em; overflow: auto; }
+    /* per-stage countdowns in the progress view */
+    .dr-eta { font-size: 11px; margin-left: 10px; flex-shrink: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .dr-eta-dim { color: var(--text-muted); opacity: .8; }
+    .dr-eta-live { color: var(--admin-color, #74FB80); font-weight: 600; }
     /* recent research */
     .dr-hist { margin-top: 26px; }
     .dr-hist-head { display: flex; justify-content: space-between; align-items: baseline;
@@ -792,7 +798,7 @@ function _actAfter(owner) {
    ════════════════════════════════════════════════════════════════════════════ */
   const _dr = { data: null, abort: null, gen: 0, query: '', depth: 'standard', files: [],
                 clarify: null, clarAns: {}, sources: null, srcOpen: false,
-                provider: 'claude', localModel: null, localErr: false,
+                provider: 'claude', localModel: null, localErr: false, localRunning: false, localWhy: '',
                 deeperOpen: false, deeperFiles: [], deeperQuery: '',
                 alerts: [], paused: false, fixOpen: false, fixRows: [], _lastStart: null,
                 history: null, histCanOpen: false,
@@ -849,14 +855,16 @@ function _actAfter(owner) {
     const on = 'background:var(--admin-color,#7CFF9B);color:#04120a;font-weight:600';
     const off = 'background:transparent;color:var(--text-secondary)';
     const seg = (id, label) => `<button onclick="drSetProvider('${id}')" style="border:none;padding:5px 12px;font:inherit;font-size:12px;cursor:pointer;border-radius:6px;${p === id ? on : off}">${label}</button>`;
+    // Local AI = Flash-Next on Strata, a model on this PC: nothing to offer on the hosted site.
+    if (_drIsHosted()) return '';
     let note = '';
     if (p === 'local') {
-      if (_dr.localModel) note = `<span style="font-size:11px;color:var(--text-muted)" title="Model loaded in LM Studio">▸ ${_esc(_dr.localModel)}</span>`;
-      else if (_dr.localErr) note = `<span style="font-size:11px;color:#ff8888">⚠ LM Studio not connected</span>`;
+      if (_dr.localModel) note = `<span style="font-size:11px;color:var(--text-muted)" title="Strata, 127.0.0.1:8182">▸ ${_esc(_dr.localModel)} · ${_dr.localRunning ? 'running' : 'starts when you run (1-3 min)'}</span>`;
+      else if (_dr.localErr) note = `<span style="font-size:11px;color:#ff8888" title="${_esc(_dr.localWhy || '')}">⚠ Strata not available</span>`;
       else note = `<span style="font-size:11px;color:var(--text-muted)">checking…</span>`;
     }
     return `<div style="display:flex;align-items:center;gap:10px"
-        title="Local AI routes every AI call to the model loaded in LM Studio — Claude is fully out of the loop for the run.">
+        title="Local AI routes every AI call to Flash-Next on Strata, on this PC — Claude is fully out of the loop for the run. If Strata is not running it is started (1-3 min; any LM Studio model is unloaded first).">
       <div style="display:flex;gap:2px;padding:3px;border:1px solid var(--border-mid);border-radius:8px;background:var(--bg-surface)">${seg('claude', 'Claude')}${seg('local', 'Local AI')}</div>
       ${note}</div>`;
   }
@@ -865,8 +873,8 @@ function _actAfter(owner) {
     if (p === 'local') {
       _dr.localModel = null; _dr.localErr = false; _drRender();
       fetch(`${PERF_SERVER}/api/deep_research/local_model`).then(r => r.json()).then(j => {
-        if (j.ok) { _dr.localModel = j.model; _dr.localErr = false; }
-        else { _dr.localModel = null; _dr.localErr = true; }
+        if (j.ok) { _dr.localModel = j.model; _dr.localRunning = !!j.running; _dr.localErr = false; }
+        else { _dr.localModel = null; _dr.localErr = true; _dr.localWhy = j.error || ''; }
         if (_dr.provider === 'local') _drRender();
       }).catch(() => { _dr.localErr = true; if (_dr.provider === 'local') _drRender(); });
     } else { _drRender(); }
@@ -1910,12 +1918,18 @@ function _actAfter(owner) {
     }
     if (myGen !== _dr.gen) return;
     if (!alive) { _drErrorNote('Could not reach the local server (dr_server.py on :5006). Start it from the Special Projects hub, then try again.'); return; }
+    if (_dr.provider === 'local') {      // fresh: Strata's watchdog may have closed it since
+      try { const lj = await (await fetch(`${PERF_SERVER}/api/deep_research/local_model`)).json();
+            _dr.localRunning = !!lj.running; } catch (_) {}
+    }
 
     if (!skipClarify) {
       main.innerHTML = _drShell(`
         <div class="pd-dropzone" style="cursor:default">
           <div class="pd-spinner"></div>
-          <div class="pd-drop-title">Scoping the question…</div>
+          <div class="pd-drop-title">${(_dr.provider === 'local' && !_dr.localRunning)
+            ? 'Starting Flash-Next on Strata (1-3 min), then scoping the question…'
+            : 'Scoping the question…'}</div>
         </div>`);
       try {
         const fd = new FormData(); fd.append('query', q); fd.append('provider', _dr.provider || 'claude');
@@ -2001,6 +2015,7 @@ function _actAfter(owner) {
     _dr.jobId = jobId;
     actStartRun(jobId);
     const t0 = Date.now();
+    _dr._eta = null;
 
     main.innerHTML = _drShell(_drProgressHtml(stages, stages[0], null, 'Starting…', t0));
     while (true) {
@@ -2050,6 +2065,8 @@ function _actAfter(owner) {
       if (st.done)  { _drNagStop(); _dr.abort = null; _dr.history = null; _dr.data = st.result; renderContent(activeTool); return; }
       // Stash the latest render args so the Stop / refusal panels can redraw from them.
       _dr._stages = stages; _dr._cur = st.stage; _dr._pct = st.pct; _dr._msg = st.message; _dr._t0 = t0;
+      // Stage countdowns: the server's estimate, counted down here between polls.
+      _dr._eta = st.eta ? Object.assign({}, st.eta, { at: Date.now() }) : null;
       const el = document.getElementById('ws-main-inner');
       if (!el) continue;
       // Highest priority: Claude declined and is waiting on the user's choice.
@@ -2110,6 +2127,7 @@ function _actAfter(owner) {
       </div>`).join('');
     return `
       ${_drAlertsHtml()}
+      ${_drRunPromptHtml()}
       <div class="dr-query-block">
         <div class="dr-clar-head">Log in to ${candidates.length} gated source${candidates.length>1?'s':''}?</div>
         <div class="dr-clar-sub">The agent found these behind a login/paywall and judged them worth pursuing.
@@ -2170,8 +2188,9 @@ function _actAfter(owner) {
       const detail = (cls === 'active' && message) ? `<span class="mn-stage-detail">${_esc(message)}</span>` : '';
       const lbl = (s === 'stage1') ? (baselineOn ? 'Baseline sweep' : 'Planning') : (DR_STAGE_LABELS[s] || s);
       return `<div class="mn-stage ${cls}"><span class="mn-stage-ic">${ic}</span>
-                <span class="mn-stage-label">${lbl}</span>${detail}</div>`;
+                <span class="mn-stage-label">${lbl}</span>${_drEtaCell(s, cls)}${detail}</div>`;
     }).join('');
+    _drEtaTicker();
     const bar = (typeof pct === 'number')
       ? `<div class="mn-bar-fill" style="width:${pct}%"></div>`
       : `<div class="mn-bar-fill mn-bar-indet"></div>`;
@@ -2216,19 +2235,79 @@ function _actAfter(owner) {
     }
     return `
       ${_drAlertsHtml()}
+      ${_drRunPromptHtml()}
       <div class="mn-progress">
         <div class="mn-progress-title">${_dr.paused ? 'Paused' : 'Researching…'}</div>
         <div class="mn-stages">${rows}</div>
         <div class="mn-bar">${bar}</div>
-        <div class="mn-elapsed">elapsed ${elapsed}</div>
+        <div class="mn-elapsed">elapsed ${elapsed}<span data-eta-total="1">${_drEtaTotalText()}</span></div>
         ${controls}
       </div>`;
   }
+  // ── stage countdowns + the prompt shown while a run is in progress ─────────────
+  // The server sends, with every status poll: seconds left in the current stage (exact for
+  // the pre-research pass and the gathering window, estimated from past runs elsewhere),
+  // estimates for the stages to come, and how long finished stages took. Counted down here
+  // once a second between polls; frozen while paused.
+  function _drFmt(sec) {
+    sec = Math.max(0, Math.round(sec));
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  }
+  function _drEtaLeft() {
+    const e = _dr._eta;
+    if (!e || e.left == null) return null;
+    const gone = (e.paused || _dr.paused) ? 0 : (Date.now() - e.at) / 1000;
+    return e.left - gone;
+  }
+  function _drEtaLiveText() {
+    const l = _drEtaLeft();
+    if (l == null) return '';
+    if (_dr.paused) return `⏸ ${_drFmt(l)}`;
+    return l > 0 ? `⏱ ${_drFmt(l)} left` : 'running long…';
+  }
+  function _drEtaTotalText() {
+    const e = _dr._eta;
+    if (!e) return '';
+    const rest = Object.values(e.est || {}).reduce((a, b) => a + b, 0);
+    const tot = Math.max(0, _drEtaLeft() || 0) + rest;
+    return tot > 0 ? ` · about ${_drFmt(tot)} left (estimate)` : '';
+  }
+  function _drEtaCell(s, cls) {
+    const e = _dr._eta;
+    if (!e) return '';
+    if ((e.skipped || []).includes(s)) return `<span class="dr-eta dr-eta-dim">skipped</span>`;
+    if (cls === 'done') {
+      const t = (e.took || {})[s];
+      return t != null ? `<span class="dr-eta dr-eta-dim">took ${_drFmt(t)}</span>` : '';
+    }
+    if (cls === 'active') return `<span class="dr-eta dr-eta-live" data-eta-live="1">${_drEtaLiveText()}</span>`;
+    const v = (e.est || {})[s];
+    return v != null ? `<span class="dr-eta dr-eta-dim">~${_drFmt(v)}</span>` : '';
+  }
+  function _drEtaTicker() {
+    if (window._drEtaTimer) return;
+    window._drEtaTimer = setInterval(() => {
+      document.querySelectorAll('[data-eta-live]').forEach(el => { el.textContent = _drEtaLiveText(); });
+      document.querySelectorAll('[data-eta-total]').forEach(el => { el.textContent = _drEtaTotalText(); });
+    }, 1000);
+  }
+  function _drRunPromptHtml() {
+    const q = (_dr.query || '').trim();
+    if (!q) return '';
+    const tier = { standard: 'Standard', deep: 'Deep', exhaustive: 'Oh, Very Deep' }[_dr.depth] || _dr.depth || '';
+    const who = (_dr.provider === 'local') ? 'Local AI (Flash-Next on Strata)' : 'Claude';
+    const meta = [tier ? `${tier} tier` : '', who].filter(Boolean).join(' · ');
+    return `<div class="dr-prompt-box dr-prompt-running"><div class="dr-prompt-label">Research prompt</div>
+      <div class="dr-prompt-text">${_esc(q).replace(/\n/g, '<br>')}</div>
+      <div class="dr-prompt-meta">${_esc(meta)}</div></div>`;
+  }
+
   // ── manual sign-in prompt ──────────────────────────────────────────────────
   function _drManualLoginHtml(info) {
     const dom = _esc(info.domain || '');
     return `
       ${_drAlertsHtml()}
+      ${_drRunPromptHtml()}
       <div class="dr-alert-banner" style="border-color:#c9a04a;background:rgba(240,190,90,.13);color:#ffe9b8" role="alert">
         <div class="dr-alert-head" style="color:#f0c674;font-size:15px">🔑 Sign-in needed — ${dom}</div>
         <div>The research plan selected <strong>${dom}</strong>, and the tool could not sign in by itself
@@ -2368,7 +2447,7 @@ function _actAfter(owner) {
       body = `<div class="dr-stop-note">Switched to your local model${local && local.model ? ' (' + _esc(local.model) + ')' : ''} — resuming the research from where Claude declined…</div>`;
     } else if (local && local.ok) {
       body = `
-        <div class="dr-refusal-confirm">Local model detected: <strong>${_esc(local.model)}</strong>.</div>
+        <div class="dr-refusal-confirm">Local model: <strong>${_esc(local.model)}</strong>${local.running ? ' (running)' : ' (not running - starting it takes 1-3 min)'}.</div>
         <div class="dr-refusal-sub">Continue this research on your local model, picking up from the point Claude declined?</div>
         <div class="dr-stop-actions">
           <button class="dr-run-btn" onclick="drRefusalConfirmLocal()">Continue on local model →</button>
@@ -2376,20 +2455,21 @@ function _actAfter(owner) {
         </div>`;
     } else if (local && !local.ok) {
       body = `
-        <div class="dr-refusal-sub" style="color:#ffb37a">No local model detected. Start LM Studio, load a model, and turn on its local server (Developer tab), then re-check.</div>
+        <div class="dr-refusal-sub" style="color:#ffb37a">The local model (Flash-Next on Strata) is not available${local.error ? ': ' + _esc(local.error) : '.'}</div>
         <div class="dr-stop-actions">
-          <button class="dr-run-btn" onclick="drRefusalSwitchLocal()">Re-check for a local model</button>
+          <button class="dr-run-btn" onclick="drRefusalSwitchLocal()">Check again</button>
           <button class="dr-run-btn dr-run-secondary" onclick="drRefusalAbort()">Stop &amp; assemble what we have</button>
         </div>`;
     } else {
       body = `
-        <div class="dr-refusal-sub">Continue with your local model instead? It must be running in LM Studio with a model loaded.</div>
+        <div class="dr-refusal-sub">Continue with your local model (Flash-Next on Strata) instead? If it is not running it is started first (1-3 min).</div>
         <div class="dr-stop-actions">
           <button class="dr-run-btn" onclick="drRefusalSwitchLocal()">Switch to local model →</button>
           <button class="dr-run-btn dr-run-secondary" onclick="drRefusalAbort()">Stop &amp; assemble what we have</button>
         </div>`;
     }
     return `
+      ${_drRunPromptHtml()}
       <div class="mn-progress">
         <div class="dr-refusal-panel">
           <div class="dr-refusal-head">⚠ Claude declined part of this research</div>
@@ -2407,8 +2487,8 @@ function _actAfter(owner) {
     try {
       const r = await fetch(`${PERF_SERVER}/api/deep_research/local_model`);
       const j = await r.json();
-      _dr.refusalLocal = { ok: !!j.ok, model: j.model || '' };
-    } catch (_) { _dr.refusalLocal = { ok: false, model: '' }; }
+      _dr.refusalLocal = { ok: !!j.ok, model: j.model || '', running: !!j.running, error: j.error || '' };
+    } catch (_) { _dr.refusalLocal = { ok: false, model: '', running: false, error: '' }; }
     _drRefusalRerender();
   }
   async function drRefusalConfirmLocal() {

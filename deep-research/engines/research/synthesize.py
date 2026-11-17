@@ -688,6 +688,16 @@ def synthesize(harvest, governance: str, client, log=None, progress=None,
 _CITE_RE = re.compile(r"\[(\d{1,3})\]")
 _CHECK_BATCH = 12          # statements per checker call
 _CHECK_WORKERS = 4
+# LEAN CHECK (2026-11-16, owner: "switch to a lean checker") - used when the client asks for
+# it (StrataClient.lean_checks: Local AI, where every call queues on one sequence and the
+# 7 batches of a 75-statement report took ~7 minutes, 70-90 % of it the model's thinking).
+# Every statement is still checked. What changes: ~25 statements per call (grouped so
+# statements citing the same sources share a call), thinking held to a small budget, and a
+# compact answer - a verdict code for every statement, a full entry only where one is needed.
+_LEAN_BATCH = 25
+_LEAN_THINK = 1200         # thinking budget per call (tokens)
+_LEAN_MAX_TOKENS = 16384
+_LEAN_CODES = {"S": "supported", "P": "partial", "B": "brief", "U": "unsupported"}
 _SENT_END = re.compile(r'[.!?]["”’)]*(?:\s*\[\d{1,3}\])*\s+(?=[A-Z0-9"“‘(*_`])')
 _ABBREV = re.compile(r"(?:\b(?:e\.g|i\.e|etc|vs|cf|ca|approx|no|fig|dr|mr|mrs|ms|st|inc|ltd|co|u\.s|u\.k)|\b[A-Za-z])\.$",
                      re.I)
@@ -733,6 +743,19 @@ note (for "partial" and "unsupported", at most 20 words): what the findings lack
 Respond with ONLY a JSON object:
 {"results": [{"id": 1, "verdict": "supported", "fix": "", "bad_cites": [], "note": ""}]}
 One entry per statement, every id present. Inside JSON strings escape double quotes as \\"."""
+
+
+_CHECK_SYSTEM_LEAN = _CHECK_SYSTEM.split("Respond with ONLY a JSON object:")[0] + """\
+Work quickly: decide each statement from the findings; do not deliberate at length.
+
+Respond with ONLY a JSON object in this COMPACT form:
+{"v": "1S 2S 3P 4U 5B 6S", "d": [{"id": 3, "fix": "...", "bad_cites": [], "note": "..."}]}
+- "v": a verdict code for EVERY statement id, in any order: S = supported, P = partial, \
+B = brief, U = unsupported. Leave no id out.
+- "d": an entry ONLY for statements that are P or U (with fix and note), and for any statement \
+that has bad_cites (whatever its verdict). Supported and brief statements without bad cites \
+get no entry.
+Inside JSON strings escape double quotes as \\"."""
 
 
 def _split_statements(body: str) -> list:
@@ -785,8 +808,9 @@ def _split_statements(body: str) -> list:
     return units
 
 
-def _check_batch(client, question, batch, by_n, log, brief=""):
-    """One checker call. Returns {id: result dict}; {} when the call failed twice."""
+def _check_batch(client, question, batch, by_n, log, brief="", lean=False):
+    """One checker call. Returns {id: result dict}; {} when the call failed twice.
+    lean=True: compact answer format, small thinking budget (see _LEAN_BATCH)."""
     need = sorted({n for u in batch for n in u["cites"] if n in by_n})
     src = "\n\n".join(
         f"[{n}] {by_n[n]['title'][:140]}" + (f"  ({_grade_tag(by_n[n])})" if _grade_tag(by_n[n]) else "")
@@ -803,25 +827,55 @@ def _check_batch(client, question, batch, by_n, log, brief=""):
             f"FINDINGS OF THE CITED SOURCES:\n{src}{notes}\n\nSTATEMENTS:\n{stm}")
     for _attempt in (1, 2):
         try:
-            # 8192, not 4096: the model's thinking spends from the same budget, and a batch cut
-            # off mid-answer is not valid JSON (run of 2026-11-13: 12 statements went unchecked).
-            r = client.messages.create(model=_ROUTE_MODEL, max_tokens=8192, system=_CHECK_SYSTEM,
-                                       messages=[{"role": "user", "content": user}])
+            if lean:
+                r = client.messages.create(
+                    model=_ROUTE_MODEL, max_tokens=_LEAN_MAX_TOKENS, system=_CHECK_SYSTEM_LEAN,
+                    thinking={"type": "enabled", "budget_tokens": _LEAN_THINK},
+                    messages=[{"role": "user", "content": user}])
+            else:
+                # 8192, not 4096: the model's thinking spends from the same budget, and a batch cut
+                # off mid-answer is not valid JSON (run of 2026-11-13: 12 statements went unchecked).
+                r = client.messages.create(model=_ROUTE_MODEL, max_tokens=8192, system=_CHECK_SYSTEM,
+                                           messages=[{"role": "user", "content": user}])
             if getattr(r, "stop_reason", "") == "max_tokens":
                 log("[synth] citation check: an answer was cut off at the length limit")
             m = re.search(r"\{.*\}", _first_text(r), re.S)
             data = json.loads(m.group(0)) if m else {}
-            out = {}
-            for it in data.get("results") or []:
-                try:
-                    out[int(it.get("id"))] = it
-                except (TypeError, ValueError):
-                    continue
+            out = _parse_lean(data, batch) if lean else {}
+            if not lean:
+                for it in data.get("results") or []:
+                    try:
+                        out[int(it.get("id"))] = it
+                    except (TypeError, ValueError):
+                        continue
             if out:
                 return out
         except Exception as e:  # noqa: BLE001
             log(f"[synth] citation check: a batch failed ({type(e).__name__}) — retrying")
     return {}
+
+
+def _parse_lean(data: dict, batch: list) -> dict:
+    """The lean answer -> the same {id: {verdict, fix, bad_cites, note}} the full format gives.
+    A statement with no verdict code is left out (counted UNCHECKED, never assumed supported)."""
+    ids = {u["id"] for u in batch}
+    codes = {}
+    for m in re.finditer(r"(\d+)\s*[:=]?\s*([SPBU])\b", str(data.get("v") or "")):
+        i = int(m.group(1))
+        if i in ids:
+            codes[i] = _LEAN_CODES[m.group(2)]
+    details = {}
+    for it in data.get("d") or []:
+        try:
+            details[int(it.get("id"))] = it
+        except (TypeError, ValueError, AttributeError):
+            continue
+    out = {}
+    for i, verdict in codes.items():
+        d = details.get(i) or {}
+        out[i] = {"id": i, "verdict": verdict, "fix": d.get("fix") or "",
+                  "bad_cites": d.get("bad_cites") or [], "note": d.get("note") or ""}
+    return out
 
 
 def _clean_fix(orig: str, fix: str, keep: list) -> str:
@@ -907,12 +961,20 @@ def check_citations(client, question, synth, log=None) -> dict:
         units = _split_statements(body)
         if not units or not by_n:
             return base
-        log(f"[synth] citation check: testing {len(units)} cited statements against their sources…")
-        batches = [units[i:i + _CHECK_BATCH] for i in range(0, len(units), _CHECK_BATCH)]
+        lean = bool(getattr(client, "lean_checks", False))
+        if lean:
+            # Statements citing the same sources share a call, so their findings are sent once.
+            order = sorted(units, key=lambda u: (tuple(u["cites"]), u["id"]))
+            batches = [order[i:i + _LEAN_BATCH] for i in range(0, len(order), _LEAN_BATCH)]
+        else:
+            batches = [units[i:i + _CHECK_BATCH] for i in range(0, len(units), _CHECK_BATCH)]
+        log(f"[synth] citation check: testing {len(units)} cited statements against their sources"
+            + (f" (lean: {len(batches)} call(s))…" if lean else "…"))
         brief = str((synth or {}).get("stage1_brief") or "").strip()
         results = {}
         with _cf.ThreadPoolExecutor(max_workers=_CHECK_WORKERS) as ex:
-            for got in ex.map(lambda b: _check_batch(client, question, b, by_n, log, brief=brief),
+            for got in ex.map(lambda b: _check_batch(client, question, b, by_n, log, brief=brief,
+                                                     lean=lean),
                               batches):
                 results.update(got)
 

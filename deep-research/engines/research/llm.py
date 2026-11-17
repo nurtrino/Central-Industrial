@@ -1,245 +1,334 @@
 """
-Provider abstraction: route AI calls to Claude (Anthropic) OR a local model in LM Studio.
+Provider abstraction: route AI calls to Claude (Anthropic) OR the local model.
 
 The Deep Research engine calls `client.messages.create(model=..., system=..., messages=...,
 tools=..., max_tokens=...)` throughout and reads Anthropic-shaped responses (`resp.content`
 = list of blocks with `.type`/`.text`/`.id`/`.name`/`.input`, plus `resp.stop_reason`).
 
-`make_client("local")` returns an `LMStudioClient` that presents the SAME `.messages.create`
-surface but talks to LM Studio's OpenAI-compatible API (`/v1/chat/completions`). It translates
-both directions — Anthropic tool defs → OpenAI `tools`, and OpenAI `tool_calls` → Anthropic
-`tool_use` blocks — so the existing tool-use loop in agent.py works unchanged. The `model=`
-argument is IGNORED for local (LM Studio uses whatever model is loaded).
+LOCAL AI = Flash-Next on Strata (2026-11-16, owner: "make local AI use Flash-Next on Strata
+instead"; it was whatever model LM Studio had loaded). Strata (~/strata, port 8182) runs
+orcarouter Qwen3.8-Flash-Next-Uncensored Q5_K_M and speaks the Anthropic Messages API
+natively, so `StrataClient` is the real Anthropic SDK pointed at it: tool use, stop_reason
+and usage come back in Claude's shape with no translation. Every call goes to that one model
+whatever role it is for (config/drt_models.json does not apply to local runs). Strata takes
+one request at a time behind a FIFO; parallel lanes queue there.
 
-Claude's server-side web_search tool cannot be mapped to a local model; the caller skips
-Stage 1 in local mode (see run_search).
+House rules this follows (LOCAL LLMs\\STATE.md): exactly one local model loaded at a time,
+so starting Strata first unloads any LM Studio chat model, the way `claude-local` does; and
+Strata is closed by ~/bin/strata-watchdog.ps1 once nothing is using it. Deep Research tells
+the watchdog it is using Strata through a heartbeat file in ~/.local-servers/strata-clients/
+(refreshed every 15 s while a run holds the client or a call is in flight).
 """
-import json
 import os
-import re
-
-
-def _strip_think(s):
-    """Remove <think>…</think> reasoning blocks (some local models, e.g. Qwen3 'thinking'
-    variants, emit them inline in the message content). Tool calls arrive separately in
-    `tool_calls`, so this only cleans the visible text we surface to the pipeline."""
-    if not s:
-        return s
-    s = re.sub(r"<think>.*?</think>", "", s, flags=re.S)   # closed blocks
-    s = re.sub(r"^.*?</think>", "", s, flags=re.S)          # leading/unclosed thinking
-    s = re.sub(r"<think>.*$", "", s, flags=re.S)            # trailing unclosed thinking
-    return s.strip()
-
-# LM Studio's default OpenAI-compatible endpoint; override with LMSTUDIO_URL in .env.
-# Use 127.0.0.1 (not "localhost") — on Windows "localhost" can resolve to IPv6 ::1 first,
-# which LM Studio's IPv4-only server refuses.
-LMSTUDIO_URL = (os.environ.get("LMSTUDIO_URL") or "http://127.0.0.1:1234/v1").rstrip("/")
-
-_LOCAL_ALIASES = ("local", "lmstudio", "local_ai", "localai")
+import subprocess
+import sys
+import threading
+import time
 
 
 class LocalLLMUnavailable(RuntimeError):
-    """LM Studio isn't reachable or has no model loaded."""
+    """The local model (Strata) cannot be reached or started."""
+
+
+_LOCAL_ALIASES = ("local", "strata", "local_ai", "localai", "lmstudio")
 
 
 def is_local(provider) -> bool:
     return (provider or "claude").strip().lower() in _LOCAL_ALIASES
 
 
-def _is_embedding_model(mid: str, mtype: str = "") -> bool:
-    return "embed" in (mid or "").lower() or (mtype or "").lower().startswith("embed")
+# ── Strata: where it is, how it is started ───────────────────────────────────
+# 127.0.0.1, not "localhost" (Windows may try ::1 first).
+STRATA_URL = (os.environ.get("DRT_STRATA_URL") or "http://127.0.0.1:8182").rstrip("/")
+STRATA_MODEL = (os.environ.get("DRT_STRATA_MODEL")
+                or "orcarouter-qwen3.8-flash-next-uncensored-q5_k_m")
+STRATA_LABEL = "Flash-Next (Strata)"
+_HOME = os.path.expanduser("~")
+_SERVERS_PS1 = os.environ.get("DRT_STRATA_SERVERS") or os.path.join(_HOME, "bin", "local-servers.ps1")
+_WATCHDOG_PS1 = os.path.join(_HOME, "bin", "strata-watchdog.ps1")
+_LMS = os.path.join(_HOME, ".lmstudio", "bin", "lms.exe")
+_STATE_DIR = os.path.join(_HOME, ".local-servers")
+_HB_DIR = os.path.join(_STATE_DIR, "strata-clients")      # read by strata-watchdog.ps1
+_START_LOG = os.path.join(_STATE_DIR, "deep-research-strata-start.log")
+_START_TIMEOUT_S = 900          # local-servers.ps1 itself allows 900 s; a load is 1-3 min
+_HB_EVERY_S = 15                # the watchdog counts a file touched in the last 60 s as a user
+_MAX_TOKENS_FLOOR_LOCAL = 8192  # Flash-Next thinks first; the pipeline's small caps (16-400) would starve it
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def detect_local_model(base_url=None, timeout=6) -> str:
-    """Return the id of the LM Studio CHAT model to use — preferring one that is actually
-    LOADED in memory, not merely downloaded.
+def _hosted() -> bool:
+    # Same test as dr_server / browser.hosted_instance(): the hosted (Render) copy has AUTH_SECRET.
+    return bool(os.environ.get("AUTH_SECRET", "").strip())
 
-    LM Studio's OpenAI-compatible /v1/models lists every *downloaded* model regardless of
-    whether it's loaded, so the old 'take the first one' logic would silently name an
-    unloaded model and lean on just-in-time loading (and could pick a different model than
-    the one you loaded). This now:
-      1. asks LM Studio's native /api/v0/models (which reports state) and returns the first
-         LOADED chat model;
-      2. if that API is reachable and shows chat models but NONE loaded, raises a clear
-         'no model loaded' error rather than guessing;
-      3. falls back to the first available chat model from /v1/models only when the
-         state-aware API is unavailable (older LM Studio);
-      4. raises LocalLLMUnavailable when LM Studio is unreachable or has no chat model.
-    """
+
+def strata_up(timeout=3) -> bool:
+    """True when the Strata server answers on its port."""
     import requests
-    base = (base_url or LMSTUDIO_URL).rstrip("/")
-    root = base[:-3] if base.endswith("/v1") else base   # strip /v1 for the native API
-
-    # 1) State-aware path: LM Studio's native REST API reports loaded/not-loaded + type.
     try:
-        r = requests.get(f"{root}/api/v0/models", timeout=timeout)
-        if r.ok:
-            models = (r.json() or {}).get("data") or []
-            chat = [m for m in models if not _is_embedding_model(m.get("id", ""), m.get("type", ""))]
-            loaded = [m for m in chat if (m.get("state") or "").lower() in ("loaded", "loading")]
-            if loaded:
-                return loaded[0].get("id") or "local-model"
-            if chat:
-                raise LocalLLMUnavailable(
-                    f"LM Studio is running at {base} but no model is loaded — "
-                    f"load a model in LM Studio (Developer tab → select a model), then retry. "
-                    f"(available but unloaded: {', '.join(m.get('id','?') for m in chat[:3])})")
-    except LocalLLMUnavailable:
-        raise
-    except Exception:
-        pass  # older LM Studio without /api/v0 — fall through to the /v1 list
-
-    # 2) Fallback (no state info): first available chat model from the OpenAI-compatible API.
-    try:
-        r = requests.get(f"{base}/models", timeout=timeout)
-        r.raise_for_status()
-        data = r.json().get("data") or []
-    except Exception as e:  # noqa: BLE001
-        raise LocalLLMUnavailable(
-            f"LM Studio not reachable at {base}. Start LM Studio, load a model, and turn on "
-            f"its local server (Developer tab). [{type(e).__name__}: {e}]")
-    chat = [m for m in data if not _is_embedding_model(m.get("id", ""))]
-    if not chat:
-        raise LocalLLMUnavailable(f"LM Studio is running at {base} but no chat model is loaded.")
-    return chat[0].get("id") or "local-model"
+        return requests.get(f"{STRATA_URL}/v1/models", timeout=timeout).ok
+    except Exception:  # noqa: BLE001
+        return False
 
 
-# ── Anthropic-shaped response objects ────────────────────────────────────────
-class _Block:
-    __slots__ = ("type", "text", "id", "name", "input")
-
-    def __init__(self, type, text=None, id=None, name=None, input=None):
-        self.type = type; self.text = text; self.id = id; self.name = name; self.input = input
+_START_LOCK = threading.Lock()
+_STARTING = threading.Event()
 
 
-class _Resp:
-    def __init__(self, content, stop_reason):
-        self.content = content; self.stop_reason = stop_reason
-
-
-def _blk_get(b, attr, default=None):
-    if isinstance(b, dict):
-        return b.get(attr, default)
-    return getattr(b, attr, default)
-
-
-def _to_openai_messages(system, messages):
-    """Translate Anthropic (system + messages) into an OpenAI chat message list.
-
-    Handles: string content; assistant content as a list of blocks (text + tool_use);
-    user content as a list of tool_result dicts.
-    """
-    out = []
-    if system:
-        out.append({"role": "system", "content": system})
-    for m in messages or []:
-        role = m.get("role", "user")
-        content = m.get("content", "")
-        if isinstance(content, str):
-            out.append({"role": role, "content": content})
-            continue
-        if role == "assistant":
-            texts, tool_calls = [], []
-            for b in content:
-                bt = _blk_get(b, "type")
-                if bt == "text":
-                    t = _blk_get(b, "text") or ""
-                    if t:
-                        texts.append(t)
-                elif bt == "tool_use":
-                    tool_calls.append({
-                        "id": _blk_get(b, "id"),
-                        "type": "function",
-                        "function": {"name": _blk_get(b, "name"),
-                                     "arguments": json.dumps(_blk_get(b, "input") or {})},
-                    })
-            msg = {"role": "assistant", "content": "\n".join(texts)}
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            out.append(msg)
-        else:  # user turn — may carry tool_result blocks
-            leftover = []
-            for b in content:
-                if _blk_get(b, "type") == "tool_result":
-                    tc = _blk_get(b, "content")
-                    if isinstance(tc, list):
-                        tc = "\n".join(_blk_get(x, "text", "") if not isinstance(x, str) else x
-                                       for x in tc)
-                    out.append({"role": "tool", "tool_call_id": _blk_get(b, "tool_use_id"),
-                                "content": tc if isinstance(tc, str) else json.dumps(tc)})
-                else:
-                    leftover.append(_blk_get(b, "text", "") or "")
-            if leftover:
-                out.append({"role": "user", "content": "\n".join(p for p in leftover if p)})
+def strata_status() -> dict:
+    """For the page's Claude / Local AI switch: can a local run use Strata, and is it up."""
+    running = strata_up()
+    out = {"ok": True, "running": running, "starting": _STARTING.is_set() and not running,
+           "model": STRATA_LABEL, "key": STRATA_MODEL, "url": STRATA_URL, "error": None}
+    if not running:
+        if _hosted():
+            out.update(ok=False, error="Local AI runs only on the home PC, not on the hosted site.")
+        elif not (sys.platform == "win32" and os.path.isfile(_SERVERS_PS1)):
+            out.update(ok=False, error=f"Strata is not running and its starter was not found ({_SERVERS_PS1}).")
     return out
 
 
-def _to_openai_tools(tools):
-    """Anthropic tool defs → OpenAI function tools. Server-side tools (no input_schema,
-    e.g. Claude's web_search) are dropped — they have no local equivalent."""
-    if not tools:
-        return None
-    out = []
-    for t in tools:
-        schema = t.get("input_schema") if isinstance(t, dict) else None
-        if not schema:
-            continue
-        out.append({"type": "function", "function": {
-            "name": t["name"], "description": t.get("description", ""), "parameters": schema}})
-    return out or None
-
-
-class _Messages:
-    def __init__(self, client):
-        self._c = client
-
-    def create(self, model=None, max_tokens=1024, system=None, messages=None,
-               tools=None, temperature=None, **kw):
-        return self._c._create(max_tokens, system, messages or [], tools, temperature)
-
-
-class LMStudioClient:
-    """Drop-in stand-in for anthropic.Anthropic that talks to LM Studio."""
-
-    def __init__(self, base_url=None, log=None):
-        self.base_url = (base_url or LMSTUDIO_URL).rstrip("/")
-        self.log = log or (lambda m: None)
-        self.model = detect_local_model(self.base_url)
-        self.messages = _Messages(self)
-
-    def _create(self, max_tokens, system, messages, tools, temperature):
-        import requests
-        payload = {
-            "model": self.model,
-            "messages": _to_openai_messages(system, messages),
-            "max_tokens": int(max_tokens) if max_tokens else 1024,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        otools = _to_openai_tools(tools)
-        if otools:
-            payload["tools"] = otools
-            payload["tool_choice"] = "auto"
-        r = requests.post(self.base_url + "/chat/completions", json=payload, timeout=600)
-        r.raise_for_status()
-        choice = ((r.json() or {}).get("choices") or [{}])[0]
-        msg = choice.get("message") or {}
-        blocks = []
-        content = _strip_think(msg.get("content") or "")
-        if content:
-            blocks.append(_Block("text", text=content))
-        tcs = msg.get("tool_calls") or []
-        for tc in tcs:
-            fn = tc.get("function") or {}
+def _unload_lmstudio(log):
+    """One local model at a time: unload every LM Studio chat model (embedding models stay),
+    as claude-local does before it starts Strata."""
+    if not os.path.isfile(_LMS):
+        return
+    import json as _json
+    try:
+        r = subprocess.run([_LMS, "ps", "--json"], capture_output=True, text=True, timeout=30,
+                           creationflags=_NO_WINDOW)
+        loaded = _json.loads(r.stdout or "[]")
+    except Exception:  # noqa: BLE001  (LM Studio not running: nothing to unload)
+        return
+    for m in loaded if isinstance(loaded, list) else []:
+        k = (m.get("identifier") or m.get("modelKey") or "") if isinstance(m, dict) else ""
+        if k and "embed" not in k.lower():
+            log(f"[local] unloading {k} from LM Studio (one local model at a time)")
             try:
-                args = json.loads(fn.get("arguments") or "{}")
+                subprocess.run([_LMS, "unload", k], capture_output=True, timeout=60,
+                               creationflags=_NO_WINDOW)
             except Exception:  # noqa: BLE001
-                args = {}
-            blocks.append(_Block("tool_use", id=tc.get("id") or os.urandom(6).hex(),
-                                 name=fn.get("name"), input=args))
-        if not blocks:
-            blocks.append(_Block("text", text=""))
-        return _Resp(blocks, "tool_use" if tcs else "end_turn")
+                pass
+
+
+def _start_watchdog():
+    """~/bin/strata-watchdog.ps1 (single instance) closes Strata once no client is using it."""
+    if not os.path.isfile(_WATCHDOG_PS1):
+        return
+    try:
+        subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                          "-WindowStyle", "Hidden", "-File", _WATCHDOG_PS1],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW, close_fds=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def ensure_strata(log=None):
+    """Make sure Strata is serving. If it is down, unload LM Studio's model, start it with
+    ~/bin/local-servers.ps1 strata (1-3 min; locks ~70 GB of RAM) and start the watchdog.
+    A Strata someone else started is used as it is (and left to their watchdog)."""
+    log = log or (lambda m: None)
+    if strata_up():
+        return
+    with _START_LOCK:
+        if strata_up():                       # another caller started it while we waited
+            return
+        st = strata_status()
+        if not st["ok"]:
+            raise LocalLLMUnavailable(st["error"])
+        _STARTING.set()
+        try:
+            log(f"[local] starting {STRATA_LABEL} - 1-3 minutes; the PC may stall while it "
+                f"locks ~70 GB of RAM")
+            _unload_lmstudio(log)
+            HEARTBEAT.set_keep(_START_TIMEOUT_S + 120)   # the watchdog must not close it mid-load
+            os.makedirs(_STATE_DIR, exist_ok=True)
+            # Output to a FILE, never a pipe: the server inherits the launcher's handles and a
+            # pipe would block until Strata exits (LOCAL LLMs handoff 11l, lesson 3).
+            with open(_START_LOG, "w", encoding="utf-8", errors="replace") as fh:
+                proc = subprocess.Popen(
+                    ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                     _SERVERS_PS1, "strata"],
+                    stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+                    creationflags=_NO_WINDOW)
+            _start_watchdog()
+            t0 = time.time()
+            next_note = t0 + 30
+            while True:
+                rc = proc.poll()
+                if rc is not None:
+                    try:
+                        with open(_START_LOG, encoding="utf-8", errors="replace") as fh:
+                            out = fh.read()
+                    except Exception:  # noqa: BLE001
+                        out = ""
+                    if rc == 0 and "READY" in out and strata_up(timeout=10):
+                        log(f"[local] {STRATA_LABEL} is ready ({int(time.time() - t0)} s)")
+                        HEARTBEAT.set_keep(0)    # the caller holds it from here (a run: hold=True)
+                        return
+                    tail = " | ".join(l.strip() for l in out.strip().splitlines()[-4:])
+                    raise LocalLLMUnavailable(f"Strata did not start (exit {rc}): {tail or 'no output'} "
+                                              f"- see {_START_LOG} and ~/.local-servers/strata.log")
+                if time.time() - t0 > _START_TIMEOUT_S + 60:
+                    raise LocalLLMUnavailable(f"Strata was still not ready after {_START_TIMEOUT_S} s "
+                                              f"- see ~/.local-servers/strata.log")
+                if time.time() >= next_note:
+                    log(f"[local] still loading {STRATA_LABEL}… {int(time.time() - t0)} s")
+                    next_note += 30
+                time.sleep(2)
+        except BaseException:
+            HEARTBEAT.set_keep(0)             # a failed start holds nothing
+            raise
+        finally:
+            _STARTING.clear()
+
+
+class _Heartbeat:
+    """Tells strata-watchdog.ps1 that Deep Research is using Strata: one file per server
+    process in ~/.local-servers/strata-clients/, touched every 15 s while anything holds it
+    (a run, a call in flight, or a keep_for window) and deleted when nothing does."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._n = 0
+        self._until = 0.0
+        self._thread = None
+        self._path = os.path.join(_HB_DIR, f"deep-research-{os.getpid()}")
+
+    def _touch(self):
+        try:
+            os.makedirs(_HB_DIR, exist_ok=True)
+            with open(self._path, "w", encoding="ascii") as fh:
+                fh.write(f"{time.time():.0f}\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _alive(self):
+        return self._n > 0 or time.time() < self._until
+
+    def _loop(self):
+        while True:
+            with self._lock:
+                if not self._alive():
+                    self._thread = None
+                    try:
+                        os.remove(self._path)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+                self._touch()
+            time.sleep(_HB_EVERY_S)
+
+    def _kick(self):                       # call with the lock held
+        self._touch()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._loop, name="drt-strata-heartbeat",
+                                            daemon=True)
+            self._thread.start()
+
+    def acquire(self):
+        with self._lock:
+            self._n += 1
+            self._kick()
+
+    def release(self):
+        with self._lock:
+            self._n = max(0, self._n - 1)
+
+    def keep_for(self, seconds):
+        """Hold for at least `seconds` more (extends, never shortens)."""
+        with self._lock:
+            self._until = max(self._until, time.time() + seconds)
+            self._kick()
+
+    def set_keep(self, seconds):
+        """Set the hold window to exactly `seconds` from now (0 = none)."""
+        with self._lock:
+            self._until = time.time() + seconds
+            if seconds > 0:
+                self._kick()
+
+
+HEARTBEAT = _Heartbeat()
+
+
+class _StrataMessages:
+    def __init__(self, owner):
+        self._o = owner
+
+    def create(self, **kw):
+        kw["model"] = STRATA_MODEL           # one model for every role
+        kw.pop("temperature", None)          # Strata uses the model card's sampling
+        kw.pop("extra_body", None)
+        # A thinking budget is passed through only when a caller sets one on purpose (the lean
+        # citation check: {"type": "enabled", "budget_tokens": N}); otherwise Strata's default.
+        th = kw.pop("thinking", None)
+        if isinstance(th, dict) and th.get("type") in ("enabled", "disabled"):
+            kw["thinking"] = th
+        if int(kw.get("max_tokens") or 0) < _MAX_TOKENS_FLOOR_LOCAL:
+            kw["max_tokens"] = _MAX_TOKENS_FLOOR_LOCAL
+        HEARTBEAT.acquire()
+        try:
+            resp = self._o._inner.messages.create(**kw)
+        finally:
+            HEARTBEAT.release()
+        self._o._account(getattr(resp, "usage", None))
+        return resp
+
+
+class StrataClient:
+    """Drop-in for anthropic.Anthropic that talks to Flash-Next on Strata.
+
+    start=True starts Strata when it is down (see ensure_strata); hold=True keeps the
+    watchdog heartbeat alive until close() - a run holds it from start to finish, so
+    browser-only stretches and a Pause cannot let the watchdog close Strata mid-run."""
+
+    def __init__(self, log=None, hold=False, start=True):
+        import anthropic
+        import httpx
+        self.log = log or (lambda m: None)
+        self.model = STRATA_MODEL
+        self.label = STRATA_LABEL
+        # One queued sequence: the citation check runs in its lean form (synthesize.py).
+        self.lean_checks = True
+        if start:
+            ensure_strata(self.log)
+        elif not strata_up():
+            raise LocalLLMUnavailable(f"{STRATA_LABEL} is not running.")
+        # Long timeout: requests queue behind each other on Strata's single sequence.
+        self._inner = anthropic.Anthropic(base_url=STRATA_URL, api_key="strata-local",
+                                          max_retries=2,
+                                          timeout=httpx.Timeout(3600.0, connect=15.0))
+        self.messages = _StrataMessages(self)
+        self.usage = {"calls": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        self._lock = threading.Lock()
+        self._held = False
+        if hold:
+            HEARTBEAT.acquire()
+            self._held = True
+
+    def _account(self, usage):
+        with self._lock:
+            self.usage["calls"] += 1
+            if usage is not None:
+                self.usage["input"] += int(getattr(usage, "input_tokens", 0) or 0)
+                self.usage["output"] += int(getattr(usage, "output_tokens", 0) or 0)
+                self.usage["cache_read"] += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+
+    def usage_summary(self) -> dict:
+        """Same shape as ClaudeClient's, at $0 (the model runs on this PC)."""
+        with self._lock:
+            u = dict(self.usage)
+        return {"by_model": {STRATA_LABEL: {**u, "usd": 0.0}}, "totals": u, "total_usd": 0.0,
+                "local": True}
+
+    def close(self):
+        """End of a run: release the hold, and any keep-alive window the scoping questions
+        opened, so the watchdog can close Strata about a minute later."""
+        if self._held:
+            self._held = False
+            HEARTBEAT.release()
+            HEARTBEAT.set_keep(0)
 
 
 # ── Claude wrapper: one model + one effort on EVERY call ─────────────────────
@@ -332,8 +421,8 @@ class ClaudeClient:
     optional refusal-driven fall-over to the local model.
 
     refusal_hook(details) -> "local" | "abort":  provided by the job layer. Called
-    (blocking) the first time Claude refuses; on "local" this client swaps to an
-    LMStudioClient for the rest of the run. Parallel callers that refuse at the same
+    (blocking) the first time Claude refuses; on "local" this client swaps to a
+    StrataClient (Flash-Next on Strata) for the rest of the run. Parallel callers that refuse at the same
     time honor the first decision rather than re-prompting."""
 
     # Parallel lanes can draw 429s at the org's rate tier; the SDK retries with backoff,
@@ -347,7 +436,7 @@ class ClaudeClient:
         self._refusal_hook = refusal_hook   # pause + return "local"|"abort" (UI only)
         self._on_stop = on_stop             # called to halt the run (abort / local-unavailable)
         self._log = log or (lambda m: None)
-        self._local = None            # set to an LMStudioClient after a confirmed switch
+        self._local = None            # set to a StrataClient after a confirmed switch
         self._decision = None         # remembered so repeats don't re-prompt
         # On a per-call safety refusal, silently retry on this model before prompting
         # the user (set DRT_FALLBACK_MODEL="" to disable and keep the old pause-first flow).
@@ -429,39 +518,53 @@ class ClaudeClient:
             pref = self._refusal_hook(details) if self._refusal_hook else "abort"
             if pref == "local":
                 try:
-                    self._local = LMStudioClient()   # the user confirmed it's up
+                    # Starts Strata if it is down (1-3 min); holds it until close().
+                    self._local = StrataClient(log=self._log, hold=True)
                     self._decision = "local"
                     return "local"                   # resume on local; run is NOT stopped
-                except Exception:                    # went away between confirm and swap
+                except Exception as e:               # could not reach or start Strata
                     self._local = None
+                    try:
+                        self._log(f"[refusal] local model unavailable: {e}")
+                    except Exception:
+                        pass
             # abort, or a local swap that failed → halt and assemble what we have.
             self._decision = "abort"
             self._stop()
             return "abort"
+
+    def close(self):
+        """End of run: release the local model if the run fell over to it."""
+        loc = self._local
+        if loc is not None and hasattr(loc, "close"):
+            loc.close()
 
 
 def switch_client_to_local(client) -> bool:
     """Force a ClaudeClient over to the local model outside the refusal path (unused
     by the pipeline today, but handy for tests/tools). True on success."""
     try:
-        client._local = LMStudioClient()
+        client._local = StrataClient(hold=True)
         return True
     except Exception:
         return False
 
 
 def make_client(provider="claude", api_key=None, log=None, base_url=None,
-                refusal_hook=None, on_stop=None):
+                refusal_hook=None, on_stop=None, hold=False):
     """Return an AI client for the chosen provider.
 
-    local  → LMStudioClient (raises LocalLLMUnavailable if LM Studio is down).
+    local  → StrataClient - Flash-Next on Strata, started if it is down (raises
+             LocalLLMUnavailable when it cannot be reached or started). hold=True keeps
+             Strata from being closed by its watchdog until client.close(). base_url is
+             ignored (DRT_STRATA_URL sets Strata's address).
     claude → ClaudeClient (house model + effort enforced; refusal_hook lets the job
              layer offer a local-model fall-over on a safety refusal, on_stop halts
              the run when the user aborts or local is unavailable), or None when no
              api_key (callers guard on `if client`).
     """
     if is_local(provider):
-        return LMStudioClient(base_url=base_url, log=log)
+        return StrataClient(log=log, hold=hold)
     if not api_key:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
